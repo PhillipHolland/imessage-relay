@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.6: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.7: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -48,6 +48,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc
 import relay_media  # noqa: E402  (v1.4.6: inbound photos, in-flight only)
+import relay_drop  # noqa: E402  (v1.4.7: the encrypted photo drop)
 import relay_ui
 import relay_setup  # noqa: E402
 import relay_contacts  # noqa: E402  (v1.4.0: replies to someone new)
@@ -286,6 +287,7 @@ class Watcher:
         self.db_path = db_path or rc.CHAT_DB
         self.poster = poster
         self.runner = runner
+        self.drop_requester = relay_drop._request   # v1.4.7 (tests swap in a fake)
         self.now = now
         self.load_config = config_loader
         self.sleeper = sleeper
@@ -442,7 +444,10 @@ class Watcher:
             att_cols = {r[1] for r in con.execute('PRAGMA table_info(attachment)')}
         except Exception:
             att_cols = set()
+        # v1.4.7: only with the encrypted drop configured (the routine never copies files from the Mac)
+        ctx['cfg_drop'] = cfg
         ctx['stage_media'] = bool(cfg.get('relayAttachments', True) and cfg['webhookUrl'] and not cfg['paused']
+                                  and relay_drop.configured(cfg)
                                   and 'filename' in att_cols and not rc.in_quiet_hours(cfg['quietHours'], ctx['now']))
         cursor = self.cursor
         out, capped, stop = [], False, False
@@ -549,6 +554,12 @@ class Watcher:
                     if media and not body:
                         parts.append(relay_media.placeholder(media))   # "📷 Photo" (the image rides along)
                     body = '\n'.join(parts + notes)
+            elif has_att and not is_audio and not chat['group'] and body:
+                # v1.4.7: a 1:1 photo that isn't uploaded (no drop, attachments off, quiet hours) is still
+                # mentioned under the text ("📷 Photo"); metadata only. Groups are unchanged.
+                ph = relay_media.placeholder(relay_media.attachment_rows(con, rowid))
+                if ph:
+                    body = body + '\n' + ph
             if not body:
                 # item 4: metadata-only placeholders (no bytes) for audio / attachments / unsent notices
                 if is_audio or has_att:
@@ -598,6 +609,7 @@ class Watcher:
                 self._spam_held += 1
                 counts['spamHeld'] = counts.get('spamHeld', 0) + 1
                 relay_media.drop_staged(m.get('media'))   # a held spam photo is never kept
+                relay_drop.discard(m.get('media'), ctx.get('cfg_drop') or {}, requester=self.drop_requester)
                 return ('skip', None)
             if tag:
                 m['tag'] = tag
@@ -616,8 +628,9 @@ class Watcher:
         return ('relay', m)
 
     def _stage_media(self, con, rowid, received, ctx, counts):
-        """v1.4.6: copy a 1:1 message's photos into the private outbox for the routine (mode 600, swept after
-        ~10 min). Returns (media_meta, notices), or None to retry while a photo is still downloading.
+        """v1.4.7: stage a 1:1 message's photos (private copy, converted/downsized to the drop's 4 MiB), then
+        encrypt each with a fresh key and PUT the ciphertext to the drop; the copy is deleted before the upload.
+        Returns (webhook_media, notices), or None to retry while a photo is still downloading.
         Logs counts, sizes and kinds only."""
         rows = relay_media.attachment_rows(con, rowid)
         if not rows:
@@ -625,9 +638,12 @@ class Watcher:
         if relay_media.missing_images(rows) and ctx['now'] - received < relay_media.ATTACH_GRACE_S:
             counts['deferredMedia'] = counts.get('deferredMedia', 0) + 1
             return None
-        media, notes, _ = relay_media.materialize(rows, stage=True, runner=self.runner)
-        if media or notes:
-            rc.log_event('media_staged', images=len(media), notices=len(notes),
+        staged, notes, _ = relay_media.materialize(rows, stage=True, runner=self.runner, max_bytes=relay_drop.MAX_PLAIN)
+        media, failed = relay_drop.upload_staged(staged, ctx['cfg_drop'], requester=self.drop_requester)
+        if failed:
+            notes = notes + [relay_media.notice({'kind': 'image'}, 'unavailable')] * failed
+        if staged or notes:
+            rc.log_event('media_staged', images=len(media), failed=failed, notices=len(notes),
                          bytes=sum(x['size'] for x in media), kinds=sorted({r['kind'] for r in rows}))
         return media, notes
 
@@ -723,7 +739,7 @@ class Watcher:
         if m.get('quiet'):
             p['quiet'] = True               # v1.4.6: same sender as the line just above -> no "Name:" prefix
         if m.get('media'):
-            # v1.4.6: photo metadata for the routine (token, kind, mime, ext, size, sha256, macPath); no names
+            # v1.4.7: photo metadata for relay_post (token, kind, mime, ext, size, sha256, url, key); no names
             p['media'] = [dict(x) for x in m['media']]
         if m.get('unknown'):
             p['unknown'] = True             # v1.4.5 spamMode tag: posted as "⚠️ Unknown · <label>: <text>"

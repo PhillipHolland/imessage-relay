@@ -1,0 +1,8 @@
+{
+  "name": "imessage-relay-drop",
+  "version": "1.4.7",
+  "private": true,
+  "type": "module",
+  "description": "iMessage Relay encrypted photo drop: holds ciphertext only, serves each file once, deletes after 10 minutes.",
+  "dependencies": { "@vercel/blob": "^2.8.0" }
+}

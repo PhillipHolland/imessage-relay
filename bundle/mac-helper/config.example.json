@@ -18,6 +18,8 @@
   "maxSendsPerMinute": 6,
   "webhookUrl": "",
   "webhookToken": "",
+  "dropUrl": "",
+  "dropKey": "",
   "ownerHandle": "",
   "ownerXHandle": "",
   "senderXHandle": "",

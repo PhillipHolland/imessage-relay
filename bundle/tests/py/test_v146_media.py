@@ -175,8 +175,16 @@ class WatchMedia(test_watch.Base):
         con.execute('ALTER TABLE attachment ADD COLUMN total_bytes INTEGER')
         con.commit()
         con.close()
+        # v1.4.7: inbound photos go through the encrypted drop (a fake here; no network)
+        self.cfg.update(dropUrl='https://drop.example.invalid', dropKey='k' * 40)
+        self.puts, self.drop_status = [], 201
         self.w = self.new_watcher()
+        self.w.drop_requester = self.fake_drop
         self.w.tick()
+
+    def fake_drop(self, method, url, key, body=None, timeout=None):
+        self.puts.append((method, url, key, body))
+        return self.drop_status if method == 'PUT' else 200
 
     def photo(self, data=PNG, name='IMG_0001.png', mime='image/png', write=True, **kw):
         p = os.path.join(self.tmp, 'Attachments', name)
@@ -195,19 +203,53 @@ class WatchMedia(test_watch.Base):
     def msgs(self):
         return [p for _, p, _ in self.poster.calls if p['type'] == 'message']
 
-    def test_a_photo_is_staged_with_metadata_only(self):
+    def test_a_photo_goes_to_the_drop_encrypted(self):
+        import relay_drop
         self.photo(text='beach day')
         self.w.tick()
         [m] = self.msgs()
         self.assertEqual(m['text'], 'beach day')
         [md] = m['media']
-        self.assertEqual(set(md), {'token', 'kind', 'mime', 'ext', 'size', 'sha256', 'macPath'})
+        self.assertEqual(set(md), {'token', 'kind', 'mime', 'ext', 'size', 'sha256', 'url', 'key'}, 'no path, no name')
         self.assertEqual((md['mime'], md['size'], md['sha256']), ('image/png', len(PNG), hashlib.sha256(PNG).hexdigest()))
+        self.assertEqual(md['url'], 'https://drop.example.invalid/d/' + md['token'])
         self.assertNotIn('IMG_0001', json.dumps(m))
-        self.assertEqual(stat.S_IMODE(os.stat(md['macPath']).st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(md['macPath'])).st_mode), 0o700)
+        [(method, url, key, wire)] = self.puts
+        self.assertEqual((method, url, key), ('PUT', md['url'], 'k' * 40))
+        self.assertEqual(len(wire), len(PNG) + 28)
+        self.assertNotIn(PNG[8:], wire, 'only ciphertext leaves the Mac')
+        k = base64.urlsafe_b64decode(md['key'] + '=')
+        self.assertEqual(relay_drop.gcm_decrypt(k, wire[:12], wire[12:], b'imr-drop-v1:' + md['token'].encode()), PNG)
+        self.assertEqual([f for _, _, fs in os.walk(self.m.media.OUTBOX_DIR) for f in fs], [], 'temp copy deleted at once')
         line = rp.format_event(m)['lines'][0]
-        self.assertEqual(line['media'][0]['token'], md['token'])
+        self.assertEqual((line['media'][0]['url'], line['media'][0]['key']), (md['url'], md['key']))
+
+    def test_without_a_drop_photos_just_say_photo(self):
+        self.cfg.update(dropUrl='', dropKey='')
+        self.photo(text='beach day')
+        self.w.tick()
+        [m] = self.msgs()
+        self.assertNotIn('media', m)
+        self.assertIn('\U0001f4f7 Photo', m['text'])
+        self.assertEqual(self.puts, [])
+
+    def test_a_failed_upload_gets_a_notice_and_leaves_nothing(self):
+        self.drop_status = 503
+        self.photo(text='beach day')
+        self.w.tick()
+        [m] = self.msgs()
+        self.assertNotIn('media', m)
+        self.assertIn('couldn\u2019t be relayed', m['text'])
+        self.assertEqual([f for _, _, fs in os.walk(self.m.media.OUTBOX_DIR) for f in fs], [])
+
+    def test_two_photos_get_different_keys(self):
+        self.photo(text='a')
+        self.w.tick()
+        self.photo(data=PNG + b'x', name='IMG_0002.png', text='b')
+        self.w.tick()
+        keys = [m['media'][0]['key'] for m in self.msgs()]
+        self.assertEqual(len(set(keys)), 2)
+        self.assertNotEqual(self.puts[0][3][:12], self.puts[1][3][:12], 'fresh nonce')
 
     def test_photo_without_text_says_photo(self):
         self.photo()
@@ -247,9 +289,10 @@ class WatchMedia(test_watch.Base):
         self.assertNotIn('media', self.msgs()[0])
 
     def test_outbox_is_swept(self):
-        self.photo()
-        self.w.tick()
-        p = self.msgs()[0]['media'][0]['macPath']
+        os.makedirs(self.m.media.OUTBOX_DIR, exist_ok=True)
+        p = os.path.join(self.m.media.OUTBOX_DIR, 'f' * 32 + '.png')
+        with open(p, 'wb') as f:
+            f.write(PNG)                                      # a leftover (e.g. a crash mid-upload)
         old = self.now - self.m.media.OUTBOX_TTL_S - 5     # the watcher sweeps on its own clock
         os.utime(p, (old, old))
         self.w.tick()
@@ -261,6 +304,9 @@ class WatchMedia(test_watch.Base):
         log = json.dumps(read_log())
         self.assertNotIn('IMG_0001', log)
         self.assertNotIn(hashlib.sha256(PNG).hexdigest(), log)
+        md = self.msgs()[0]['media'][0]
+        self.assertNotIn(md['key'], log)
+        self.assertNotIn(md['token'], log)
         self.assertIn('media_staged', log)
 
     def test_attachment_delivery_needs_an_attachment_row_and_cleans_up(self):
@@ -317,7 +363,7 @@ class RoutineMedia(unittest.TestCase):
         r = {'payload': {'type': 'message', 'id': 'g-1', 'contactName': 'Jordan', 'label': 'Jordan', 'text': '\U0001f4f7 Photo',
                          'media': [self.item]},
              'conversation_id': '1111-2222', 'helper': self.helper, 'dedupe_path': os.path.join(self.d, 'seen.json'),
-             'key_cache': False, 'media_dir': self.media_dir,
+             'key_cache': False, 'media_dir': self.media_dir, 'media_upload': True,
              'xchat': {'conversation_key_events': ['k'], 'signing_keys': ['s']}}
         r.update(over)
         return r

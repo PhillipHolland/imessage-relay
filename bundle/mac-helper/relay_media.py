@@ -1,4 +1,4 @@
-"""iMessage Relay v1.4.6 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
+"""iMessage Relay v1.4.7 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
 
 Inbound (iMessage -> X Chat). The watcher holds Full Disk Access, so it is the only process that can
 read ~/Library/Messages/Attachments. For a relayed message with photos it:
@@ -7,9 +7,11 @@ read ~/Library/Messages/Attachments. For a relayed message with photos it:
      and is the ONLY name: the original filename never leaves chat.db),
   2. converts HEIC/HEIF/TIFF/etc. to JPEG with /usr/bin/sips (on the copy, never the original) and
      downsizes anything over the X Chat 5 MiB image limit,
-  3. puts METADATA ONLY in the webhook: {token, kind, mime, ext, size, sha256, macPath}.
-The bot's routine copies that one file to its own computer, relay_post.py checks size + sha256,
-encrypts it for X Chat and deletes the copy; the outbox file is swept here after OUTBOX_TTL_S.
+  3. v1.4.7: hands the copy to relay_drop, which reads it, deletes it at once, encrypts it with a fresh
+     AES-256-GCM key and PUTs only the ciphertext to the drop (served once, gone after 10 minutes). The
+     webhook carries {token, kind, mime, ext, size, sha256, url, key}; the bot's relay_post.py fetches,
+     checks and decrypts it. The routine never touches the Mac. Without a drop (dropUrl/dropKey unset)
+     photos are not staged at all and arrive as "📷 Photo". The outbox is still swept after OUTBOX_TTL_S.
 Videos, voice messages and other files are not uploaded (the X Chat helper encrypts images only):
 they become one-line notices with type and size only ("🎥 Video, 12 MB (not relayed)").
 
@@ -221,7 +223,7 @@ def _convert(src, dst, runner, max_side):
     return getattr(r, 'returncode', 1) == 0 and os.path.isfile(dst)
 
 
-def stage_image(row, runner=subprocess.run, outbox=None):
+def stage_image(row, runner=subprocess.run, outbox=None, max_bytes=MAX_RELAY_IMAGE_BYTES):
     """Copy (and if needed convert/downsize) one inbound image into the outbox. Returns
     (public_meta, None) or (None, reason). public_meta has NO filename: {token, kind, mime, ext, size,
     sha256, macPath}. Every intermediate file is removed; only the final token file remains."""
@@ -243,7 +245,7 @@ def stage_image(row, runner=subprocess.run, outbox=None):
         with open(work, 'rb') as f:
             data = f.read()
         mime, ext = sniff(data)
-        if mime and len(data) <= MAX_RELAY_IMAGE_BYTES:
+        if mime and len(data) <= max_bytes:
             final_src = work
         elif mime == 'image/gif':
             return None, 'too_large'             # an animated GIF can't be re-encoded without losing it
@@ -252,7 +254,7 @@ def stage_image(row, runner=subprocess.run, outbox=None):
             for side in ((None if not mime else 2048), 2048, 1600, 1200):
                 if os.path.exists(conv):
                     os.remove(conv)
-                if _convert(work, conv, runner, side) and os.path.getsize(conv) <= MAX_RELAY_IMAGE_BYTES:
+                if _convert(work, conv, runner, side) and os.path.getsize(conv) <= max_bytes:
                     ok = True
                     break
             if not ok:
@@ -278,13 +280,13 @@ def stage_image(row, runner=subprocess.run, outbox=None):
                 pass
 
 
-def materialize(rows, stage, runner=subprocess.run, outbox=None):
+def materialize(rows, stage, runner=subprocess.run, outbox=None, max_bytes=MAX_RELAY_IMAGE_BYTES):
     """Turn a message's attachment rows into (staged_images, notices, unstaged_photo_rows).
     stage=False (attachments off, quiet-hours digest, no webhook) gives notices/placeholders only."""
     staged, notices, unstaged = [], [], []
     for r in rows:
         if r['kind'] == 'image' and stage and len(staged) < MAX_IMAGES_PER_MESSAGE:
-            meta, why = stage_image(r, runner, outbox)
+            meta, why = stage_image(r, runner, outbox, max_bytes)
             if meta:
                 staged.append(meta)
             else:

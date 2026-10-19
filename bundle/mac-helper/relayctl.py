@@ -20,6 +20,7 @@ Every command prints one JSON object. Message bodies are never printed or stored
                                           confirmNewContacts exact-skip|always (v1.4.1)
                                           spamMode follow-messages|tag|off (v1.4.6 default follow-messages: mirror Messages' filtering)
                                           batchWebhooks on|off (v1.4.5: texts waiting together share one webhook)
+  relayctl set-drop --url URL --key-stdin       v1.4.7 encrypted photo drop (key on stdin only); --off clears it
   relayctl set-webhook --url URL --token-stdin   set webhookUrl + webhookToken together; the key is
                                           read from stdin so it never lands in argv or shell history
   relayctl contacts                       list opted-in contacts with their labels
@@ -39,6 +40,7 @@ Every command prints one JSON object. Message bodies are never printed or stored
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -115,6 +117,7 @@ def parse_bool(v):
 def public_config(cfg):
     c = dict(cfg)
     c['webhookToken'] = 'set' if cfg.get('webhookToken') else ''
+    c['dropKey'] = 'set' if cfg.get('dropKey') else ''
     c['webhookUrl'] = 'set' if cfg.get('webhookUrl') else ''
     return c
 
@@ -164,6 +167,24 @@ def cmd_set_webhook(url, token_stdin=False, stdin=None):
         raise CtlError('empty webhook key')
     cfg = edit_config(lambda raw: raw.update({'webhookUrl': url, 'webhookToken': token}))
     return {'ok': True, 'set': ['webhookUrl', 'webhookToken'], 'config': public_config(cfg)}
+
+
+def cmd_set_drop(url=None, key_stdin=False, off=False, stdin=None):
+    """v1.4.7: the encrypted photo drop. The PUT key is ALWAYS read from stdin (never argv); `--off`
+    clears both, after which inbound photos arrive as "📷 Photo" again."""
+    if off:
+        cfg = edit_config(lambda raw: raw.update({'dropUrl': '', 'dropKey': ''}))
+        return {'ok': True, 'set': ['dropUrl', 'dropKey'], 'photoDrop': False}
+    url = (url or '').strip().rstrip('/')
+    if not re.match(r'^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$', url):
+        raise CtlError('dropUrl must be an https:// URL')
+    if not key_stdin:
+        raise CtlError('the drop key must be provided on stdin: relayctl set-drop --url URL --key-stdin')
+    key = (stdin or sys.stdin).read().strip()
+    if not re.match(r'^[\x21-\x7e]{16,256}$', key):
+        raise CtlError('bad drop key')
+    cfg = edit_config(lambda raw: raw.update({'dropUrl': url, 'dropKey': key}))
+    return {'ok': True, 'set': ['dropUrl', 'dropKey'], 'photoDrop': True, 'dropUrl': cfg.get('dropUrl')}
 
 
 def cmd_add_contact(name, handle, label=''):
@@ -301,7 +322,7 @@ def setup_checklist(cfg, now=time.time):
     reads = rc.watcher_chat_db_state()['state']
     ext = extension_seen(now)
     fresh = ext['seen'] and ext['agoSeconds'] is not None and ext['agoSeconds'] < 180
-    ext_ok = fresh and ext['version'] == rc.VERSION
+    ext_ok = fresh and ext['version'] == rc.EXTENSION_VERSION
     items = [
         {'id': 'fda', 'done': reads == 'ok',
          'text': "Full Disk Access: in the System Settings window that opened, drag 'iMessage Relay Watcher' "
@@ -614,14 +635,15 @@ def cmd_status(runner=subprocess.run):
     if not host_manifests():
         problems.append('native host manifest missing: run install.sh again')
     ext = extension_seen()
-    if ext['version'] and ext['version'] != rc.VERSION:
+    if ext['version'] and ext['version'] != rc.EXTENSION_VERSION:
         problems.append('the Chrome extension is still v%s: click reload on "iMessage Relay" in chrome://extensions, '
                         'then Cmd+R on x.com/i/chat' % ext['version'])
     return {'ok': True, 'version': rc.VERSION, 'config': public_config(cfg), 'watcher': st,
             'watcherCanReadChatDb': {'ok': True, 'denied': False}.get(reads['state']), 'watcherChatDbEvent': reads,
             'watcherApp': app,
             'launchAgentLoaded': launchagent_loaded(runner), 'hostManifests': host_manifests(),
-            'messagesRunning': rc.messages_running(runner), 'extension': ext, 'problems': problems}
+            'messagesRunning': rc.messages_running(runner), 'extension': ext, 'problems': problems,
+            'photoDrop': bool(str(cfg.get('dropUrl') or '').startswith('https://') and cfg.get('dropKey'))}
 
 
 def main(argv=None):
@@ -637,6 +659,7 @@ def main(argv=None):
     a = sp.add_parser('roster'); a.add_argument('--days', type=int, default=0)
     a = sp.add_parser('quiet-hours'); a.add_argument('start'); a.add_argument('end', nargs='?'); a.add_argument('--tz', default='local')
     a = sp.add_parser('set'); a.add_argument('key'); a.add_argument('value')
+    a = sp.add_parser('set-drop'); a.add_argument('--url'); a.add_argument('--key-stdin', action='store_true'); a.add_argument('--off', action='store_true')
     a = sp.add_parser('set-webhook'); a.add_argument('--url', required=True); a.add_argument('--token-stdin', action='store_true')
     a = sp.add_parser('add-contact'); a.add_argument('--name', required=True); a.add_argument('--handle', required=True); a.add_argument('--label', default='')
     a = sp.add_parser('label'); a.add_argument('key'); a.add_argument('label')
@@ -679,6 +702,8 @@ def main(argv=None):
             out = {'ok': True, 'quietHours': cfg['quietHours']}
         elif c == 'set':
             out = cmd_set(args.key, args.value)
+        elif c == 'set-drop':
+            out = cmd_set_drop(args.url, key_stdin=args.key_stdin, off=args.off)
         elif c == 'set-webhook':
             out = cmd_set_webhook(args.url, token_stdin=args.token_stdin)
         elif c == 'contacts':

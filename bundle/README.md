@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.6
+# iMessage Relay v1.4.7
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -13,6 +13,15 @@ Your reply in the relay chat (x.com in Chrome)
   -> extension sees your own bubble -> native host picks the contact -> Messages.app -> iMessage
   -> ✅ appears on your own X message (v1.4.6; a text line only if something fails)
 ```
+v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bot access to the Mac:
+- The Mac encrypts each incoming 1:1 photo with a fresh random AES-256-GCM key and uploads only the
+  ciphertext to a tiny drop service you own (`drop/`; Vercel by default, Cloudflare community-only). The
+  webhook carries just `{token, url, size, sha256, key}`; the bot downloads the ciphertext once, checks
+  it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
+  only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
+  upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- The Chrome extension did not change in v1.4.7 (no reload needed from v1.4.6).
+
 v1.4.6 makes the relay feel native in X Chat:
 - **✅ on your reply** as soon as Messages accepts it, placed by the extension in your X tab (seconds, not
   a routine round trip). The "→ Alex ✓" text line is only posted when the reaction can't be placed;
@@ -32,7 +41,7 @@ v1.4.6 makes the relay feel native in X Chat:
   footers are dropped from tagged texts. Read-only: Messages settings are never changed.
 - **Photos both ways (1:1)**: their photos arrive as images in X Chat; your photos and files in the relay
   chat go out as iMessage attachments, with the same routing and confirmations (a group only after yes).
-  Limits: 5 MB per photo into X Chat (bigger ones are downsized), 25 MB per attachment out, 10 per message;
+  Limits: 4 MB per photo into X Chat (v1.4.7 drop; bigger ones are downsized), 25 MB per attachment out, 10 per message;
   anything skipped gets a clear notice. Attachment bytes are never stored. Only in-flight temp files
   (mode 600), deleted right after use, including on error. Nothing is logged except counts, sizes and types.
 - **Overnight recap**: quiet hours end with ONE tidy post grouped by person.
@@ -89,7 +98,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.6)
+## Limits (v1.4.7)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -100,7 +109,8 @@ v1.4.6 makes the relay feel native in X Chat:
 - 🗑️ on a relayed text asks "Block …?"; yes (or 👍, or `/block yes`) mutes that sender here only
   (Messages is not changed). Texts from numbers not in Contacts, or flagged by Messages, show
   "⚠️ Unknown · " first (`relayctl set spamMode tag|off`; default `follow-messages`, see above).
-- Photos: 1:1 chats only for incoming (group photos stay "📷 Photo"); videos, voice notes and files that
+- Photos: 1:1 chats only for incoming (group photos stay "📷 Photo"), and only with the photo drop set up
+  (`relayctl set-drop`); a photo the drop no longer has (over 10 minutes) gets a "couldn't be relayed" notice; videos, voice notes and files that
   arrive show a type/size notice ("open Messages to see it"). Typing indicators are not relayed (they are
   not in chat.db). Your own tapbacks in X are not sent to iMessage (no supported way without UI scripting).
 
@@ -110,8 +120,10 @@ v1.4.6 makes the relay feel native in X Chat:
 - `mac-helper/`: `imessage_relay_host.py` (native host `com.imessage_relay.host`),
   `imessage_relay_watch.py` (watcher), `watch_launcher.py` (run by the watcher app), `typedstream.py` (attributedBody decoder),
   `relayctl.py` (operations), `relay_common.py`, `relay_ui.py` (v1.4.6 reaction queue + id map),
-  `relay_media.py` (v1.4.6 in-flight attachments), `relay_echo.py`, `send_imessage.applescript`, templates,
+  `relay_media.py` (v1.4.6 in-flight attachments), `relay_drop.py` (v1.4.7 photo encryption + drop upload), `relay_echo.py`, `send_imessage.applescript`, templates,
   `config.example.json`.
+- `drop/`: the v1.4.7 encrypted photo drop (`core.mjs` shared; `api/` + `vercel.json` for Vercel,
+  `cloudflare/` untested, community-only). Deployed by the bot, never installed on the Mac. See `drop/README.md`.
 - `install.sh` / `uninstall.sh`: idempotent, per-user, no sudo. Install target `~/.imessage-relay/`
   plus `~/Applications/iMessage Relay Watcher.app`.
 - `tests/`, `run_tests.sh`: Python unit tests (Linux-runnable) and jsdom tests.
@@ -142,7 +154,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.6 changes the extension: ✅/❓/👀 reactions,
+reload the extension card in chrome://extensions **only when coming from v1.4.5 or older** (v1.4.7 did not
+change it; v1.4.6 changed the extension: ✅/❓/👀 reactions,
 🤖 prompts, undo, photos; v1.4.5 changed it too (🗑️ to block); v1.4.4, v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
@@ -152,6 +165,7 @@ relayctl status | pause | resume | dry-run on|off | relay-all on|off
 relayctl mute "Bank" | unmute "Bank" | roster [--days 7]
 relayctl add-contact … | label … | remove-contact … | contacts | recent-senders | selftest
 relayctl setup … | test-result | owner-handles detect [--apply]
+relayctl set-drop --url https://… --key-stdin | set-drop --off      # v1.4.7 photo drop (key on stdin only)
 ```
 In the relay chat: `/test` (end-to-end check), `/test send` (also texts your own number), `/help`.
 
@@ -185,15 +199,16 @@ In the relay chat: `/test` (end-to-end check), `/test send` (also texts your own
   "defaultCountryCode": "1",
   "spamMode": "follow-messages",
   "uiReactions": true, "uiPrompts": true, "readReceipts": true, "mirrorTapbacks": true,
-  "stripOptOut": true, "relayAttachments": true, "quietNamesSeconds": 600, "undoSeconds": 5
+  "stripOptOut": true, "relayAttachments": true, "quietNamesSeconds": 600, "undoSeconds": 5,
+  "dropUrl": "", "dropKey": 
 }
 ```
 Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component re-reads it.
 
 ## Webhook payloads (Mac -> bot)
 - `{"type":"message","contactName","label","handle","text","receivedAt","untrusted":true}`, plus optional
-  `tag`, `unknown`, `quiet`, `reaction` and (v1.4.6) `media:[{token,kind,mime,ext,size,sha256,macPath}]`
-  (metadata only; the routine copies the file from the Mac, see SKILL.md)
+  `tag`, `unknown`, `quiet`, `reaction` and (v1.4.7) `media:[{token,kind,mime,ext,size,sha256,url,key}]`
+  (no name, no path: the ciphertext is on the drop at `url`, `key` decrypts it; relay_post.py fetches it once)
 - `{"type":"batch","messages":[...]}` (several texts from one tick)
 - `{"type":"digest","count","quietHours","messages":[...],"untrusted":true}`
 - `{"type":"sent","label","contactName","dryRun","delivered","routedBy","at"}` (host, after a reply; no body)

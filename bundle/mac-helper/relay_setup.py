@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.4.6: guided-setup helpers shared by relayctl and the watcher.
+iMessage Relay v1.4.7: guided-setup helpers shared by relayctl and the watcher.
 
   detect_owner_handles(con, cc)   the owner's OWN iMessage/SMS addresses, read from chat.db rows the
                                   owner sent (message.account / destination_caller_id). Handles only;

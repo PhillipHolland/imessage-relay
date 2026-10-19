@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.4.6: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.7: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -23,7 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.6'
+VERSION = '1.4.7'
+EXTENSION_VERSION = '1.4.6'   # v1.4.7 did not change the Chrome extension: no reload needed from 1.4.6
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -88,6 +89,8 @@ DEFAULT_CONFIG = {
     'maxSendsPerMinute': 6,
     'webhookUrl': '',
     'webhookToken': '',
+    'dropUrl': '',                 # v1.4.7: encrypted photo drop (https://…); empty = photos arrive as "📷 Photo"
+    'dropKey': '',                 # v1.4.7: the drop's PUT/DELETE key (never logged, never in argv)
     'ownerHandle': '',
     'ownerXUserId': '',
     'ownerHandles': [],
@@ -228,7 +231,7 @@ def sanitize_config(user):
     cfg['dryRun'] = truthy(cfg.get('dryRun'), True)               # stays ON unless explicitly off
     cfg['deliveryCheck'] = truthy(cfg.get('deliveryCheck'), True)
     cfg['autoReopenMessages'] = truthy(cfg.get('autoReopenMessages'), False)
-    for k in ('footer', 'webhookUrl', 'webhookToken', 'ownerXHandle', 'senderXHandle'):
+    for k in ('footer', 'webhookUrl', 'webhookToken', 'ownerXHandle', 'senderXHandle', 'dropUrl', 'dropKey'):
         if not isinstance(cfg.get(k), str):
             cfg[k] = ''
     cfg['ownerHandle'] = normalize_handle(cfg.get('ownerHandle'), cc) if isinstance(cfg.get('ownerHandle'), str) else ''

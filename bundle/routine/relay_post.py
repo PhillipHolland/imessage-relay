@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.6 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.7 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -67,15 +67,20 @@ STDOUT (one JSON object):
   the owner; every status/confirmation line is silent (should_notify:false) and threads under the
   owner's reply when reply_to is set (item 1).
   {"action":"skip","reason":"duplicate id …"}
-  v1.4.6 photos (1:1 inbound): a message/batch line may carry `media` (token, ext, size, sha256, macPath).
-  Before running, the routine copies each macPath from the Mac to <media_dir>/<token>.<ext> (default
-  ~/.imessage-relay-routine/media). Run 1 then answers
+  v1.4.7 photos (1:1 inbound): a message/batch line may carry `media` (token, ext, size, sha256, url, key).
+  The Mac encrypted each photo with a fresh AES-256-GCM key and put only the ciphertext on the drop
+  (served once, gone after 10 minutes). Run 1 fetches it from the drop configured in drop.json beside
+  the dedupe file ({"url","get_key"}, mode 600; never from any other host), checks size + sha256,
+  decrypts it into <media_dir>/<token>.<ext> (mode 600) and answers
   {"action":"upload","uploads":[{"token","upload_conversation_id","total_bytes","num_parts",
                                  "parts":[{"segment_index","media":"$file:/…/part"}]}]}
   -> chat_media_upload_initialize + _append per part, then run again (same payload) with
   "media_keys": {token: media_hash_key}. Each send then carries "media_finalize":[{token, media_hash_key,
   num_parts}] -> chat_media_upload_finalize (with that send's message_id) before send_chat_message.
-  "media_off": true (a copy/upload failed) posts the text with a clear "couldn't be relayed" notice.
+  "media_off": true (an upload failed) posts the text with a clear "couldn't be relayed" notice; so does
+  a photo the drop no longer has. Photos are only fetched and uploaded when the request has
+  "media_upload": true (a routine prompt with the photo steps); without it the text posts with the notice.
+  The routine never touches the Mac.
   Photos are in flight only: the copy, the parts and a tiny state file (mode 600) are deleted when the
   send is built, on any error, or by the sweep after 15 min. Nothing about them is logged.
   {"action":"fetch","need":["conversation_key_events","signing_keys"],"reason":"…"}   # v1.4.5: fetch, write again, rerun
@@ -141,8 +146,16 @@ _HEX64 = re.compile(r'^[0-9a-f]{64}$')
 _PHOTO_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
 
 
+_B64U_KEY = re.compile(r'^[A-Za-z0-9_-]{43}$')
+DROP_CONFIG = '~/.imessage-relay-routine/drop.json'
+DROP_TIMEOUT_S = 30
+DROP_AAD = b'imr-drop-v1:'
+DROP_OVERHEAD = 12 + 16
+
+
 def media_meta(items):
-    """The valid photo entries of a webhook message (metadata only: token, ext, size, sha256, macPath)."""
+    """The valid photo entries of a webhook message (metadata only: token, ext, size, sha256 and, v1.4.7,
+    the drop url + one-time key)."""
     out = []
     for x in (items if isinstance(items, list) else [])[:MEDIA_MAX_PER_LINE]:
         if not isinstance(x, dict):
@@ -151,7 +164,11 @@ def media_meta(items):
         size = x.get('size')
         if (_HEX32.match(tok) and ext in MEDIA_EXTS and _HEX64.match(sha) and isinstance(size, int)
                 and not isinstance(size, bool) and 0 < size <= MEDIA_MAX_BYTES):
-            out.append({'token': tok, 'ext': ext, 'size': size, 'sha256': sha, 'macPath': str(x.get('macPath') or '')[:400]})
+            it = {'token': tok, 'ext': ext, 'size': size, 'sha256': sha}
+            url, key = str(x.get('url') or ''), str(x.get('key') or '')
+            if url.startswith('https://') and len(url) <= 300 and _B64U_KEY.match(key):
+                it.update(url=url, key=key)
+            out.append(it)
     return out
 
 
@@ -249,6 +266,131 @@ def media_verify(item, media_dir=None):
         return _sha256_file(p) == item['sha256']
     except OSError:
         return False
+
+
+# ---------- v1.4.7 the encrypted drop ----------
+def load_drop(req, dedupe_path):
+    """{'url','get_key'} from req['drop'] or drop.json beside the dedupe file (mode 600), else None."""
+    d = req.get('drop') if isinstance(req.get('drop'), dict) else None
+    if d is None:
+        p = req.get('drop_config') or os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', 'drop.json')
+        try:
+            with open(os.path.expanduser(p)) as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            return None
+    url, key = str((d or {}).get('url') or '').rstrip('/'), str((d or {}).get('get_key') or '')
+    if not url.startswith('https://') or len(key) < 16:
+        return None
+    return {'url': url, 'get_key': key, 'crypto_python': str((d or {}).get('crypto_python') or '')}
+
+
+def _b64u_decode(s):
+    import base64
+    return base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
+
+
+def drop_get(url, key, max_bytes, timeout=DROP_TIMEOUT_S):
+    """GET one ciphertext (served once). bytes or None. Never logs anything."""
+    import urllib.request
+    import urllib.error
+    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'imessage-relay-post/1.4.7'})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            if r.status != 200:
+                return None
+            data = r.read(max_bytes + 1)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    return data if len(data) <= max_bytes else None
+
+
+_DECRYPT_CHILD = (
+    "import json,sys,os\n"
+    "from cryptography.hazmat.primitives.ciphers.aead import AESGCM\n"
+    "a=json.load(sys.stdin)\n"
+    "w=open(a['in'],'rb').read()\n"
+    "import base64\n"
+    "k=base64.urlsafe_b64decode(a['key']+'='*(-len(a['key'])%4))\n"
+    "p=AESGCM(k).decrypt(w[:12],w[12:],a['aad'].encode())\n"
+    "fd=os.open(a['out'],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
+    "os.write(fd,p);os.close(fd)\n")
+
+
+def _crypto_pythons(drop):
+    # by exact path: a venv's python is a symlink to the system one but has other site-packages
+    seen = [sys.executable]
+    for c in (drop.get('crypto_python'), '/usr/bin/python3', '/usr/local/bin/python3', '/opt/homebrew/bin/python3'):
+        if c and os.path.exists(c) and c not in seen:
+            seen.append(c)
+            yield c
+
+
+def drop_decrypt(wire, key_b64u, token, out_path, drop, runner=subprocess.run):
+    """Decrypt nonce||ct||tag into out_path (mode 600). In-process with `cryptography` when this python
+    has it, else via a python that does (key on stdin, never argv). True/False."""
+    aad = DROP_AAD + token.encode('ascii')
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        AESGCM = None
+    if AESGCM is not None:
+        try:
+            plain = AESGCM(_b64u_decode(key_b64u)).decrypt(wire[:12], wire[12:], aad)
+        except Exception:
+            return False
+        fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as fh:
+            fh.write(plain)
+        return True
+    wire_path = out_path + '.wire'
+    try:
+        fd = os.open(wire_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as fh:
+            fh.write(wire)
+        for py in _crypto_pythons(drop):
+            try:
+                r = runner([py, '-c', _DECRYPT_CHILD], input=json.dumps(
+                    {'in': wire_path, 'out': out_path, 'key': key_b64u, 'aad': aad.decode('ascii')}).encode(),
+                    capture_output=True, timeout=60)
+            except Exception:
+                continue
+            if getattr(r, 'returncode', 1) == 0 and os.path.exists(out_path):
+                return True
+            _rm(out_path)
+        return False
+    finally:
+        _rm(wire_path)
+
+
+def media_fetch(item, drop, media_dir=None, getter=drop_get, runner=subprocess.run):
+    """v1.4.7: bring one photo from the drop: GET once (only from OUR drop's url), check the size, decrypt,
+    check the sha256. Leaves <media_dir>/<token>.<ext> (mode 600) or nothing. True/False."""
+    if not drop or not item.get('url') or not item.get('key'):
+        return False
+    if item['url'] != drop['url'] + '/d/' + item['token']:
+        return False                                   # never fetch from anywhere else (and never send our key there)
+    d = os.path.expanduser(media_dir or MEDIA_DIR)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    out = media_box_path(item, media_dir)
+    if os.path.exists(out):
+        return True
+    wire = getter(item['url'], drop['get_key'], item['size'] + DROP_OVERHEAD)
+    if not wire or len(wire) != item['size'] + DROP_OVERHEAD:
+        return False
+    try:
+        if not drop_decrypt(wire, item['key'], item['token'], out, drop, runner):
+            _rm(out)
+            return False
+    except OSError:
+        _rm(out)
+        return False
+    finally:
+        wire = None
+    if not media_verify(item, media_dir):
+        _rm(out)
+        return False
+    return True
 
 
 def media_failed_text(text, n):
@@ -777,12 +919,25 @@ def process(req, runner=None):
     all_media = [it for ln in lines for it in ln.get('media') or []]
     media_keys = req.get('media_keys') if isinstance(req.get('media_keys'), dict) else {}
     line_media = {}
+    if all_media and not req.get('media_upload'):
+        # v1.4.7: only a routine prompt with the photo steps sets "media_upload": true. Any other prompt gets
+        # the text with a notice (never an "upload" answer it doesn't know); the drop copy expires unfetched.
+        req = dict(req, media_off=True)
     if all_media and req.get('media_off'):
         media_cleanup(all_media, media_dir)
         for ln in lines:
             if ln.get('media'):
                 ln['text'] = media_failed_text(ln['text'], len(ln['media']))
     elif all_media and not media_keys:
+        # v1.4.7: fetch each photo from the encrypted drop first (served once; the routine never touches the Mac)
+        drop = load_drop(req, dedupe_path)
+        if locate_media_helper(req.get('helper'))[0]:
+            for it in all_media:
+                if not os.path.exists(media_box_path(it, media_dir)):
+                    try:
+                        media_fetch(it, drop, media_dir, getter=req.get('_drop_getter') or drop_get)
+                    except Exception:
+                        _rm(media_box_path(it, media_dir))
         try:
             uploads, failed = media_prepare(conv, all_media, xchat, req.get('helper'), runner, media_dir)
         except Exception:

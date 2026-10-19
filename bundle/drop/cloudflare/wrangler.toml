@@ -1,0 +1,11 @@
+# UNTESTED, community-only. Create the namespace (npx wrangler kv namespace create DROP_KV), paste its id
+# below, then: npx wrangler secret put DROP_PUT_KEY_SHA256 ; npx wrangler secret put DROP_GET_KEY_SHA256 ;
+# npx wrangler deploy
+name = "imessage-relay-drop"
+main = "worker.mjs"
+compatibility_date = "2026-04-01"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "DROP_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

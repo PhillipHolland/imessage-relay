@@ -28,6 +28,9 @@ has the technical details. `tools/` holds the scripts that pack `bundle/` into `
   only; logs hold counts).
 - **Attachments (v1.4.6).** Attachment bytes are never stored. Only in-flight temp files (mode 600),
   deleted right after use, including on error. Nothing is logged except counts, sizes and types.
+- **Photos into X Chat (v1.4.7).** Each photo is encrypted on your Mac with a fresh key and only the
+  ciphertext goes to a small drop service you own (on your own Vercel by default), which serves it once
+  and deletes it after 10 minutes. The bot never runs commands on your Mac.
 - chat.db is opened read-only. Replies start in dry run (logged, not sent) until you go live.
 - No telemetry. The relay makes no analytics or phone-home requests.
 
@@ -35,7 +38,7 @@ has the technical details. `tools/` holds the scripts that pack `bundle/` into `
 Each release lists the sha256 of its assets in the release notes. Check before running:
 
 ```sh
-curl -fsSL -o build_bundle.py https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.6/build_bundle.py
+curl -fsSL -o build_bundle.py https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.7/build_bundle.py
 shasum -a 256 build_bundle.py     # macOS (on Linux: sha256sum build_bundle.py)
 ```
 

@@ -460,7 +460,7 @@ class RelayctlSetup(Base):
         self.assertIn('reload', items['extension']['text'])
         st = self.ctl.cmd_status(runner=FakeRunner())
         self.assertTrue(any('still v0.0.1' in p for p in st['problems']))
-        self.rc.write_json_atomic(os.path.join(self.rc.APP_DIR, 'ext_seen.json'), {'extVersion': self.rc.VERSION, 'at': self.clock.t})
+        self.rc.write_json_atomic(os.path.join(self.rc.APP_DIR, 'ext_seen.json'), {'extVersion': self.rc.EXTENSION_VERSION, 'at': self.clock.t})
         items = {i['id']: i for i in self.ctl.setup_checklist(self.rc.load_config(), now=self.clock.now)}
         self.assertTrue(items['extension']['done'])
 

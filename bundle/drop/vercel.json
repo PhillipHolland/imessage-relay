@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/d/:token", "destination": "/api/drop?token=:token" },
+    { "source": "/health", "destination": "/api/health" }
+  ],
+  "crons": [{ "path": "/api/sweep", "schedule": "* * * * *" }],
+  "functions": { "api/*.mjs": { "maxDuration": 30 } }
+}
