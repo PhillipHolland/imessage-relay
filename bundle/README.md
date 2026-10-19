@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.11
+# iMessage Relay v1.4.12
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,6 +22,11 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.12 (Mac helper + extension): the Contacts pick prompt is one choice per line ("❓ Text Jordan Rivera at
+  which?" / "1 · •••0188 mobile" / … / "Reply 1–4, or no."), phones first (most recently relayed, then
+  mobile/iPhone/pref), work/school emails dropped when a better option exists, at most 4. Answer with the number,
+  the last 4 digits, or the start of an email. Confirm prompts are typed as 🤖 text right away (no ❓ reaction
+  waiting on the emoji picker). Install on the Mac, then reload the extension and press Cmd+R.
 - v1.4.11 (Mac helper + extension): several Contacts cards with the same full name are one person (their
   numbers merged and deduped). One number: an exact full name sends and saves, a first name asks "yes". Several:
   a numbered pick prompt (masked numbers, the one used most recently first); reply 1/2/3, or yes / 👍 for 1.
@@ -116,7 +121,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.11)
+## Limits (v1.4.12)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best

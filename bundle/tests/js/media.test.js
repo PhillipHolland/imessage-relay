@@ -167,6 +167,19 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     await b.reply('3', {});
     assert.strictEqual(sends.filter(m => m.confirmed).length, 1, 'the pick is used once');
   });
+  await test('background (v1.4.12): last 4 digits or an email start picks; a non-match is never a pick', async () => {
+    for (const [ans, want] of [['0102', '+15555550102'], ['jr.', 'jr.rivera@icloud.com'], ['8500', null]]) {
+      const sends = [];
+      const b = bootBg({ tab: tabOk, send: m => { sends.push(m); return m.confirmed ? { ok: true, delivered: true }
+        : { ok: false, needsConfirm: true, label: 'Jordan Rivera', handle: '+15555550103', reason: 'new_contact',
+            options: ['+15555550103', '+15555550102', 'jr.rivera@icloud.com'] }; } });
+      await b.reply('Jordan Rivera: hi there', {});
+      await b.reply(ans, {});
+      const c = sends.filter(m => m.confirmed);
+      if (want) { assert.strictEqual(c.length, 1, ans); assert.strictEqual(c[0].handle, want); }
+      else assert.strictEqual(c.length, 0, 'no option ends in ' + ans);
+    }
+  });
   await test('background (v1.4.10): a skipped reply is never silent: it gets a warning reaction', async () => {
     const b = bootBg({ send: () => ({ ok: true }), tab: tabOk });
     await b.reply('', {});

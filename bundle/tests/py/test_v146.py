@@ -91,12 +91,14 @@ class HostPrompts(HostBase):
     def guessed(self, **over):
         return self.req({'type': 'send', 'text': 'see you soon', 'ui': True, 'xUuid': XU}, confirmGuessed='always', **over)
 
-    def test_confirm_prompt_becomes_a_question_reaction_and_the_webhook_waits(self):
+    def test_confirm_prompt_is_typed_at_once_and_the_webhook_waits(self):
+        # v1.4.12: typed 🤖 text (no ❓ reaction: X's picker could take ~11 s to fail)
         r = self.guessed()
         self.assertTrue(r.get('needsConfirm'))
         self.assertEqual(self.posts, [], 'the routine copy is deferred')
-        react = r['ui']['react'][0]
-        self.assertEqual((react['emoji'], react['uuid']), (QMARK, XU))
+        self.assertNotIn('react', r['ui'])
+        react = r['ui']['type'][0]
+        self.assertTrue(react['text'].startswith(ROBOT + ' '))
         files = self.retry_files()
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0]['payload']['type'], 'needs_confirm')
@@ -109,7 +111,7 @@ class HostPrompts(HostBase):
 
     def test_a_missed_reaction_posts_the_text_prompt_at_once(self):
         r = self.guessed()
-        self.req({'type': 'ui_ack', 'noteId': r['ui']['react'][0]['noteId'], 'ok': False, 'step': 'no-react-button'})
+        self.req({'type': 'ui_ack', 'noteId': r['ui']['type'][0]['noteId'], 'ok': False, 'step': 'no-composer'})
         self.assertEqual([p['type'] for p in self.posts], ['needs_confirm'])
         self.assertEqual(self.retry_files(), [])
 

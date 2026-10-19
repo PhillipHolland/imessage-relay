@@ -186,14 +186,11 @@ def _defer_to_ui(cfg, payload, now=time.time):
     if not _UI['on'] or t not in UI_DEFER_TYPES or not cfg.get('uiPrompts', True):
         return False
     detail = str(payload.get('detail') or '').strip()
-    if t == 'needs_confirm':
-        if not _UI['uuid']:
-            return False
-        action = {'emoji': '\u2753', 'uuid': _UI['uuid']}
-    else:
-        if not detail:
-            return False
-        action = {'text': UI_TAG + ' ' + detail[:400]}
+    # v1.4.12: every prompt (confirm included) is typed as plain 🤖 text right away. The ❓ reaction needed
+    # X's emoji picker and could spend ~11 s failing before the routine copy went out.
+    if not detail:
+        return False
+    action = {'text': UI_TAG + ' ' + detail[:400]}
     rc.ensure_event_id(payload)
     note = uuid.uuid4().hex
     try:
@@ -750,6 +747,29 @@ def _by_recent_use(handles, best=''):
     return sorted(handles, key=lambda x: (-seen.get(x['handle'], 0.0), x['handle'] != best))   # ties: the card's best
 
 
+_PERSONAL_MAIL = ('icloud.com', 'me.com', 'mac.com', 'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com',
+                  'live.com', 'msn.com', 'yahoo.com', 'aol.com', 'proton.me', 'protonmail.com')
+_PHONE_LABEL_RANK = {'mobile': 0, 'iphone': 0, 'cell': 0, 'pref': 1, 'main': 2, '': 3, 'home': 4, 'work': 5}
+PICK_MAX = 4
+
+
+def _rank_options(hs, best=''):
+    """v1.4.12: phones first (most recently relayed, then mobile/iPhone/pref, then the card's best), then
+    emails. A work/school/business email is dropped when a phone or personal email exists. At most 4."""
+    seen = {}
+    for r in rc.load_roster():
+        seen[r.get('handle')] = max(float(r.get(k) or 0) for k in ('lastInboundAt', 'lastOutboundAt', 'lastSentAt'))
+    phones = [x for x in hs if '@' not in x['handle']]
+    mails = [x for x in hs if '@' in x['handle']]
+    personal = [x for x in mails if x['handle'].rsplit('@', 1)[-1].lower() in _PERSONAL_MAIL]
+    if phones or personal:
+        mails = personal
+    phones.sort(key=lambda x: (-seen.get(x['handle'], 0.0), _PHONE_LABEL_RANK.get(x.get('label') or '', 3),
+                               x['handle'] != best))
+    mails.sort(key=lambda x: -seen.get(x['handle'], 0.0))
+    return (phones + mails)[:PICK_MAX] or hs[:1]
+
+
 def _store_pending_new(handle, name, at, prefix='', existing=False, options=None):
     def fn():
         state = load_state()
@@ -844,7 +864,7 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
         return dict(base, _fallback=True)        # not a name anyone knows: ordinary text
     if len(matches) == 1:
         m = dict(matches[0])
-        hs = _by_recent_use(m.get('handles') or [{'handle': m['handle'], 'label': ''}], m['handle'])
+        hs = _rank_options(m.get('handles') or [{'handle': m['handle'], 'label': ''}], m['handle'])
         m['handle'] = hs[0]['handle']
         if cfg['confirmNewContacts'] == 'exact-skip' and m.get('exact') and len(hs) == 1:
             # v1.4.1: "Jordan Rivera: hey" names exactly one Contacts card, by its full name, with one
@@ -857,11 +877,11 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
         _note_prompt(now())
         if len(hs) > 1:
             # v1.4.11: a pick prompt (masked handles only), never a dead end. 1 = the one used most recently.
+            # v1.4.12: one choice per line; he may answer the index, a phone's last 4 digits or an email's start
             def opt(i, x):
-                return '%d) %s%s' % (i + 1, _short_mask(x['handle']), (' ' + x['label']) if x.get('label') else '')
-            detail = ('\u2753 %s has %d numbers in your Contacts: %s. Reply yes (or \U0001f44d) within 2 min to text 1, '
-                      'reply 2-%d to pick another, or no to cancel.' % (m['name'], len(hs),
-                                                                       ', '.join(opt(i, x) for i, x in enumerate(hs)), len(hs)))
+                return '%d \u00b7 %s%s' % (i + 1, _short_mask(x['handle']), (' ' + x['label']) if x.get('label') else '')
+            detail = '\u2753 Text %s at which?\n%s\nReply 1\u2013%d, or no.' % (
+                m['name'], '\n'.join(opt(i, x) for i, x in enumerate(hs)), len(hs))
         else:
             detail = ('\u2753 %s isn\u2019t on your relay list yet. Reply yes within 2 min to text the %s in your '
                       'Contacts (%s), or /add %s <number>.' % (first, m['name'], rc.mask_handle(m['handle']), first))

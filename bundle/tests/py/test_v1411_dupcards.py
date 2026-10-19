@@ -42,7 +42,7 @@ class DupCards(Base):
         self.assertEqual(r['options'][0], '+15555550103')           # most recently used is 1
         self.assertEqual(sorted(r['options']), ['+15555550101', '+15555550102', '+15555550103'])
         d = self.details()
-        for t in ('1) \u2022\u2022\u20220103', '2) ', '3) ', 'Reply yes', 'reply 2-3'):
+        for t in ('1 \u00b7 \u2022\u2022\u20220103', '\n2 \u00b7 ', '\n3 \u00b7 ', 'Reply 1\u20133, or no.'):
             self.assertIn(t, d)
         self.assertNotIn('full name', d)
         self.assertNotIn('5550102', d)
@@ -64,3 +64,44 @@ class DupCards(Base):
                                           {'name': 'jordan  rivera', 'handle': 'b', 'handles': [{'handle': 'b'}, {'handle': 'a'}]}])
         self.assertEqual(len(r), 1)
         self.assertEqual([x['handle'] for x in r[0]['handles']], ['a', 'b'])
+
+
+MANY = [('Jordan', 'Rivera', [('_$!<Home>!$_', '555-555-0201'), ('_$!<Work>!$_', '555-555-0202')]),
+        ('Jordan', 'Rivera', [('_$!<Mobile>!$_', '555-555-0203'), ('pref', '555-555-0204')]),
+        ('Jordan', 'Rivera', [('iPhone', '555-555-0205'), ('', '555-555-0206')])]
+
+
+class Rank(Base):
+    """v1.4.12: phones first (recent, then mobile/iPhone/pref), business emails dropped, at most 4 shown."""
+    def test_rank_trim_and_drop_business_mail(self):
+        hs = [{'handle': 'jr@k12.example.org', 'label': 'work'}, {'handle': '+15555550201', 'label': 'home'},
+              {'handle': '+15555550203', 'label': 'mobile'}, {'handle': 'jr@icloud.com', 'label': ''},
+              {'handle': '+15555550204', 'label': 'pref'}, {'handle': '+15555550205', 'label': 'iphone'},
+              {'handle': '+15555550202', 'label': 'work'}]
+        self.m.rc.record_inbound('+15555550201', self.clock.t - 5)
+        out = [x['handle'] for x in self.m.host._rank_options(hs, '+15555550203')]
+        self.assertEqual(out, ['+15555550201', '+15555550203', '+15555550205', '+15555550204'])
+        self.assertNotIn('jr@k12.example.org', out)
+        only_mail = [{'handle': 'jr@k12.example.org', 'label': ''}]
+        self.assertEqual(self.m.host._rank_options(only_mail)[0]['handle'], 'jr@k12.example.org')   # nothing better
+
+    def test_six_numbers_show_four_one_per_line(self):
+        make_ab(self.tmp, MANY)
+        r = self.send('Jordan Rivera: hi')
+        self.assertEqual(len(r['options']), 4)
+        ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]['detail']
+        self.assertEqual(ev.count('\n'), 5)
+        self.assertTrue(ev.startswith('\u2753 Text Jordan Rivera at which?\n1 \u00b7 '), ev)
+        self.assertTrue(ev.endswith('\nReply 1\u20134, or no.'), ev)
+
+    def test_confirm_prompt_is_typed_text_not_a_reaction(self):
+        make_ab(self.tmp, MANY)
+        msg = {'type': 'send', 'text': 'Jordan Rivera: hi', 'conversationId': '1111-2222', 'ui': True,
+               'xUuid': 'df48633d-6588-4b18-bc77-000000000001'}
+        from helpers import FakeRunner
+        r = self.m.host.handle_request(msg, cfg=self.cfg(), runner=FakeRunner([(0, '')] * 5), sleeper=self.sleeper,
+                                       now=self.clock.now, poster=self.poster)
+        ui = r.get('ui') or {}
+        self.assertFalse(ui.get('react'), ui)
+        self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 \u2753 Text Jordan Rivera at which?'))
+        self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_confirm'], 'routine copy is deferred')

@@ -238,6 +238,14 @@ async function handleCancel(item, g) {
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_cancelled', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }
 
+function pickOption(options, t) {
+  const s = String(t || '').toLowerCase();
+  if (/^[1-9]$/.test(s)) return options[Number(s) - 1] || '';
+  let hits = [];
+  if (/^\d{4}$/.test(s)) hits = options.filter(h => !/@/.test(h) && String(h).replace(/\D/g, '').endsWith(s));
+  else if (/^[a-z0-9._%+-]{2,}@?[a-z0-9.-]*$/.test(s)) hits = options.filter(h => /@/.test(h) && String(h).toLowerCase().startsWith(s));
+  return hits.length === 1 ? String(hits[0]) : '';
+}
 async function handleYes(item, nameArg, src) {
   const seenAt = Date.now();
   const g = await getPendingGuess();
@@ -475,10 +483,11 @@ async function handleItem(item, src) {
     await handleTest(item, tm[1]);
     return;
   }
-  const pm = /^\s*([1-9])\s*[.)!]?\s*$/.exec(String(item.text || ''));
-  if (pm) {                                   // v1.4.11: "2" picks a number from a pending pick prompt
+  const pickText = String(item.text || '').trim().replace(/[.)!]+$/, '');
+  if (pickText && pickText.length <= 40 && !bareConfirmWord(pickText) && !/\s/.test(pickText)) {
+    // v1.4.11/12: a pick prompt is answered by its index, a phone's last 4 digits, or an email's unique start
     const g = await getPendingGuess();
-    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS ? g.options[Number(pm[1]) - 1] : '';
+    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS ? pickOption(g.options, pickText) : '';
     if (h) {
       if (await isDuplicate(item.key)) return;
       await setPendingGuess(Object.assign({}, g, { handle: String(h) }));

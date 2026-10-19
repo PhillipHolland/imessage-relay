@@ -103,10 +103,10 @@ class NewContact(Base):
         self.assertEqual(r['handle'], '+15555550188')          # the mobile number, not home
         self.assertEqual(self.osa(), [])
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]
-        self.assertIn('Jordan Rivera has 2 numbers', ev['detail'])   # v1.4.1: choices listed (masked)
-        self.assertIn('\u2022\u2022\u20220188 mobile', ev['detail'])
-        self.assertIn('\u2022\u2022\u20220101 home', ev['detail'])
-        self.assertIn('Reply yes', ev['detail'])
+        self.assertIn('Text Jordan Rivera at which?', ev['detail'])   # v1.4.12: one choice per line (masked)
+        self.assertIn('\n1 \u00b7 \u2022\u2022\u20220188 mobile\n', ev['detail'])
+        self.assertIn('\n2 \u00b7 \u2022\u2022\u20220101 home\n', ev['detail'])
+        self.assertIn('Reply 1\u20132, or no.', ev['detail'])
         self.assertNotIn('5550188', ev['detail'])              # masked
         self.assertNotIn('hey there', json.dumps(ev))
         self.clock.t += 30

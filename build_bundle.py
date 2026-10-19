@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.11, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.12, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=cef96d2cf4cf306906ff0b60bb1a758489d97edfe66f12f9e79f9f81026959e0 nl=1
-# iMessage Relay v1.4.11
+@@@@ FILE README.md mode=644 sha256=46b23012a8ead9b7b5247bd29548e5ca22b73c8acc88be6af7e700197b574733 nl=1
+# iMessage Relay v1.4.12
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,11 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.12 (Mac helper + extension): the Contacts pick prompt is one choice per line ("❓ Text Jordan Rivera at
+  which?" / "1 · •••0188 mobile" / … / "Reply 1–4, or no."), phones first (most recently relayed, then
+  mobile/iPhone/pref), work/school emails dropped when a better option exists, at most 4. Answer with the number,
+  the last 4 digits, or the start of an email. Confirm prompts are typed as 🤖 text right away (no ❓ reaction
+  waiting on the emoji picker). Install on the Mac, then reload the extension and press Cmd+R.
 - v1.4.11 (Mac helper + extension): several Contacts cards with the same full name are one person (their
   numbers merged and deduped). One number: an exact full name sends and saves, a first name asks "yes". Several:
   a numbered pick prompt (masked numbers, the one used most recently first); reply 1/2/3, or yes / 👍 for 1.
@@ -135,7 +140,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.11)
+## Limits (v1.4.12)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -1130,7 +1135,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=e24ba77cacb84396af3956e4c0b458510715cd4543bfd7413cf01cafbc94df36 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=724af962922b58dd6d07006feee27fc0d9f8bd042c18b9865e23dc8082b159a6 nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1371,6 +1376,14 @@ async function handleCancel(item, g) {
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_cancelled', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }
 
+function pickOption(options, t) {
+  const s = String(t || '').toLowerCase();
+  if (/^[1-9]$/.test(s)) return options[Number(s) - 1] || '';
+  let hits = [];
+  if (/^\d{4}$/.test(s)) hits = options.filter(h => !/@/.test(h) && String(h).replace(/\D/g, '').endsWith(s));
+  else if (/^[a-z0-9._%+-]{2,}@?[a-z0-9.-]*$/.test(s)) hits = options.filter(h => /@/.test(h) && String(h).toLowerCase().startsWith(s));
+  return hits.length === 1 ? String(hits[0]) : '';
+}
 async function handleYes(item, nameArg, src) {
   const seenAt = Date.now();
   const g = await getPendingGuess();
@@ -1608,10 +1621,11 @@ async function handleItem(item, src) {
     await handleTest(item, tm[1]);
     return;
   }
-  const pm = /^\s*([1-9])\s*[.)!]?\s*$/.exec(String(item.text || ''));
-  if (pm) {                                   // v1.4.11: "2" picks a number from a pending pick prompt
+  const pickText = String(item.text || '').trim().replace(/[.)!]+$/, '');
+  if (pickText && pickText.length <= 40 && !bareConfirmWord(pickText) && !/\s/.test(pickText)) {
+    // v1.4.11/12: a pick prompt is answered by its index, a phone's last 4 digits, or an email's unique start
     const g = await getPendingGuess();
-    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS ? g.options[Number(pm[1]) - 1] : '';
+    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS ? pickOption(g.options, pickText) : '';
     if (h) {
       if (await isDuplicate(item.key)) return;
       await setPendingGuess(Object.assign({}, g, { handle: String(h) }));
@@ -3512,11 +3526,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=648604d58d9f9e051317ccf2c23a893a897a0b2f8d1a9e9adc27d691ff80b5fd nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=95e9ff80a18e359e0c1a0e56476bc040f4ec008179465f5838b3a5c7dea34c5d nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.11",
+  "version": "1.4.12",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -3728,7 +3742,7 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=7525f3a0bd0f3fc08218f38e737aff452d6f04b23db9b45159a7b1146c983876 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=7e8a9199343717ba7e3de062eb76c00eaf2a838f490d49f1a9edbb05bff88bc0 nl=1
 #!/usr/bin/python3
 """
 com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.8.
@@ -3917,14 +3931,11 @@ def _defer_to_ui(cfg, payload, now=time.time):
     if not _UI['on'] or t not in UI_DEFER_TYPES or not cfg.get('uiPrompts', True):
         return False
     detail = str(payload.get('detail') or '').strip()
-    if t == 'needs_confirm':
-        if not _UI['uuid']:
-            return False
-        action = {'emoji': '\u2753', 'uuid': _UI['uuid']}
-    else:
-        if not detail:
-            return False
-        action = {'text': UI_TAG + ' ' + detail[:400]}
+    # v1.4.12: every prompt (confirm included) is typed as plain 🤖 text right away. The ❓ reaction needed
+    # X's emoji picker and could spend ~11 s failing before the routine copy went out.
+    if not detail:
+        return False
+    action = {'text': UI_TAG + ' ' + detail[:400]}
     rc.ensure_event_id(payload)
     note = uuid.uuid4().hex
     try:
@@ -4481,6 +4492,29 @@ def _by_recent_use(handles, best=''):
     return sorted(handles, key=lambda x: (-seen.get(x['handle'], 0.0), x['handle'] != best))   # ties: the card's best
 
 
+_PERSONAL_MAIL = ('icloud.com', 'me.com', 'mac.com', 'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com',
+                  'live.com', 'msn.com', 'yahoo.com', 'aol.com', 'proton.me', 'protonmail.com')
+_PHONE_LABEL_RANK = {'mobile': 0, 'iphone': 0, 'cell': 0, 'pref': 1, 'main': 2, '': 3, 'home': 4, 'work': 5}
+PICK_MAX = 4
+
+
+def _rank_options(hs, best=''):
+    """v1.4.12: phones first (most recently relayed, then mobile/iPhone/pref, then the card's best), then
+    emails. A work/school/business email is dropped when a phone or personal email exists. At most 4."""
+    seen = {}
+    for r in rc.load_roster():
+        seen[r.get('handle')] = max(float(r.get(k) or 0) for k in ('lastInboundAt', 'lastOutboundAt', 'lastSentAt'))
+    phones = [x for x in hs if '@' not in x['handle']]
+    mails = [x for x in hs if '@' in x['handle']]
+    personal = [x for x in mails if x['handle'].rsplit('@', 1)[-1].lower() in _PERSONAL_MAIL]
+    if phones or personal:
+        mails = personal
+    phones.sort(key=lambda x: (-seen.get(x['handle'], 0.0), _PHONE_LABEL_RANK.get(x.get('label') or '', 3),
+                               x['handle'] != best))
+    mails.sort(key=lambda x: -seen.get(x['handle'], 0.0))
+    return (phones + mails)[:PICK_MAX] or hs[:1]
+
+
 def _store_pending_new(handle, name, at, prefix='', existing=False, options=None):
     def fn():
         state = load_state()
@@ -4575,7 +4609,7 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
         return dict(base, _fallback=True)        # not a name anyone knows: ordinary text
     if len(matches) == 1:
         m = dict(matches[0])
-        hs = _by_recent_use(m.get('handles') or [{'handle': m['handle'], 'label': ''}], m['handle'])
+        hs = _rank_options(m.get('handles') or [{'handle': m['handle'], 'label': ''}], m['handle'])
         m['handle'] = hs[0]['handle']
         if cfg['confirmNewContacts'] == 'exact-skip' and m.get('exact') and len(hs) == 1:
             # v1.4.1: "Jordan Rivera: hey" names exactly one Contacts card, by its full name, with one
@@ -4588,11 +4622,11 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
         _note_prompt(now())
         if len(hs) > 1:
             # v1.4.11: a pick prompt (masked handles only), never a dead end. 1 = the one used most recently.
+            # v1.4.12: one choice per line; he may answer the index, a phone's last 4 digits or an email's start
             def opt(i, x):
-                return '%d) %s%s' % (i + 1, _short_mask(x['handle']), (' ' + x['label']) if x.get('label') else '')
-            detail = ('\u2753 %s has %d numbers in your Contacts: %s. Reply yes (or \U0001f44d) within 2 min to text 1, '
-                      'reply 2-%d to pick another, or no to cancel.' % (m['name'], len(hs),
-                                                                       ', '.join(opt(i, x) for i, x in enumerate(hs)), len(hs)))
+                return '%d \u00b7 %s%s' % (i + 1, _short_mask(x['handle']), (' ' + x['label']) if x.get('label') else '')
+            detail = '\u2753 Text %s at which?\n%s\nReply 1\u2013%d, or no.' % (
+                m['name'], '\n'.join(opt(i, x) for i, x in enumerate(hs)), len(hs))
         else:
             detail = ('\u2753 %s isn\u2019t on your relay list yet. Reply yes within 2 min to text the %s in your '
                       'Contacts (%s), or /add %s <number>.' % (first, m['name'], rc.mask_handle(m['handle']), first))
@@ -6748,7 +6782,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=5d8c48266023451990cc093a3a7529cb3156a9f265b562d95352df1f5d09efe3 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=23671c3eedbe604f430e1a35d27667d6b841d68f6d4940423e649a38e98abe63 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -6774,8 +6808,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.11'
-EXTENSION_VERSION = '1.4.11'   # v1.4.11: "2" answers a Contacts pick prompt (reload + Cmd+R)
+VERSION = '1.4.12'
+EXTENSION_VERSION = '1.4.12'   # v1.4.12: pick by last 4 digits / email start (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -13366,7 +13400,7 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/js/media.test.js mode=644 sha256=b48897721f3b036f951fe23f2e51e453392f7e2c25a2c06a0d78f0c16f1a19c7 nl=1
+@@@@ FILE tests/js/media.test.js mode=644 sha256=b576b9102a2ccbd15ae4ce3b85c5c77d452339e72f978ab587d633fbfd938e88 nl=1
 /* v1.4.6: his photos in X Chat go out as iMessage attachments. content.js finds images in HIS outbound
  * bubble only (not emoji, not the quoted message) and reads them in 512 KiB chunks; background.js streams
  * them to the Mac (attach_chunk), sends metadata only with the reply, and keeps them for a "yes".
@@ -13535,6 +13569,19 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     assert.strictEqual(c[0].text, 'Jordan Rivera: hi there');
     await b.reply('3', {});
     assert.strictEqual(sends.filter(m => m.confirmed).length, 1, 'the pick is used once');
+  });
+  await test('background (v1.4.12): last 4 digits or an email start picks; a non-match is never a pick', async () => {
+    for (const [ans, want] of [['0102', '+15555550102'], ['jr.', 'jr.rivera@icloud.com'], ['8500', null]]) {
+      const sends = [];
+      const b = bootBg({ tab: tabOk, send: m => { sends.push(m); return m.confirmed ? { ok: true, delivered: true }
+        : { ok: false, needsConfirm: true, label: 'Jordan Rivera', handle: '+15555550103', reason: 'new_contact',
+            options: ['+15555550103', '+15555550102', 'jr.rivera@icloud.com'] }; } });
+      await b.reply('Jordan Rivera: hi there', {});
+      await b.reply(ans, {});
+      const c = sends.filter(m => m.confirmed);
+      if (want) { assert.strictEqual(c.length, 1, ans); assert.strictEqual(c[0].handle, want); }
+      else assert.strictEqual(c.length, 0, 'no option ends in ' + ans);
+    }
   });
   await test('background (v1.4.10): a skipped reply is never silent: it gets a warning reaction', async () => {
     const b = bootBg({ send: () => ({ ok: true }), tab: tabOk });
@@ -14320,7 +14367,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=425518db2105fd968df5e3ce4b339c36e7a7df9a2685c37927389573df080015 nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=1859cb8247798095facda6d0938dcf9ed484401d20c0a8c5135f846d83a6cb62 nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -14375,7 +14422,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.11');
+  assert.strictEqual(m.version, '1.4.12');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -19666,7 +19713,7 @@ class HostSendPath(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v140.py mode=644 sha256=3cb8155e880e97a8abd6fc84402e68ed59f3a0daa74b833b89c22b1854dc3d28 nl=1
+@@@@ FILE tests/py/test_v140.py mode=644 sha256=615406e3bf93252a6e3630d91ef8fadb7edf2ab2b16dffafa6c9bf1d95ee8795 nl=1
 """v1.4.0: multi-word names, a reply to someone new (Contacts lookup + /yes), and host notifications
 that no longer vanish when the webhook is slow (the needs_target notify ok:false bug)."""
 import json
@@ -19772,10 +19819,10 @@ class NewContact(Base):
         self.assertEqual(r['handle'], '+15555550188')          # the mobile number, not home
         self.assertEqual(self.osa(), [])
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]
-        self.assertIn('Jordan Rivera has 2 numbers', ev['detail'])   # v1.4.1: choices listed (masked)
-        self.assertIn('\u2022\u2022\u20220188 mobile', ev['detail'])
-        self.assertIn('\u2022\u2022\u20220101 home', ev['detail'])
-        self.assertIn('Reply yes', ev['detail'])
+        self.assertIn('Text Jordan Rivera at which?', ev['detail'])   # v1.4.12: one choice per line (masked)
+        self.assertIn('\n1 \u00b7 \u2022\u2022\u20220188 mobile\n', ev['detail'])
+        self.assertIn('\n2 \u00b7 \u2022\u2022\u20220101 home\n', ev['detail'])
+        self.assertIn('Reply 1\u20132, or no.', ev['detail'])
         self.assertNotIn('5550188', ev['detail'])              # masked
         self.assertNotIn('hey there', json.dumps(ev))
         self.clock.t += 30
@@ -19932,7 +19979,7 @@ class PhotoReply(Quote):
 
 del Quote
 @@@@ END
-@@@@ FILE tests/py/test_v1411_dupcards.py mode=644 sha256=910ff4ab39eb1d15b6dc9f47c6c763c7cb6c9b70f47303d18e145e6856d014bf nl=1
+@@@@ FILE tests/py/test_v1411_dupcards.py mode=644 sha256=36842b7a17a025e7bd1b4c3db21a86369cfd95d40c748183bc05f89010526d5d nl=1
 """v1.4.11: duplicate Contacts cards with the same full name are one person (handles merged, deduped);
 several numbers -> a numbered pick prompt (most recently used first), never "start with the full name"."""
 from helpers import read_log
@@ -19977,7 +20024,7 @@ class DupCards(Base):
         self.assertEqual(r['options'][0], '+15555550103')           # most recently used is 1
         self.assertEqual(sorted(r['options']), ['+15555550101', '+15555550102', '+15555550103'])
         d = self.details()
-        for t in ('1) \u2022\u2022\u20220103', '2) ', '3) ', 'Reply yes', 'reply 2-3'):
+        for t in ('1 \u00b7 \u2022\u2022\u20220103', '\n2 \u00b7 ', '\n3 \u00b7 ', 'Reply 1\u20133, or no.'):
             self.assertIn(t, d)
         self.assertNotIn('full name', d)
         self.assertNotIn('5550102', d)
@@ -19999,6 +20046,47 @@ class DupCards(Base):
                                           {'name': 'jordan  rivera', 'handle': 'b', 'handles': [{'handle': 'b'}, {'handle': 'a'}]}])
         self.assertEqual(len(r), 1)
         self.assertEqual([x['handle'] for x in r[0]['handles']], ['a', 'b'])
+
+
+MANY = [('Jordan', 'Rivera', [('_$!<Home>!$_', '555-555-0201'), ('_$!<Work>!$_', '555-555-0202')]),
+        ('Jordan', 'Rivera', [('_$!<Mobile>!$_', '555-555-0203'), ('pref', '555-555-0204')]),
+        ('Jordan', 'Rivera', [('iPhone', '555-555-0205'), ('', '555-555-0206')])]
+
+
+class Rank(Base):
+    """v1.4.12: phones first (recent, then mobile/iPhone/pref), business emails dropped, at most 4 shown."""
+    def test_rank_trim_and_drop_business_mail(self):
+        hs = [{'handle': 'jr@k12.example.org', 'label': 'work'}, {'handle': '+15555550201', 'label': 'home'},
+              {'handle': '+15555550203', 'label': 'mobile'}, {'handle': 'jr@icloud.com', 'label': ''},
+              {'handle': '+15555550204', 'label': 'pref'}, {'handle': '+15555550205', 'label': 'iphone'},
+              {'handle': '+15555550202', 'label': 'work'}]
+        self.m.rc.record_inbound('+15555550201', self.clock.t - 5)
+        out = [x['handle'] for x in self.m.host._rank_options(hs, '+15555550203')]
+        self.assertEqual(out, ['+15555550201', '+15555550203', '+15555550205', '+15555550204'])
+        self.assertNotIn('jr@k12.example.org', out)
+        only_mail = [{'handle': 'jr@k12.example.org', 'label': ''}]
+        self.assertEqual(self.m.host._rank_options(only_mail)[0]['handle'], 'jr@k12.example.org')   # nothing better
+
+    def test_six_numbers_show_four_one_per_line(self):
+        make_ab(self.tmp, MANY)
+        r = self.send('Jordan Rivera: hi')
+        self.assertEqual(len(r['options']), 4)
+        ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]['detail']
+        self.assertEqual(ev.count('\n'), 5)
+        self.assertTrue(ev.startswith('\u2753 Text Jordan Rivera at which?\n1 \u00b7 '), ev)
+        self.assertTrue(ev.endswith('\nReply 1\u20134, or no.'), ev)
+
+    def test_confirm_prompt_is_typed_text_not_a_reaction(self):
+        make_ab(self.tmp, MANY)
+        msg = {'type': 'send', 'text': 'Jordan Rivera: hi', 'conversationId': '1111-2222', 'ui': True,
+               'xUuid': 'df48633d-6588-4b18-bc77-000000000001'}
+        from helpers import FakeRunner
+        r = self.m.host.handle_request(msg, cfg=self.cfg(), runner=FakeRunner([(0, '')] * 5), sleeper=self.sleeper,
+                                       now=self.clock.now, poster=self.poster)
+        ui = r.get('ui') or {}
+        self.assertFalse(ui.get('react'), ui)
+        self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 \u2753 Text Jordan Rivera at which?'))
+        self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_confirm'], 'routine copy is deferred')
 @@@@ END
 @@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=c445fb291fdea4cdc89b2bd5f7ab91094df5a633c64ffa6e67098166e2e4446c nl=1
 """v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),
@@ -21005,7 +21093,7 @@ class Batching(test_watch.Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v146.py mode=644 sha256=a298b96a733d94c89c134efeab29465dca26b22ea8992b2c4c5f0bdd2e98d42b nl=1
+@@@@ FILE tests/py/test_v146.py mode=644 sha256=680e44bd95bdcf4a8d59e6462673faf74cab721a756c0a290a76e20d7b6f52d7 nl=1
 """v1.4.6: fast feedback in the owner's X tab (✅ / ❓ / 🤖 prompts / 👀 / mirrored tapbacks), the relay
 ignoring its own output, undo, quiet names (+ quote routing), follow-messages spam mode, STOP-footer
 cleanup, the one-post overnight recap. Fictional names only."""
@@ -21099,12 +21187,14 @@ class HostPrompts(HostBase):
     def guessed(self, **over):
         return self.req({'type': 'send', 'text': 'see you soon', 'ui': True, 'xUuid': XU}, confirmGuessed='always', **over)
 
-    def test_confirm_prompt_becomes_a_question_reaction_and_the_webhook_waits(self):
+    def test_confirm_prompt_is_typed_at_once_and_the_webhook_waits(self):
+        # v1.4.12: typed 🤖 text (no ❓ reaction: X's picker could take ~11 s to fail)
         r = self.guessed()
         self.assertTrue(r.get('needsConfirm'))
         self.assertEqual(self.posts, [], 'the routine copy is deferred')
-        react = r['ui']['react'][0]
-        self.assertEqual((react['emoji'], react['uuid']), (QMARK, XU))
+        self.assertNotIn('react', r['ui'])
+        react = r['ui']['type'][0]
+        self.assertTrue(react['text'].startswith(ROBOT + ' '))
         files = self.retry_files()
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0]['payload']['type'], 'needs_confirm')
@@ -21117,7 +21207,7 @@ class HostPrompts(HostBase):
 
     def test_a_missed_reaction_posts_the_text_prompt_at_once(self):
         r = self.guessed()
-        self.req({'type': 'ui_ack', 'noteId': r['ui']['react'][0]['noteId'], 'ok': False, 'step': 'no-react-button'})
+        self.req({'type': 'ui_ack', 'noteId': r['ui']['type'][0]['noteId'], 'ok': False, 'step': 'no-composer'})
         self.assertEqual([p['type'] for p in self.posts], ['needs_confirm'])
         self.assertEqual(self.retry_files(), [])
 
@@ -22073,7 +22163,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=50438d0d85403b372145a9c9521d718ca1cddd95847a8b9391c941d80d6f35e8 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=276fc4a4a91ea9100766ebb4af0fae345f0a0b9475059b21768e2274ce95a882 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -22266,7 +22356,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.11')
+        self.assertEqual(m.rc.VERSION, '1.4.12')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)
