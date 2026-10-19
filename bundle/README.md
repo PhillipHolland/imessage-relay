@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.13
+# iMessage Relay v1.4.14
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,6 +22,11 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.14 (Mac helper + extension): safety fix. X now wraps a bubble's text and its hidden + visible time in one
+  span, so a bare "2" was read as "26:31 PM6:31 PM" and could be sent to the last texter. The text is now read
+  as typed; a bubble that reads back differently from what was typed is refused (⚠️, nothing sent); and a bare
+  number or last 4 digits within 10 minutes of any prompt never goes to the last texter. Install on the Mac,
+  then reload the extension and press Cmd+R.
 - v1.4.13 (Mac helper + extension): speed + a pick fix. A reply to a numbered pick prompt ("2", the last 4
   digits, an email start) is checked against the pick first and never turns into "Reply to <last texter>?";
   a pick stays answerable 10 minutes. New texts reach X Chat in ~1 s (the watcher wakes on a chat.db change
@@ -127,7 +132,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.13)
+## Limits (v1.4.14)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best

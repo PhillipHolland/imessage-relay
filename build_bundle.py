@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.13, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.14, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=0865d4a8dec0683a16ba261adb443e6548ec39f06ba7146e429e156f93f8d5b6 nl=1
-# iMessage Relay v1.4.13
+@@@@ FILE README.md mode=644 sha256=10388782415b5689439b1126b954301eac3610e07d9cfc76362faae3520a7198 nl=1
+# iMessage Relay v1.4.14
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,11 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.14 (Mac helper + extension): safety fix. X now wraps a bubble's text and its hidden + visible time in one
+  span, so a bare "2" was read as "26:31 PM6:31 PM" and could be sent to the last texter. The text is now read
+  as typed; a bubble that reads back differently from what was typed is refused (⚠️, nothing sent); and a bare
+  number or last 4 digits within 10 minutes of any prompt never goes to the last texter. Install on the Mac,
+  then reload the extension and press Cmd+R.
 - v1.4.13 (Mac helper + extension): speed + a pick fix. A reply to a numbered pick prompt ("2", the last 4
   digits, an email start) is checked against the pick first and never turns into "Reply to <last texter>?";
   a pick stays answerable 10 minutes. New texts reach X Chat in ~1 s (the watcher wakes on a chat.db change
@@ -146,7 +151,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.13)
+## Limits (v1.4.14)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -1141,7 +1146,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=4b45ea49044db4557cff90d4495d6befe06d1ee440ebf0964fb29825c2a97c3e nl=1
+@@@@ FILE extension/background.js mode=644 sha256=68cc4ffa31cb613c99f293f91432de9d82de5ef6fae004607ac15f4cd032c531 nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1631,6 +1636,14 @@ async function handleItem(item, src) {
     await handleTest(item, tm[1]);
     return;
   }
+  if (item.typedMismatch) {                   // v1.4.14: the bubble read back differs from what he typed: never send it
+    if (await isDuplicate(item.key)) return;
+    await addEvent({ kind: 'reply', key: item.key, contactName: '', status: 'skipped', detail: 'read text differs from what you typed; nothing sent' });
+    const xu = uuidFromKey(item.key);
+    if (xu && src) await tabUi(src, { action: 'react', uuid: xu, emoji: '\u26A0\uFE0F' });
+    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'typed_mismatch' }); } catch (e) { /* host down */ }
+    return;
+  }
   const pickText = String(item.text || '').trim().replace(/[.)!]+$/, '');
   if (pickText && pickText.length <= 40 && !bareConfirmWord(pickText) && !/\s/.test(pickText)) {
     // v1.4.11/12: a pick prompt is answered by its index, a phone's last 4 digits, or an email's unique start
@@ -1872,7 +1885,7 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=c8f383ad9a6430eb1e1d8387ee130f4f83f313b610f50117112038e0bce923b4 nl=1
+@@@@ FILE extension/content.js mode=644 sha256=f5933b11767f61b78e57e6a109cb948e227ae6a80124ae9000c98166464330d3 nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -2169,6 +2182,16 @@ chrome.runtime.onStartup.addListener(boot);
     }
     function isEmojiAlt(alt) { return !!alt && alt.length <= 16 && !/[A-Za-z0-9]/.test(alt) && /[^\s]/.test(alt); }
     function hasEmojiImg(el) { return safeAll(el, 'img[alt]').some(i => isEmojiAlt(String(i.getAttribute('alt') || ''))); }
+    // v1.4.14: an element is a chip only if each child element holding text is a chip too. X wraps a bubble's
+    // text and its (hidden spacer + visible) time in one span, so "2" + "6:31 PM" + "6:31 PM" read as one
+    // string "26:31 PM6:31 PM" that the chip pattern accepted as times: a short number became that string.
+    function isChipEl(el) {
+      if (!isChipText(el.textContent)) return false;
+      for (let c = el.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 1 && String(c.textContent || '').trim() && !isChipEl(c)) return false;
+      }
+      return true;
+    }
     function extractText(textEl) {
       const parts = [];   // strings, or {chip: text} for chip-only elements (kept only if not trailing)
       function walk(node) {
@@ -2183,7 +2206,7 @@ chrome.runtime.onStartup.addListener(boot);
           }
           if (isStripEl(c)) continue;
           const block = cfg.blockTags.includes(c.tagName);
-          if (!c.shadowRoot && isChipText(c.textContent) && !hasEmojiImg(c)) {   // v1.4.10: emoji images are text
+          if (!c.shadowRoot && isChipEl(c) && !hasEmojiImg(c)) {   // v1.4.10: emoji images are text
             parts.push({ chip: (block ? '\n' : '') + c.textContent + (block ? '\n' : '') });
             continue;
           }
@@ -2689,6 +2712,7 @@ chrome.runtime.onStartup.addListener(boot);
       for (const e of ordered) {
         const a = analyze(e);
         let cardUrls = [];
+        const rawText = a.text;
         if (a.direction === 'outbound') {
           // v1.4.6: a shared X post / link card goes out as its URL, after anything he typed ("Jordan:" + post)
           try { cardUrls = cardInfo(e).urls; } catch (err) { cardUrls = []; }
@@ -2752,8 +2776,10 @@ chrome.runtime.onStartup.addListener(boot);
 
         stats.emitted++;
         seen.add(a.uuid);
+        const typedBad = a.direction === 'outbound' ? typedMismatch(rawText) : false;
         const item = { ts, conversationId: conv, direction: a.direction, text: a.text, signals: a.signals, score: a.score, key: a.key, source };
         if (a.quotedText) item.quotedText = a.quotedText;
+        if (typedBad) item.typedMismatch = true;      // v1.4.14: what we read is not what he typed: never sent
         if (a.direction !== 'inbound') { try { item.quoteProbe = structureOf(e); } catch (err) { /* diagnostics only */ } }
         if (cardUrls.length) item.cards = cardUrls.length;
         if (media.length) {             // v1.4.6: his photos ride along (bytes read only when the send goes ahead)
@@ -2763,6 +2789,38 @@ chrome.runtime.onStartup.addListener(boot);
         }
         try { emit(item); } catch (err) { info('emit failed', err); }
       }
+    }
+
+    // v1.4.14: what he typed, held in memory only (never stored, never logged) for up to 30 s, so a bubble
+    // read back differently (X markup change) is refused instead of sent. Our own 🤖 prompts are skipped.
+    let typed = [];
+    const typedNorm = v => normSpaces(v).replace(/[\s\uFE0E\uFE0F\u200d]+/g, '');
+    function captureTyped() {
+      try {
+        const box = safeAll(doc, '[data-testid="dm-composer-textarea"]')[0];
+        const v = box ? ((box.tagName === 'TEXTAREA' || box.tagName === 'INPUT') ? String(box.value || '') : String(box.textContent || '')) : '';
+        if (!v.trim() || UI_TAG_RE.test(v)) return;
+        const t = realNow();
+        typed = typed.filter(x => t - x.at < 30000).slice(-4);
+        typed.push({ n: typedNorm(v), at: t });
+      } catch (e) { /* never block his send */ }
+    }
+    function typedMismatch(text) {
+      const t = realNow();
+      typed = typed.filter(x => t - x.at < 30000);
+      if (!typed.length) return false;               // nothing captured (other device, older page): as before
+      const n = typedNorm(text);
+      const i = typed.findIndex(x => x.n === n);
+      if (i >= 0) { typed.splice(i, 1); return false; }
+      typed.shift();
+      return true;
+    }
+    function onTypedKey(ev) {
+      if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.target && ev.target.closest &&
+          ev.target.closest('[data-testid="dm-composer-textarea"]')) captureTyped();
+    }
+    function onTypedClick(ev) {
+      if (ev.isTrusted !== false && ev.target && ev.target.closest && ev.target.closest('[data-testid="dm-composer-send-button"]')) captureTyped();
     }
 
     function reportWrongAccount() {
@@ -3311,6 +3369,7 @@ chrome.runtime.onStartup.addListener(boot);
         observer = new MO(onMutations);
         observer.observe(doc.body || doc.documentElement, OBS_OPTS);
         observeShadowRoots(doc.documentElement);
+        try { doc.addEventListener('keydown', onTypedKey, true); doc.addEventListener('click', onTypedClick, true); } catch (e) { /* tests */ }
         baseline('start');
         urlTimer = win.setInterval(checkUrl, cfg.urlPollMs);
         shadowTimer = win.setInterval(() => { try { observeShadowRoots(doc.documentElement); } catch (e) { /* doc gone */ } }, cfg.shadowRescanMs);
@@ -3536,11 +3595,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=8fa20c3e9e03df8d8a9195389058e5c6889fb715de6c313e5724bb5608c27f7b nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=fe4ea9e467b00be7fd55db2a4776626910ae8876d0fc4121c492ed5828388308 nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.13",
+  "version": "1.4.14",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -3752,10 +3811,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=26b713ee5c9480b4468130b1d348f649a15e2b70b3d0f1d4eabfa2718f993c49 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=88a172e877ffe159807ef804d853d8905d75342543cc91d5efca01d4606944e1 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.13.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.14.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -4571,8 +4630,17 @@ def handle_pending_pick(text, cfg, now, poster):
     the pick FIRST and never routed as a new text (it used to become "Reply to <last texter>?"). The
     extension holds the message text and resolves a valid pick itself; one that reaches the host means
     the extension no longer has it (restarted, or the pick was out of range): say so, send nothing."""
-    p = load_state().get('pendingNewContact')
+    state = load_state()
+    p = state.get('pendingNewContact')
     if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
+        # v1.4.14: a bare number / last-4 right after ANY prompt is an answer, never a text to the last texter
+        if (re.match(r'^\s*(?:[1-9]|\d{4})\s*[.)!]?\s*$', str(text or ''))
+                and now() - float(state.get('lastPromptAt') or 0) <= PICK_WINDOW_S):
+            detail = ('That looks like an answer to a prompt, but nothing is waiting for it, so nothing was sent. '
+                      'Start with a name to text someone.')
+            rc.log_event('pick_unresolved', resolved=False, pending=False)
+            notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
+            return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
         return None
     like, h = pick_answer(text, p['options'])
     if not like:
@@ -5338,6 +5406,12 @@ def handle_signal(msg, cfg, now, poster):
         label = str(msg.get('label') or '').strip()
         rc.log_event('signal', status='guess_expired')
         notify(cfg, poster, {'type': 'guess_expired', 'label': label, 'at': rc.iso_utc(now())})
+        return {'ok': True}
+    if status == 'typed_mismatch':
+        # v1.4.14: the extension read his bubble back differently from what he typed and sent nothing
+        rc.log_event('signal', status='typed_mismatch')
+        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That message read back differently from what you '
+                             'typed, so nothing was sent. Please send it again.', 'at': rc.iso_utc(now())})
         return {'ok': True}
     if status in ('test_seen', 'test_unseen'):
         # v1.3.8 /test: the extension saw (or gave up waiting for) the routine's report. Local only.
@@ -6854,7 +6928,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=b7526d492912da826bcd7822ea0d3ee386258d76dea0bfc9a5ae3728b153a377 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=8d5f9b3a3adddbed4d3e3d502b3720670c7bd393fc80081a23abe53824bf5de6 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -6880,8 +6954,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.13'
-EXTENSION_VERSION = '1.4.13'   # v1.4.13: pick answerable 10 min, faster ✅ polling (reload + Cmd+R)
+VERSION = '1.4.14'
+EXTENSION_VERSION = '1.4.14'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -12578,7 +12652,7 @@ test('DOM: old markup still works (<time>, testid chips, line breaks)', () => {
 console.log(passed + ' passed, ' + failed + ' failed (v1.3.9 chips)');
 process.exit(failed ? 1 : 0);
 @@@@ END
-@@@@ FILE tests/js/detect.test.js mode=644 sha256=bfd48959e69097f29256f5b3b405fed6ac501aefeb09cc7c986a9d47a03fe388 nl=1
+@@@@ FILE tests/js/detect.test.js mode=644 sha256=038eee6c11c2ca4903d8feb3a5ca04fb4da0cb64cf5d2cbff0ffecb171163c5f nl=1
 /* jsdom test for content.js detection logic (v1.3.2: uuid-only). Run:
  *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
  */
@@ -12841,6 +12915,15 @@ const fixture = fs.readFileSync(path.join(__dirname, 'fake-chat.html'), 'utf8');
     assert.strictEqual(CONFIG.logPrefix, '[imessage-relay]');
     assert.strictEqual(CONFIG.textTestIdPrefix, 'message-text-');
     assert.ok(CONFIG.uuidEntryTestIdRegex.test('message-aaaaaaaa-0000-4000-8000-000000000001'));
+  });
+
+  await test('v1.4.14: a bare "2" next to X\'s hidden + visible time is read as "2" (never "26:31 PM6:31 PM")', async () => {
+    const { det, doc } = setup('<body></body>');
+    const host = doc.createElement('div');
+    host.innerHTML = '<div data-testid="message-text-U"><div><span><span dir="auto"><span>2</span></span><span aria-hidden="true"><div><span>6:31 PM</span><svg></svg></div></span></span><div><div><span>6:31 PM</span><svg><path d=""/></svg></div></div></div></div>';
+    assert.strictEqual(det.extractText(host.firstChild), '2');
+    host.innerHTML = '<div data-testid="message-text-U"><span>9:07 AM</span><span>9:07 AM</span></div>';
+    assert.strictEqual(det.extractText(host.firstChild), '9:07 AM');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
@@ -14439,7 +14522,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=962e521090982861048f145f7bb7620953a53882bfd834a1947dfde81b234e3a nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=4946e2c1a8d80c806da83e0673142789c647559ece13ff7d2e174cf83275cfcc nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -14494,7 +14577,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.13');
+  assert.strictEqual(m.version, '1.4.14');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -20160,7 +20243,7 @@ class Rank(Base):
         self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 \u2753 Text Jordan Rivera at which?'))
         self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_confirm'], 'routine copy is deferred')
 @@@@ END
-@@@@ FILE tests/py/test_v1413_pick.py mode=644 sha256=7802d92548da6f1a8dced819edeb619be45a341af162a380b207afda8225a10e nl=1
+@@@@ FILE tests/py/test_v1413_pick.py mode=644 sha256=d738cbad0075a545325e3a41b469aba909c40ebb6e5bd9f3b556695c65c68370 nl=1
 """v1.4.13: an answer to a pending pick prompt is checked against the pick first, never routed as a new text."""
 from test_v140 import Base
 
@@ -20181,6 +20264,15 @@ class PendingPick(Base):
         self.assertEqual(h.pick_answer('2026', ['+15555550188', '+15555550101']), (False, ''))
         self.assertEqual(h.pick_answer('0101', ['+15555550188', '+15555550101']), (True, '+15555550101'))
         self.assertEqual(h.pick_answer('7', ['+15555550188']), (True, ''))
+
+
+    def test_bare_number_after_any_prompt_never_goes_to_recent(self):
+        import imessage_relay_host as h
+        h._note_prompt(self.clock.now())
+        r = self.send('2')
+        self.assertTrue(r.get('ok') and r.get('skipped'), r)
+        self.assertFalse(r.get('needsConfirm'), r)
+        self.assertEqual(self.osa(), [])
 
 
 del Base
@@ -22260,7 +22352,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=fcbd6deb1d224c457e04b383581611c8f2848583f6c44e7f554de5ae720b7def nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=2935599019ab280f2aea4decdbb9497234d192c311f6a2ea27d74ba71a9252d1 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -22453,7 +22545,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.13')
+        self.assertEqual(m.rc.VERSION, '1.4.14')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

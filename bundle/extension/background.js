@@ -487,6 +487,14 @@ async function handleItem(item, src) {
     await handleTest(item, tm[1]);
     return;
   }
+  if (item.typedMismatch) {                   // v1.4.14: the bubble read back differs from what he typed: never send it
+    if (await isDuplicate(item.key)) return;
+    await addEvent({ kind: 'reply', key: item.key, contactName: '', status: 'skipped', detail: 'read text differs from what you typed; nothing sent' });
+    const xu = uuidFromKey(item.key);
+    if (xu && src) await tabUi(src, { action: 'react', uuid: xu, emoji: '\u26A0\uFE0F' });
+    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'typed_mismatch' }); } catch (e) { /* host down */ }
+    return;
+  }
   const pickText = String(item.text || '').trim().replace(/[.)!]+$/, '');
   if (pickText && pickText.length <= 40 && !bareConfirmWord(pickText) && !/\s/.test(pickText)) {
     // v1.4.11/12: a pick prompt is answered by its index, a phone's last 4 digits, or an email's unique start

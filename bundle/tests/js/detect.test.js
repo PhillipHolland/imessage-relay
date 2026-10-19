@@ -262,6 +262,15 @@ const fixture = fs.readFileSync(path.join(__dirname, 'fake-chat.html'), 'utf8');
     assert.ok(CONFIG.uuidEntryTestIdRegex.test('message-aaaaaaaa-0000-4000-8000-000000000001'));
   });
 
+  await test('v1.4.14: a bare "2" next to X\'s hidden + visible time is read as "2" (never "26:31 PM6:31 PM")', async () => {
+    const { det, doc } = setup('<body></body>');
+    const host = doc.createElement('div');
+    host.innerHTML = '<div data-testid="message-text-U"><div><span><span dir="auto"><span>2</span></span><span aria-hidden="true"><div><span>6:31 PM</span><svg></svg></div></span></span><div><div><span>6:31 PM</span><svg><path d=""/></svg></div></div></div></div>';
+    assert.strictEqual(det.extractText(host.firstChild), '2');
+    host.innerHTML = '<div data-testid="message-text-U"><span>9:07 AM</span><span>9:07 AM</span></div>';
+    assert.strictEqual(det.extractText(host.firstChild), '9:07 AM');
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })();

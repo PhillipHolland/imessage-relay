@@ -294,6 +294,16 @@
     }
     function isEmojiAlt(alt) { return !!alt && alt.length <= 16 && !/[A-Za-z0-9]/.test(alt) && /[^\s]/.test(alt); }
     function hasEmojiImg(el) { return safeAll(el, 'img[alt]').some(i => isEmojiAlt(String(i.getAttribute('alt') || ''))); }
+    // v1.4.14: an element is a chip only if each child element holding text is a chip too. X wraps a bubble's
+    // text and its (hidden spacer + visible) time in one span, so "2" + "6:31 PM" + "6:31 PM" read as one
+    // string "26:31 PM6:31 PM" that the chip pattern accepted as times: a short number became that string.
+    function isChipEl(el) {
+      if (!isChipText(el.textContent)) return false;
+      for (let c = el.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 1 && String(c.textContent || '').trim() && !isChipEl(c)) return false;
+      }
+      return true;
+    }
     function extractText(textEl) {
       const parts = [];   // strings, or {chip: text} for chip-only elements (kept only if not trailing)
       function walk(node) {
@@ -308,7 +318,7 @@
           }
           if (isStripEl(c)) continue;
           const block = cfg.blockTags.includes(c.tagName);
-          if (!c.shadowRoot && isChipText(c.textContent) && !hasEmojiImg(c)) {   // v1.4.10: emoji images are text
+          if (!c.shadowRoot && isChipEl(c) && !hasEmojiImg(c)) {   // v1.4.10: emoji images are text
             parts.push({ chip: (block ? '\n' : '') + c.textContent + (block ? '\n' : '') });
             continue;
           }
@@ -814,6 +824,7 @@
       for (const e of ordered) {
         const a = analyze(e);
         let cardUrls = [];
+        const rawText = a.text;
         if (a.direction === 'outbound') {
           // v1.4.6: a shared X post / link card goes out as its URL, after anything he typed ("Jordan:" + post)
           try { cardUrls = cardInfo(e).urls; } catch (err) { cardUrls = []; }
@@ -877,8 +888,10 @@
 
         stats.emitted++;
         seen.add(a.uuid);
+        const typedBad = a.direction === 'outbound' ? typedMismatch(rawText) : false;
         const item = { ts, conversationId: conv, direction: a.direction, text: a.text, signals: a.signals, score: a.score, key: a.key, source };
         if (a.quotedText) item.quotedText = a.quotedText;
+        if (typedBad) item.typedMismatch = true;      // v1.4.14: what we read is not what he typed: never sent
         if (a.direction !== 'inbound') { try { item.quoteProbe = structureOf(e); } catch (err) { /* diagnostics only */ } }
         if (cardUrls.length) item.cards = cardUrls.length;
         if (media.length) {             // v1.4.6: his photos ride along (bytes read only when the send goes ahead)
@@ -888,6 +901,38 @@
         }
         try { emit(item); } catch (err) { info('emit failed', err); }
       }
+    }
+
+    // v1.4.14: what he typed, held in memory only (never stored, never logged) for up to 30 s, so a bubble
+    // read back differently (X markup change) is refused instead of sent. Our own 🤖 prompts are skipped.
+    let typed = [];
+    const typedNorm = v => normSpaces(v).replace(/[\s\uFE0E\uFE0F\u200d]+/g, '');
+    function captureTyped() {
+      try {
+        const box = safeAll(doc, '[data-testid="dm-composer-textarea"]')[0];
+        const v = box ? ((box.tagName === 'TEXTAREA' || box.tagName === 'INPUT') ? String(box.value || '') : String(box.textContent || '')) : '';
+        if (!v.trim() || UI_TAG_RE.test(v)) return;
+        const t = realNow();
+        typed = typed.filter(x => t - x.at < 30000).slice(-4);
+        typed.push({ n: typedNorm(v), at: t });
+      } catch (e) { /* never block his send */ }
+    }
+    function typedMismatch(text) {
+      const t = realNow();
+      typed = typed.filter(x => t - x.at < 30000);
+      if (!typed.length) return false;               // nothing captured (other device, older page): as before
+      const n = typedNorm(text);
+      const i = typed.findIndex(x => x.n === n);
+      if (i >= 0) { typed.splice(i, 1); return false; }
+      typed.shift();
+      return true;
+    }
+    function onTypedKey(ev) {
+      if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.target && ev.target.closest &&
+          ev.target.closest('[data-testid="dm-composer-textarea"]')) captureTyped();
+    }
+    function onTypedClick(ev) {
+      if (ev.isTrusted !== false && ev.target && ev.target.closest && ev.target.closest('[data-testid="dm-composer-send-button"]')) captureTyped();
     }
 
     function reportWrongAccount() {
@@ -1436,6 +1481,7 @@
         observer = new MO(onMutations);
         observer.observe(doc.body || doc.documentElement, OBS_OPTS);
         observeShadowRoots(doc.documentElement);
+        try { doc.addEventListener('keydown', onTypedKey, true); doc.addEventListener('click', onTypedClick, true); } catch (e) { /* tests */ }
         baseline('start');
         urlTimer = win.setInterval(checkUrl, cfg.urlPollMs);
         shadowTimer = win.setInterval(() => { try { observeShadowRoots(doc.documentElement); } catch (e) { /* doc gone */ } }, cfg.shadowRescanMs);

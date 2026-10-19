@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.13.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.14.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -816,8 +816,17 @@ def handle_pending_pick(text, cfg, now, poster):
     the pick FIRST and never routed as a new text (it used to become "Reply to <last texter>?"). The
     extension holds the message text and resolves a valid pick itself; one that reaches the host means
     the extension no longer has it (restarted, or the pick was out of range): say so, send nothing."""
-    p = load_state().get('pendingNewContact')
+    state = load_state()
+    p = state.get('pendingNewContact')
     if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
+        # v1.4.14: a bare number / last-4 right after ANY prompt is an answer, never a text to the last texter
+        if (re.match(r'^\s*(?:[1-9]|\d{4})\s*[.)!]?\s*$', str(text or ''))
+                and now() - float(state.get('lastPromptAt') or 0) <= PICK_WINDOW_S):
+            detail = ('That looks like an answer to a prompt, but nothing is waiting for it, so nothing was sent. '
+                      'Start with a name to text someone.')
+            rc.log_event('pick_unresolved', resolved=False, pending=False)
+            notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
+            return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
         return None
     like, h = pick_answer(text, p['options'])
     if not like:
@@ -1583,6 +1592,12 @@ def handle_signal(msg, cfg, now, poster):
         label = str(msg.get('label') or '').strip()
         rc.log_event('signal', status='guess_expired')
         notify(cfg, poster, {'type': 'guess_expired', 'label': label, 'at': rc.iso_utc(now())})
+        return {'ok': True}
+    if status == 'typed_mismatch':
+        # v1.4.14: the extension read his bubble back differently from what he typed and sent nothing
+        rc.log_event('signal', status='typed_mismatch')
+        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That message read back differently from what you '
+                             'typed, so nothing was sent. Please send it again.', 'at': rc.iso_utc(now())})
         return {'ok': True}
     if status in ('test_seen', 'test_unseen'):
         # v1.3.8 /test: the extension saw (or gave up waiting for) the routine's report. Local only.

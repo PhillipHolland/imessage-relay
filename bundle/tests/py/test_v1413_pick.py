@@ -20,4 +20,13 @@ class PendingPick(Base):
         self.assertEqual(h.pick_answer('7', ['+15555550188']), (True, ''))
 
 
+    def test_bare_number_after_any_prompt_never_goes_to_recent(self):
+        import imessage_relay_host as h
+        h._note_prompt(self.clock.now())
+        r = self.send('2')
+        self.assertTrue(r.get('ok') and r.get('skipped'), r)
+        self.assertFalse(r.get('needsConfirm'), r)
+        self.assertEqual(self.osa(), [])
+
+
 del Base
