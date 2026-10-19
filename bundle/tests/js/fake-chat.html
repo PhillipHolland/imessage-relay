@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Fake X Chat (test fixture)</title></head>
+<body>
+<!-- Fake layout guessing at X Chat, in the v1.3.2 uuid-only shape.
+     Messages are data-testid="message-<uuid>" with their text in data-testid="message-text-<uuid>".
+     data-fake-rect="left,top,width,height" is read by the test's getBoundingClientRect stub
+     because jsdom has no layout engine.
+     The owner account-switcher avatar (UserAvatar-Container-OwnerAcct) is the owner-identity proof. -->
+<nav data-testid="SideNav">nav</nav>
+<div data-testid="UserAvatar-Container-OwnerAcct" aria-label="Account"></div>
+<main>
+  <div data-testid="DmInbox"><div data-testid="conversation" role="listitem"><span>inbox preview</span></div></div>
+  <div data-testid="xchatEmbedRoute">
+    <section>
+      <div data-testid="dm-conversation-panel" style="overflow-y:auto; display:flex; flex-direction:column" data-fake-rect="400,0,600,800">
+        <div data-testid="message-aaaaaaaa-0000-4000-8000-000000000001" style="display:flex; justify-content:flex-start">
+          <a href="/SenderBot"><img alt="SenderBot" src="x.png"></a>
+          <div data-fake-rect="420,10,200,40"><span data-testid="message-text-aaaaaaaa-0000-4000-8000-000000000001">old inbound one</span><time datetime="2020-01-01T10:00:00Z">10:00</time></div>
+        </div>
+        <div data-testid="message-aaaaaaaa-0000-4000-8000-000000000002" style="display:flex; justify-content:flex-end">
+          <div data-fake-rect="780,60,200,40"><span data-testid="message-text-aaaaaaaa-0000-4000-8000-000000000002">old outbound one</span><time datetime="2020-01-01T10:01:00Z">10:01</time></div>
+        </div>
+        <div data-testid="message-aaaaaaaa-0000-4000-8000-000000000003" style="display:flex; justify-content:flex-start">
+          <a href="/SenderBot"><img alt="SenderBot" src="x.png"></a>
+          <div data-fake-rect="420,110,200,40"><span data-testid="message-text-aaaaaaaa-0000-4000-8000-000000000003">old inbound two</span><time datetime="2020-01-01T10:02:00Z">10:02</time></div>
+        </div>
+      </div>
+      <div data-testid="dmComposer"><div contenteditable="true" role="textbox" id="composer"></div></div>
+    </section>
+  </div>
+</main>
+</body></html>

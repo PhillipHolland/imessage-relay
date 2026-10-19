@@ -1,0 +1,15 @@
+body { font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; width: 340px; margin: 10px; color: #0f1419; }
+header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+h2 { font-size: 12px; margin: 10px 0 4px; }
+.muted { color: #536471; }
+.foot { font-size: 11px; margin-top: 10px; }
+.pill { margin-left: auto; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; color: #fff; background: #8b98a5; }
+.pill.on { background: #00ba7c; } .pill.paused { background: #888; } .pill.dry { background: #1d9bf0; } .pill.off { background: #f4212e; }
+ol { list-style: none; padding: 0; margin: 0; }
+li { border-top: 1px solid #eff3f4; padding: 4px 0; }
+.st { display: inline-block; font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 8px; color: #fff; background: #8b98a5; }
+.st.sent { background: #00ba7c; } .st.dry-run { background: #1d9bf0; } .st.error, .st.refused { background: #f4212e; }
+.det { font-size: 10px; color: #8b98a5; word-break: break-word; }
+
+.st.needs-name { background: #ffd400; color: #0f1419; }
+.st.test-ok { background: #00ba7c; } .st.test-failed { background: #f4212e; } .st.testing, .st.test-waiting { background: #8b98a5; }

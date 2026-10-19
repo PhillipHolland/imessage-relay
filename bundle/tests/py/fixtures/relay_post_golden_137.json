@@ -1,0 +1,593 @@
+[
+ {
+  "expect": {
+   "kind": "message",
+   "lines": [
+    {
+     "body": true,
+     "id": "g1",
+     "text": "Alex: dinner at 7?"
+    }
+   ]
+  },
+  "payload": {
+   "id": "g1",
+   "label": "Alex",
+   "text": "dinner at 7?",
+   "type": "message"
+  }
+ },
+ {
+  "expect": {
+   "kind": "message",
+   "lines": [
+    {
+     "body": true,
+     "id": "g2",
+     "text": "Family · Sam: hi"
+    }
+   ]
+  },
+  "payload": {
+   "group": {
+    "label": "Family",
+    "name": "Fam"
+   },
+   "id": "g2",
+   "label": "Sam",
+   "text": "hi",
+   "type": "message"
+  }
+ },
+ {
+  "expect": {
+   "kind": "message",
+   "lines": [
+    {
+     "body": true,
+     "id": "g3",
+     "text": "Alex ❤️ your message"
+    }
+   ]
+  },
+  "payload": {
+   "id": "g3",
+   "label": "Alex",
+   "reaction": true,
+   "text": "❤️ your message",
+   "type": "message"
+  }
+ },
+ {
+  "expect": {
+   "kind": "digest",
+   "lines": [
+    {
+     "body": false,
+     "id": "d1:header",
+     "text": "📬 3 messages while you were away from 2 people."
+    },
+    {
+     "body": true,
+     "id": "digest:a+b",
+     "text": "Alex: one\n two"
+    },
+    {
+     "body": true,
+     "id": "digest:c",
+     "text": "Sam: three"
+    }
+   ]
+  },
+  "payload": {
+   "count": 3,
+   "id": "d1",
+   "messages": [
+    {
+     "id": "a",
+     "label": "Alex",
+     "text": "one"
+    },
+    {
+     "id": "b",
+     "label": "Alex",
+     "text": "two"
+    },
+    {
+     "id": "c",
+     "label": "Sam",
+     "text": "three"
+    }
+   ],
+   "type": "digest"
+  }
+ },
+ {
+  "expect": {
+   "kind": "digest",
+   "lines": [
+    {
+     "body": false,
+     "id": "d2:header",
+     "text": "📬 1 message while you were away."
+    },
+    {
+     "body": true,
+     "id": "digest:z",
+     "text": "Robin: solo"
+    }
+   ]
+  },
+  "payload": {
+   "count": 1,
+   "id": "d2",
+   "messages": [
+    {
+     "id": "z",
+     "label": "Robin",
+     "text": "solo"
+    }
+   ],
+   "type": "digest"
+  }
+ },
+ {
+  "expect": {
+   "kind": "sent",
+   "lines": [
+    {
+     "body": false,
+     "id": "s1",
+     "text": "→ Alex ✓✓ delivered"
+    }
+   ]
+  },
+  "payload": {
+   "delivered": true,
+   "dryRun": false,
+   "id": "s1",
+   "label": "Alex",
+   "type": "sent"
+  }
+ },
+ {
+  "expect": {
+   "kind": "sent",
+   "lines": [
+    {
+     "body": false,
+     "id": "s2",
+     "text": "→ Alex ✓ sent"
+    }
+   ]
+  },
+  "payload": {
+   "delivered": null,
+   "dryRun": false,
+   "id": "s2",
+   "label": "Alex",
+   "type": "sent"
+  }
+ },
+ {
+  "expect": {
+   "kind": "sent",
+   "lines": [
+    {
+     "body": false,
+     "id": "s3",
+     "text": "→ Alex (dry run, not sent)"
+    }
+   ]
+  },
+  "payload": {
+   "dryRun": true,
+   "id": "s3",
+   "label": "Alex",
+   "type": "sent"
+  }
+ },
+ {
+  "expect": {
+   "kind": "dry_run",
+   "lines": [
+    {
+     "body": false,
+     "id": "s4",
+     "text": "→ Alex (dry run, not sent)"
+    }
+   ]
+  },
+  "payload": {
+   "id": "s4",
+   "label": "Alex",
+   "type": "dry_run"
+  }
+ },
+ {
+  "expect": {
+   "kind": "send_failed",
+   "lines": [
+    {
+     "body": false,
+     "id": "f1",
+     "text": "⚠️ Couldn’t deliver your reply to Alex — it may not have sent (not_delivered)."
+    }
+   ]
+  },
+  "payload": {
+   "error": "not_delivered",
+   "id": "f1",
+   "label": "Alex",
+   "type": "send_failed"
+  }
+ },
+ {
+  "expect": {
+   "kind": "send_failed",
+   "lines": [
+    {
+     "body": false,
+     "id": "f2",
+     "text": "⚠️ Couldn’t confirm your reply to Alex was delivered."
+    }
+   ]
+  },
+  "payload": {
+   "id": "f2",
+   "label": "Alex",
+   "reason": "unconfirmed",
+   "type": "send_failed"
+  }
+ },
+ {
+  "expect": {
+   "kind": "send_failed",
+   "lines": [
+    {
+     "body": false,
+     "id": "f3",
+     "text": "⚠️ Correction: your reply to Alex actually failed to deliver — disregard the earlier ✓ sent (not_delivered)."
+    }
+   ]
+  },
+  "payload": {
+   "error": "not_delivered",
+   "id": "f3",
+   "label": "Alex",
+   "superseded": true,
+   "type": "send_failed"
+  }
+ },
+ {
+  "expect": {
+   "kind": "needs_confirm",
+   "lines": [
+    {
+     "body": false,
+     "id": "n1",
+     "text": "❓ Send to Alex? Say /yes within 2 min."
+    }
+   ]
+  },
+  "payload": {
+   "id": "n1",
+   "label": "Alex",
+   "reason": "directive",
+   "type": "needs_confirm"
+  }
+ },
+ {
+  "expect": {
+   "kind": "needs_confirm",
+   "lines": [
+    {
+     "body": false,
+     "id": "n2",
+     "text": "❓ Reply to Alex? Say /yes within 2 min."
+    }
+   ]
+  },
+  "payload": {
+   "id": "n2",
+   "label": "Alex",
+   "type": "needs_confirm"
+  }
+ },
+ {
+  "expect": {
+   "kind": "needs_target",
+   "lines": [
+    {
+     "body": false,
+     "id": "t1",
+     "text": "Who's this for? Start with a name."
+    }
+   ]
+  },
+  "payload": {
+   "detail": "Who's this for? Start with a name.",
+   "id": "t1",
+   "type": "needs_target"
+  }
+ },
+ {
+  "expect": {
+   "kind": "needs_target",
+   "lines": [
+    {
+     "body": false,
+     "id": "t2",
+     "text": "x"
+    }
+   ]
+  },
+  "payload": {
+   "detail": "x",
+   "id": "t2",
+   "reason": "post-digest",
+   "type": "needs_target"
+  }
+ },
+ {
+  "expect": {
+   "kind": "blocked",
+   "lines": [
+    {
+     "body": false,
+     "id": "b1",
+     "text": "🚫 Muted Alex. Say \"/unblock Alex\" to undo."
+    }
+   ]
+  },
+  "payload": {
+   "id": "b1",
+   "label": "Alex",
+   "type": "blocked"
+  }
+ },
+ {
+  "expect": {
+   "kind": "unblocked",
+   "lines": [
+    {
+     "body": false,
+     "id": "u1",
+     "text": "✅ Unmuted Alex."
+    }
+   ]
+  },
+  "payload": {
+   "id": "u1",
+   "label": "Alex",
+   "type": "unblocked"
+  }
+ },
+ {
+  "expect": {
+   "kind": "status:catching_up",
+   "lines": [
+    {
+     "body": false,
+     "id": "st1",
+     "text": "⏳ Catching up — relaying a burst in batches (nothing dropped)."
+    }
+   ]
+  },
+  "payload": {
+   "detail": "d",
+   "id": "st1",
+   "status": "catching_up",
+   "type": "status"
+  }
+ },
+ {
+  "expect": {
+   "kind": "status:resynced",
+   "lines": [
+    {
+     "body": false,
+     "id": "st2",
+     "text": "🔄 Resynced after a long gap; older messages were skipped."
+    }
+   ]
+  },
+  "payload": {
+   "id": "st2",
+   "status": "resynced",
+   "type": "status"
+  }
+ },
+ {
+  "expect": {
+   "kind": "status:messages_not_running",
+   "lines": [
+    {
+     "body": false,
+     "id": "st3",
+     "text": "⚠️ Messages isn’t running on the Mac, so replies can’t be sent right now."
+    }
+   ]
+  },
+  "payload": {
+   "id": "st3",
+   "status": "messages_not_running",
+   "type": "status"
+  }
+ },
+ {
+  "expect": {
+   "kind": "status:fda_missing",
+   "lines": [
+    {
+     "body": false,
+     "id": "st4",
+     "text": "⚠️ The watcher can’t read Messages yet (Full Disk Access). New texts aren’t coming through."
+    }
+   ]
+  },
+  "payload": {
+   "id": "st4",
+   "status": "fda_missing",
+   "type": "status"
+  }
+ },
+ {
+  "expect": {
+   "kind": "status:paused",
+   "lines": [
+    {
+     "body": false,
+     "id": "st5",
+     "text": "ℹ️ Paused. I won’t relay."
+    }
+   ]
+  },
+  "payload": {
+   "detail": "Paused. I won’t relay.",
+   "id": "st5",
+   "status": "paused",
+   "type": "status"
+  }
+ },
+ {
+  "expect": {
+   "kind": "status:unknown",
+   "lines": [
+    {
+     "body": false,
+     "id": "st6",
+     "text": "ℹ️ Commands: /who"
+    }
+   ]
+  },
+  "payload": {
+   "detail": "Commands: /who",
+   "id": "st6",
+   "type": "status"
+  }
+ },
+ {
+  "expect": {
+   "kind": "wrong_account",
+   "lines": [
+    {
+     "body": false,
+     "id": "w1",
+     "text": "⚠️ The relay tab is signed in to the wrong X account — replies are paused until you switch back to the owner account."
+    }
+   ]
+  },
+  "payload": {
+   "id": "w1",
+   "type": "wrong_account"
+  }
+ },
+ {
+  "expect": {
+   "kind": "guess_expired",
+   "lines": [
+    {
+     "body": false,
+     "id": "ge1",
+     "text": "⌛ Not sent to Alex."
+    }
+   ]
+  },
+  "payload": {
+   "id": "ge1",
+   "label": "Alex",
+   "type": "guess_expired"
+  }
+ },
+ {
+  "expect": {
+   "kind": "guess_expired",
+   "lines": [
+    {
+     "body": false,
+     "id": "ge2",
+     "text": "⌛ Not sent."
+    }
+   ]
+  },
+  "payload": {
+   "id": "ge2",
+   "type": "guess_expired"
+  }
+ },
+ {
+  "expect": {
+   "kind": "refused",
+   "lines": [
+    {
+     "body": false,
+     "id": "r1",
+     "text": "⚠️ Didn’t send that to Alex — it looked like a relayed message bounced straight back."
+    }
+   ]
+  },
+  "payload": {
+   "id": "r1",
+   "label": "Alex",
+   "reason": "echo",
+   "type": "refused"
+  }
+ },
+ {
+  "expect": {
+   "kind": "refused",
+   "lines": [
+    {
+     "body": false,
+     "id": "r2",
+     "text": "⚠️ A reply wasn’t sent to Alex."
+    }
+   ]
+  },
+  "payload": {
+   "id": "r2",
+   "label": "Alex",
+   "type": "refused"
+  }
+ },
+ {
+  "expect": {
+   "kind": "status:catching_up",
+   "lines": [
+    {
+     "body": false,
+     "id": "cu1",
+     "text": "⏳ Catching up — relaying a burst in batches (nothing dropped)."
+    }
+   ]
+  },
+  "payload": {
+   "id": "cu1",
+   "type": "catching_up"
+  }
+ },
+ {
+  "expect": {
+   "kind": "status:resynced",
+   "lines": [
+    {
+     "body": false,
+     "id": "rs1",
+     "text": "🔄 Resynced after a long gap; older messages were skipped."
+    }
+   ]
+  },
+  "payload": {
+   "id": "rs1",
+   "type": "resynced"
+  }
+ },
+ {
+  "error": "ValueError",
+  "payload": {
+   "id": "x1",
+   "type": "bogus"
+  }
+ }
+]

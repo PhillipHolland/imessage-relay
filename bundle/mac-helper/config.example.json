@@ -1,0 +1,27 @@
+{
+  "paused": false,
+  "dryRun": true,
+  "quietHours": null,
+  "relayAll": false,
+  "relayConversationId": "<x-conversation-id>",
+  "contacts": [
+    {"name": "Example Contact", "handle": "+15555550123", "label": "Example"}
+  ],
+  "replyWindowMinutes": 120,
+  "ambiguousSeconds": 60,
+  "confirmSends": true,
+  "rosterDays": 30,
+  "mute": [],
+  "skipShortCodes": true,
+  "footer": "",
+  "deliveryCheck": true,
+  "maxSendsPerMinute": 6,
+  "webhookUrl": "",
+  "webhookToken": "",
+  "ownerHandle": "",
+  "ownerXHandle": "",
+  "senderXHandle": "",
+  "autoReopenMessages": false,
+  "pollSeconds": 10,
+  "defaultCountryCode": "1"
+}

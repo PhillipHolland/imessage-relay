@@ -1,0 +1,7 @@
+{
+  "name": "com.imessage_relay.host",
+  "description": "iMessage Relay: sends the owner's X Chat replies to opted-in iMessage contacts (dry run by default)",
+  "path": "__HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
+}
