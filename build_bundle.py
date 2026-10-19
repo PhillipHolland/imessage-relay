@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.14, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.15, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=10388782415b5689439b1126b954301eac3610e07d9cfc76362faae3520a7198 nl=1
-# iMessage Relay v1.4.14
+@@@@ FILE README.md mode=644 sha256=9f808b5cfa476164c85ae148f4b7c438bc234477c26efdc4ba9b8f2402b5faa4 nl=1
+# iMessage Relay v1.4.15
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,10 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.15 (Mac helper only; extension stays 1.4.14): conversational guardrails. Within 10 minutes of any prompt,
+  a short reply (up to 4 characters, digits, last 4, emoji only, an email start) is only ever a prompt answer: one
+  that matches no choice gets "That isn't one of the choices" and nothing is sent. Text that came from a prompt
+  or masked preview row is refused. A last-texter (recent) reply within 10 minutes of a prompt always asks first.
 - v1.4.14 (Mac helper + extension): safety fix. X now wraps a bubble's text and its hidden + visible time in one
   span, so a bare "2" was read as "26:31 PM6:31 PM" and could be sent to the last texter. The text is now read
   as typed; a bubble that reads back differently from what was typed is refused (⚠️, nothing sent); and a bare
@@ -151,7 +155,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.14)
+## Limits (v1.4.15)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -3811,10 +3815,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=88a172e877ffe159807ef804d853d8905d75342543cc91d5efca01d4606944e1 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=a94d9f4231a64755540cf94c91ec17a5c9345e4c72be0de64a8abeeb8e9b9bb4 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.14.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.15.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -4625,6 +4629,21 @@ def pick_answer(text, options):
     return False, ''
 
 
+def short_answer(text):
+    """v1.4.15: a reply that can only be a prompt answer: at most 4 characters, all digits, emoji only, or
+    an email start ("alex@", "alex@ic")."""
+    s = str(text or '').strip()
+    if not s:
+        return False
+    if len(s) <= 4 or re.match(r'^[\d\s().+-]+$', s) or re.match(r'^[a-z0-9._%+-]{1,40}@[a-z0-9.-]*$', s, re.I):
+        return True
+    return not re.search(r'[^\W_]', s)          # no letters or digits at all: emoji / punctuation only
+
+
+def _prompt_recent(t):
+    return t - float(load_state().get('lastPromptAt') or 0) <= PICK_WINDOW_S
+
+
 def handle_pending_pick(text, cfg, now, poster):
     """v1.4.13: while a pick prompt is waiting, an answer to it ("2", "0188", "alex@") is checked against
     the pick FIRST and never routed as a new text (it used to become "Reply to <last texter>?"). The
@@ -4633,17 +4652,15 @@ def handle_pending_pick(text, cfg, now, poster):
     state = load_state()
     p = state.get('pendingNewContact')
     if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
-        # v1.4.14: a bare number / last-4 right after ANY prompt is an answer, never a text to the last texter
-        if (re.match(r'^\s*(?:[1-9]|\d{4})\s*[.)!]?\s*$', str(text or ''))
-                and now() - float(state.get('lastPromptAt') or 0) <= PICK_WINDOW_S):
-            detail = ('That looks like an answer to a prompt, but nothing is waiting for it, so nothing was sent. '
-                      'Start with a name to text someone.')
+        # v1.4.14/15: a short answer-like reply right after ANY prompt is an answer, never a text
+        if short_answer(text) and now() - float(state.get('lastPromptAt') or 0) <= PICK_WINDOW_S:
+            detail = 'That isn\u2019t one of the choices, so nothing was sent. Start with a name to text someone.'
             rc.log_event('pick_unresolved', resolved=False, pending=False)
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
         return None
     like, h = pick_answer(text, p['options'])
-    if not like:
+    if not like and not short_answer(text):
         return None
     name = rc.clean_label(p.get('name') or '') or 'them'
     if h:
@@ -4965,6 +4982,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         r = handle_bare_confirm(bw, quoted, cfg, now, poster)
         if r is not None:                     # a confirm/cancel word answered a prompt: never an iMessage
             return r
+    if '\u2022\u2022\u2022' in text or re.search(r'Reply 1\u2013\d, or no|Reply yes within 2 min', text):
+        # v1.4.15: text that came from a prompt or a masked preview row is never his reply
+        rc.log_event('refused_prompt_text', textLength=len(text))
+        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That text looks like a relay prompt, not your reply, '
+                             'so nothing was sent.', 'at': rc.iso_utc(now())})
+        return refuse('text from a prompt row', textLength=len(text))
     if not msg.get('confirmed'):
         r = handle_pending_pick(text, cfg, now, poster)
         if r is not None:                     # v1.4.13: an answer to a pick prompt is never a new text
@@ -5111,7 +5134,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         # per the confirmGuessed policy. The host never holds the text; the extension keeps it in session
         # storage and re-sends it with confirmed:true (and the handle) on "/yes".
         # v1.4.2: an unresolved quote, or a roster-only last texter, is always asked first
-        must_ask = by == 'recent' and (route.get('quoteUnresolved') or contact.get('kind') == 'roster')
+        must_ask = by == 'recent' and (route.get('quoteUnresolved') or contact.get('kind') == 'roster'
+                                       or _prompt_recent(now()))   # v1.4.15: never a last-texter send right after a prompt
         if must_ask or (by == 'recent' and cfg['confirmGuessed'] != 'off'
                         and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
             shown = rc.guess_label(contact)          # v1.4.3: Contacts name, else masked handle + warning
@@ -6928,7 +6952,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=8d5f9b3a3adddbed4d3e3d502b3720670c7bd393fc80081a23abe53824bf5de6 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=b04ae1fc1a0e04a9f79732e1cbb866291c66e0e9065f74dcc927b57a005e15c7 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -6954,7 +6978,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.14'
+VERSION = '1.4.15'
 EXTENSION_VERSION = '1.4.14'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
@@ -20243,7 +20267,7 @@ class Rank(Base):
         self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 \u2753 Text Jordan Rivera at which?'))
         self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_confirm'], 'routine copy is deferred')
 @@@@ END
-@@@@ FILE tests/py/test_v1413_pick.py mode=644 sha256=d738cbad0075a545325e3a41b469aba909c40ebb6e5bd9f3b556695c65c68370 nl=1
+@@@@ FILE tests/py/test_v1413_pick.py mode=644 sha256=967ecf6adde357603b5b38976cc2057b224029b16001c7142232282228d32f3d nl=1
 """v1.4.13: an answer to a pending pick prompt is checked against the pick first, never routed as a new text."""
 from test_v140 import Base
 
@@ -20272,6 +20296,21 @@ class PendingPick(Base):
         r = self.send('2')
         self.assertTrue(r.get('ok') and r.get('skipped'), r)
         self.assertFalse(r.get('needsConfirm'), r)
+        self.assertEqual(self.osa(), [])
+
+
+    def test_v1415_short_reply_after_prompt_is_never_texted(self):
+        import imessage_relay_host as h
+        h._note_prompt(self.clock.now())
+        for t in ('lol', '\U0001F44D', 'alex@', '12345'):
+            r = self.send(t)
+            self.assertTrue(r.get('ok') and r.get('skipped'), (t, r))
+        self.assertEqual(self.osa(), [])
+        self.assertTrue(h.short_answer('ok') and not h.short_answer('see you at noon'))
+
+    def test_v1415_prompt_row_text_refused(self):
+        r = self.send('Text Jordan Rivera at which?\n1 \u00b7 \u2022\u2022\u20220188 mobile')
+        self.assertFalse(r.get('ok'), r)
         self.assertEqual(self.osa(), [])
 
 
@@ -22352,7 +22391,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=2935599019ab280f2aea4decdbb9497234d192c311f6a2ea27d74ba71a9252d1 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=983691a50a6636b44c2f9a1e6c7dea28f0c8e2c1a22a42b33bec45bde8f1b033 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -22545,7 +22584,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.14')
+        self.assertEqual(m.rc.VERSION, '1.4.15')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

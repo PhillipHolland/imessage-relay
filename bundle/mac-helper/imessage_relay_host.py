@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.14.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.15.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -811,6 +811,21 @@ def pick_answer(text, options):
     return False, ''
 
 
+def short_answer(text):
+    """v1.4.15: a reply that can only be a prompt answer: at most 4 characters, all digits, emoji only, or
+    an email start ("alex@", "alex@ic")."""
+    s = str(text or '').strip()
+    if not s:
+        return False
+    if len(s) <= 4 or re.match(r'^[\d\s().+-]+$', s) or re.match(r'^[a-z0-9._%+-]{1,40}@[a-z0-9.-]*$', s, re.I):
+        return True
+    return not re.search(r'[^\W_]', s)          # no letters or digits at all: emoji / punctuation only
+
+
+def _prompt_recent(t):
+    return t - float(load_state().get('lastPromptAt') or 0) <= PICK_WINDOW_S
+
+
 def handle_pending_pick(text, cfg, now, poster):
     """v1.4.13: while a pick prompt is waiting, an answer to it ("2", "0188", "alex@") is checked against
     the pick FIRST and never routed as a new text (it used to become "Reply to <last texter>?"). The
@@ -819,17 +834,15 @@ def handle_pending_pick(text, cfg, now, poster):
     state = load_state()
     p = state.get('pendingNewContact')
     if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
-        # v1.4.14: a bare number / last-4 right after ANY prompt is an answer, never a text to the last texter
-        if (re.match(r'^\s*(?:[1-9]|\d{4})\s*[.)!]?\s*$', str(text or ''))
-                and now() - float(state.get('lastPromptAt') or 0) <= PICK_WINDOW_S):
-            detail = ('That looks like an answer to a prompt, but nothing is waiting for it, so nothing was sent. '
-                      'Start with a name to text someone.')
+        # v1.4.14/15: a short answer-like reply right after ANY prompt is an answer, never a text
+        if short_answer(text) and now() - float(state.get('lastPromptAt') or 0) <= PICK_WINDOW_S:
+            detail = 'That isn\u2019t one of the choices, so nothing was sent. Start with a name to text someone.'
             rc.log_event('pick_unresolved', resolved=False, pending=False)
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
         return None
     like, h = pick_answer(text, p['options'])
-    if not like:
+    if not like and not short_answer(text):
         return None
     name = rc.clean_label(p.get('name') or '') or 'them'
     if h:
@@ -1151,6 +1164,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         r = handle_bare_confirm(bw, quoted, cfg, now, poster)
         if r is not None:                     # a confirm/cancel word answered a prompt: never an iMessage
             return r
+    if '\u2022\u2022\u2022' in text or re.search(r'Reply 1\u2013\d, or no|Reply yes within 2 min', text):
+        # v1.4.15: text that came from a prompt or a masked preview row is never his reply
+        rc.log_event('refused_prompt_text', textLength=len(text))
+        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That text looks like a relay prompt, not your reply, '
+                             'so nothing was sent.', 'at': rc.iso_utc(now())})
+        return refuse('text from a prompt row', textLength=len(text))
     if not msg.get('confirmed'):
         r = handle_pending_pick(text, cfg, now, poster)
         if r is not None:                     # v1.4.13: an answer to a pick prompt is never a new text
@@ -1297,7 +1316,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         # per the confirmGuessed policy. The host never holds the text; the extension keeps it in session
         # storage and re-sends it with confirmed:true (and the handle) on "/yes".
         # v1.4.2: an unresolved quote, or a roster-only last texter, is always asked first
-        must_ask = by == 'recent' and (route.get('quoteUnresolved') or contact.get('kind') == 'roster')
+        must_ask = by == 'recent' and (route.get('quoteUnresolved') or contact.get('kind') == 'roster'
+                                       or _prompt_recent(now()))   # v1.4.15: never a last-texter send right after a prompt
         if must_ask or (by == 'recent' and cfg['confirmGuessed'] != 'off'
                         and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
             shown = rc.guess_label(contact)          # v1.4.3: Contacts name, else masked handle + warning

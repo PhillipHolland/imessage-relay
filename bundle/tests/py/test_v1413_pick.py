@@ -29,4 +29,19 @@ class PendingPick(Base):
         self.assertEqual(self.osa(), [])
 
 
+    def test_v1415_short_reply_after_prompt_is_never_texted(self):
+        import imessage_relay_host as h
+        h._note_prompt(self.clock.now())
+        for t in ('lol', '\U0001F44D', 'alex@', '12345'):
+            r = self.send(t)
+            self.assertTrue(r.get('ok') and r.get('skipped'), (t, r))
+        self.assertEqual(self.osa(), [])
+        self.assertTrue(h.short_answer('ok') and not h.short_answer('see you at noon'))
+
+    def test_v1415_prompt_row_text_refused(self):
+        r = self.send('Text Jordan Rivera at which?\n1 \u00b7 \u2022\u2022\u20220188 mobile')
+        self.assertFalse(r.get('ok'), r)
+        self.assertEqual(self.osa(), [])
+
+
 del Base
