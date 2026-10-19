@@ -1,5 +1,5 @@
 /*
- * iMessage Relay v1.3.9: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.0: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -374,7 +374,9 @@ async function handleItem(item) {
                               conversationId: item.conversationId, quotedText: item.quotedText || '', at: Date.now() });
       try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: 2 }); } catch (e) { /* tests */ }
       status = 'needs-confirm';
-      detail = (res.reason === 'directive')
+      detail = (res.reason === 'new_contact')
+        ? 'text ' + (res.label || 'them') + ' (from Contacts)? say "/yes" within 2 min'
+        : (res.reason === 'directive')
         ? 'send to ' + (res.label || 'them') + '? say "/yes" within 2 min'
         : 'reply to ' + (res.label || 'them') + '? say "/yes" within 2 min';
     }

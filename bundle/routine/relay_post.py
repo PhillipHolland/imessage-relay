@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.3.9 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.0 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -161,6 +161,11 @@ def format_event(payload):
         # W1/item 3: a label-only confirmation prompt. Never carries the message body. should_notify false.
         label = _label(payload)
         alt = str(payload.get('alt') or '').strip()
+        if payload.get('reason') == 'new_contact':
+            # v1.4.0: someone found in the Mac's Contacts (host-composed, name + last 4 digits, no body).
+            detail = str(payload.get('detail') or '').strip()[:400]
+            text = detail or ('\u2753 Text %s from your Contacts? Say /yes within 2 min.' % label)
+            return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': text, 'body': False}]}
         if payload.get('reason') == 'directive':
             core = ('Send to %s instead of %s?' % (label, alt)) if alt else ('Send to %s?' % label)
         else:

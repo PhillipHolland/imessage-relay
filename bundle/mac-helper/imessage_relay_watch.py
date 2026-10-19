@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-iMessage Relay v1.3.9: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.0: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -48,11 +48,16 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc
 import relay_setup  # noqa: E402
+import relay_contacts  # noqa: E402  (v1.4.0: replies to someone new)
 from typedstream import message_text  # noqa: E402
 
 STATE_PATH = os.path.join(rc.APP_DIR, 'watch_state.json')
 STATUS_PATH = os.path.join(rc.APP_DIR, 'status.json')
 JOBS_DIR = os.path.join(rc.APP_DIR, 'jobs')
+NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')   # v1.4.0: host notifications that failed
+NOTIFY_RETRY_MAX_AGE_S = 600
+NOTIFY_RETRY_PER_TICK = 10
+CONTACTS_RESULT_MAX_AGE_S = 60
 ADDRESSBOOK_GLOBS = os.environ.get('IMESSAGE_RELAY_ADDRESSBOOK_GLOB', os.pathsep.join([
     os.path.join(rc.HOME, 'Library', 'Application Support', 'AddressBook', 'Sources', '*', 'AddressBook-v22.abcddb'),
     os.path.join(rc.HOME, 'Library', 'Application Support', 'AddressBook', 'AddressBook-v22.abcddb'),
@@ -311,6 +316,33 @@ class Watcher:
         ok = self.post(cfg, {'type': 'status', 'status': status, 'detail': detail, 'at': rc.iso_utc(self.now())})
         rc.log_event('status_posted', status=status, ok=ok)
         return ok
+
+    def retry_notifications(self, cfg):
+        """v1.4.0: re-post body-free host notifications (e.g. "Who's this for?") whose webhook POST
+        failed or timed out in the host. Same event id, so a POST that actually landed is deduped by the
+        routine. Dropped after 10 minutes, or at once while paused / with no webhook."""
+        try:
+            names = sorted(n for n in os.listdir(NOTIFY_RETRY_DIR) if n.endswith('.json'))
+        except FileNotFoundError:
+            return 0
+        sent = 0
+        for name in names[:NOTIFY_RETRY_PER_TICK]:
+            path = os.path.join(NOTIFY_RETRY_DIR, name)
+            item = rc.read_json(path, {}) or {}
+            payload = item.get('payload') if isinstance(item.get('payload'), dict) else None
+            stale = time.time() - float(item.get('queuedAt') or 0) > NOTIFY_RETRY_MAX_AGE_S   # host stamps wall time
+            if payload is None or stale or cfg['paused'] or not cfg['webhookUrl']:
+                rc.log_event('notify_retry_dropped', type=(payload or {}).get('type'), stale=stale)
+            elif self.post(cfg, payload):
+                rc.log_event('notify_retry', type=payload.get('type'), ok=True)
+                sent += 1
+            else:
+                continue                      # keep it for the next tick
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        return sent
 
     # ----- Messages.app -----
     def check_messages_app(self, cfg):
@@ -610,6 +642,7 @@ class Watcher:
                                 'new', 'held', 'forwarded', 'digested', 'webhookFailures', 'droppedPaused',
                                 'backpressure', 'rateLimited', 'rebaselined', 'dbBusy'), 0)
         self.process_jobs(cfg)
+        self.retry_notifications(cfg)
         t = self.now()
         try:
             con = rc.open_chat_db(self.db_path)
@@ -795,6 +828,13 @@ class Watcher:
             return 0
         n = 0
         for name in names:
+            if name.startswith('contacts') and name.endswith('.result.json'):
+                p = os.path.join(JOBS_DIR, name)   # an unread Contacts answer (host timed out): never keep it
+                try:
+                    if self.now() - os.path.getmtime(p) > CONTACTS_RESULT_MAX_AGE_S:
+                        os.unlink(p)
+                except OSError:
+                    pass
             if not name.endswith('.job.json'):
                 continue
             path = os.path.join(JOBS_DIR, name)
@@ -837,6 +877,8 @@ class Watcher:
             return self.recent_senders(cfg, int(job.get('days') or 30), int(job.get('limit') or 20))
         if typ == 'test_probe':                       # v1.3.8 /test: am I alive, can I read chat.db?
             return self.test_probe()
+        if typ == 'contacts_lookup':                  # v1.4.0: host asks who "Austin Robinson" is (no FDA there)
+            return relay_contacts.lookup(str(job.get('name') or '')[:80], cfg, globs=ADDRESSBOOK_GLOBS)
         if typ == 'detect_owner_handles':             # v1.3.8 guided setup (relayctl owner-handles detect)
             return self.detect_owner_job(cfg, bool(job.get('apply')))
         return {'ok': False, 'error': 'unknown job type'}

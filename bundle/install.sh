@@ -1,5 +1,5 @@
 #!/bin/bash
-# iMessage Relay v1.3.9 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
+# iMessage Relay v1.4.0 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
 # roster.json, and the existing "iMessage Relay Watcher" app (never rebuilt or re-signed, so
 # its Full Disk Access grant survives), and keeps the LaunchAgent pointing at that app.

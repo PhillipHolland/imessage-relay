@@ -1,4 +1,4 @@
-"""iMessage Relay v1.3.9 -- delivery-proof queries and Messages.app sending.
+"""iMessage Relay v1.4.0 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""

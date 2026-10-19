@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.3.9: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.0: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -23,7 +23,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.3.9'
+VERSION = '1.4.0'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -542,6 +542,31 @@ def read_digest_marker():
 
 # ---------- reply routing ----------
 PREFIX_RE = re.compile(r'^\s*([^\n:]{1,60}?)\s*:\s*', re.S)
+# v1.4.0: a "Name:" / "First Last:" prefix that names nobody we know is NOT ordinary text: it must never
+# fall through to the "recent" guess (that would text "Austin: hey" to whoever wrote last). A name-like
+# prefix is 1-3 capitalized words of letters (apostrophes/hyphens/periods allowed), not a common
+# "Note:"-style label word.
+NAME_PREFIX_RE = re.compile(r"^[A-Z][A-Za-z\u00c0-\u024f'\u2019.-]{0,23}(?: [A-Z][A-Za-z\u00c0-\u024f'\u2019.-]{0,23}){0,2}$")
+NOT_A_NAME = frozenset("""
+note notes ps pps fyi re fw fwd update updates reminder warning question answer edit edited todo to-do tip
+btw fwiw imo imho important heads summary tldr tl;dr p.s. ok okay yes no hi hey hello thanks thank sorry
+re: subject topic idea plan step steps option options pro con pros cons day today tomorrow tonight
+morning evening update: question: list item items address phone email link time date where when what why
+how who which because also and but or so then just quick urgent edit: correction caption title recipe
+menu agenda reason result results status total price cost answer: news alert pss
+""".split())
+
+
+def unknown_name_prefix(text):
+    """(name, rest) when `text` starts with a name-like "Name:" prefix (see NAME_PREFIX_RE), else None.
+    The caller only uses this AFTER the directory found no match."""
+    m = PREFIX_RE.match(text or '')
+    if not m:
+        return None
+    word = re.sub(r'\s+', ' ', m.group(1).strip())
+    if not NAME_PREFIX_RE.match(word) or word.lower() in NOT_A_NAME or word.split(' ')[0].lower() in NOT_A_NAME:
+        return None
+    return word, text[m.end():]
 EMAIL_WORD_RE = re.compile(r'^\S+@\S+$')
 
 
@@ -756,12 +781,15 @@ def _maybe_confirm_directive(res, target, form, name, live):
     return res
 
 
-def route_reply(text, quoted, cfg, roster, now):
+def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
     """Decide who an owner reply goes to. Priority: (1) the quoted relay message, (2) a leading
     "<label or name>:" prefix (stripped before sending), (3) the most recent sender within
     replyWindowMinutes unless another wrote within ambiguousSeconds. Recipients: contacts; with
     relayAll also roster people within rosterDays. Never a group, never a muted or never-texted
-    number. Returns {'contact','body','by'} or {'error','needsTarget':True,'reason'}."""
+    number. Returns {'contact','body','by'} or {'error','needsTarget':True,'reason'}.
+    v1.4.0: allow_empty (a reply that carries attachments) accepts a name with no text after it; a
+    name-like prefix that matches no one returns needsTarget with 'unknownName' and 'body' so the host
+    can look the name up in the Mac's Contacts (never a guess)."""
     d = build_directory(cfg, roster or [])
     by_handle = {e['handle']: e for e in d}
 
@@ -802,6 +830,8 @@ def route_reply(text, quoted, cfg, roster, now):
     if p_status == 'none':
         import relay_directive
         d_handle, d_body, d_status, d_form, d_name = relay_directive.parse_directive(text, cfg, d)
+        if d_status == 'empty' and allow_empty:
+            d_status, d_body = 'match', ''
         if d_status == 'empty':
             e = by_handle.get(d_handle)
             return need('named a recipient but gave no message',
@@ -839,6 +869,13 @@ def route_reply(text, quoted, cfg, roster, now):
     # A non-empty but unresolved quote must never fall through to "recent": the owner aimed at one message.
     if quoted_present:
         return need('could not tell which relayed message the reply quoted')
+    un = unknown_name_prefix(text) if p_status == 'none' else None
+    if un:
+        res = need('the name prefix matches no one on the relay list',
+                   "%s isn't on your relay list yet. Start with a name from it, or /add %s <number>."
+                   % (un[0], first_name(un[0])))
+        res.update(unknownName=un[0], body=un[1])
+        return res
     # The "recent" fallback is only for configured contacts; roster-only people need a Name: prefix or quote.
     live = recent_live()
     if not live:

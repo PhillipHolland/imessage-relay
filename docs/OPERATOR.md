@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.3.9)
+# iMessage Relay: operator reference (v1.4.0)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -28,9 +28,9 @@ github.com/PhillipHolland/imessage-relay. It is one Python file that writes ever
 Mac helper, installer, tests) and checks each one against an embedded sha256 digest. Nothing is
 cloned or installed from the repo; you only download this one pinned file.
 
-**Pinned release (v1.3.9):**
-- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.3.9/build_bundle.py`
-- sha256: `fe53a3afa251eac0c7da29e167ff0338c1e290ce276ebf6f8609675868151f53`
+**Pinned release (v1.4.0):**
+- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.0/build_bundle.py`
+- sha256: `a1af965161f81362c57bced5b9a52c8fcc600a9bd90911a6fffbbb04fee5e30a`
 
 **Always verify before running.** Download with `curl -fsSL`, check the sha256 against the pinned
 value above, and run the file only on an exact match. On a mismatch (or a failed download), **refuse**:
@@ -172,7 +172,7 @@ windows the checklist needs.
    machine Shell that reads it on **stdin**. Never put it on a command line.
 3. Run, with a perl alarm of 300 s:
    ```
-   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.3.9/build_bundle.py' && echo "fe53a3afa251eac0c7da29e167ff0338c1e290ce276ebf6f8609675868151f53  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
+   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.0/build_bundle.py' && echo "a1af965161f81362c57bced5b9a52c8fcc600a9bd90911a6fffbbb04fee5e30a  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
    ```
 
 **Paste path (the owner runs it):** nothing to save or attach; the line downloads the pinned file to
@@ -181,7 +181,7 @@ line. When it asks for the webhook key,
 open grokbot://app/v1/sidebar?target=webhook-key&automation=<folder>, copy the key and paste it there
 (it stays hidden)."**
 ```
-cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.3.9/build_bundle.py' && echo "fe53a3afa251eac0c7da29e167ff0338c1e290ce276ebf6f8609675868151f53  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
+cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.0/build_bundle.py' && echo "a1af965161f81362c57bced5b9a52c8fcc600a9bd90911a6fffbbb04fee5e30a  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
 ```
 
 **Read the output** (machine path: the JSON; paste path: ask "Did it end with "ok": true?"):
@@ -279,7 +279,7 @@ Settings > Privacy & Security > Automation > Google Chrome > Messages on.
 ### Step U. Existing install (upgrade in place)
 Ask nothing. Download the newest pinned build_bundle.py (the pinned release at the top of this skill)
 the same way, verify it, and run (perl alarm 300):
-`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.3.9/build_bundle.py' && echo "fe53a3afa251eac0c7da29e167ff0338c1e290ce276ebf6f8609675868151f53  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
+`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.0/build_bundle.py' && echo "a1af965161f81362c57bced5b9a52c8fcc600a9bd90911a6fffbbb04fee5e30a  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
 A sha256 mismatch → refuse, exactly as in Step 5.
 The installer keeps config.json, roster.json and the watcher app with its Full Disk Access grant (it
 never rebuilds or re-signs it). The setup JSON shows what's already set. If a value is missing
@@ -339,7 +339,15 @@ never builds them itself; it only hands the payload to relay_post.py):
   earlier confirmation was wrong.
 - `{"type":"needs_target","detail",…}` → `detail` verbatim ("Who's this for? Start with a name, like
   \"Sam: …\" or \"text Sam …\""); no body. A `reason:"post-digest"` one asks the owner to name a person
-  for the first reply after a quiet-hours digest (several people may have texted).
+  for the first reply after a quiet-hours digest (several people may have texted). A `reason:"unknown-name"`
+  one (v1.4.0) means the reply started with a name nobody on the relay list has and the Mac's Contacts had
+  no single match (it lists up to 3 matching **names**, never numbers, or says it found none).
+- `{"type":"needs_confirm","reason":"new_contact","label","detail"}` (v1.4.0) → `detail` verbatim, e.g.
+  `❓ Austin isn't on your relay list yet. Reply /add Austin <number>, or /yes within 2 min to text the Austin
+  Robinson in your Contacts (+1 •••0177).` (name + last four digits only; no body). On `/yes` the reply is
+  sent without its name prefix and the person becomes a contact.
+- Host notifications that fail or time out (webhook slower than 12 s) are queued body-free on the Mac and
+  re-posted by the watcher with the **same `id`** for up to 10 minutes, so dedupe on `id` as always.
 - `{"type":"guess_expired","label",…}` → `⌛ Not sent to <label>.` (no body) — a confirm-when-guessed
   prompt the owner did not confirm with `/yes` within 2 minutes.
 - `{"type":"blocked","label"}` → `🚫 Muted <label>. Say "/unblock <label>" to undo.`
@@ -477,7 +485,9 @@ handled by the Mac before the paused check, so they work even while paused:
   owner's **own** number (only in live mode; never a contact). See onboarding Step 7 for fixes.
 - `/add <Name>` — names the last unknown person who texted in, e.g. the relay says
   "Add +1 •••<last four> as Kent? /add yes" and you reply `/add yes` within 2 minutes to save the contact.
-- `/yes` (or `/yes <Name>`) — confirms a guessed reply (see confirm-when-guessed above).
+- `/add <Name> <number or email>` (v1.4.0) — adds that person as a contact right away (nothing is sent).
+- `/yes` (or `/yes <Name>`) — confirms a guessed reply (see confirm-when-guessed above), or (v1.4.0) texting
+  someone new that the relay found in the Mac's Contacts.
 
 Muting only stops the relay from forwarding that person (and drops them as a reply target). It does
 **not** block them in Messages — they can still text the owner's phone. In dry run, a confirmed block
@@ -609,14 +619,15 @@ LaunchAgent pointing at whatever applet it already runs. An early app that runs
 **only if the extension changed in this version**, the owner clicks the reload icon on the extension
 card **and then refreshes any open x.com chat tab (Cmd+R)** — reloading the extension disconnects its
 content script from already-open tabs, so replies sent in them before the refresh are missed.
-**v1.3.9 changes the extension** (X Chat's bubble times, now plain spans in the message text, are no
+**v1.4.0 changes the extension** (only the popup wording for a Contacts confirmation), **v1.3.9 changed it**
+(X Chat's bubble times, now plain spans in the message text, are no
 longer appended to replies; the native host also strips them, so an old extension can't leak them), and
 **v1.3.8 changed it** too (the `/test` command, and it reports its version to the Mac), so
 upgrading from **any** earlier version needs the extension reload **and** Cmd+R on the x.com chat tab.
 Until then `RC status` lists "the Chrome extension is still v…", and an old extension's `/test` still
 runs the Mac-side checks (it is never sent as a reply) but can't confirm the routine's report. Also
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
-error`. The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+error` (v1.4.0's copy also renders the new Contacts confirmation). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
 
 ## Uninstall
 `cd ~/imessage-relay-src && ./uninstall.sh` (add `--keep-config` to keep contacts and the webhook key, `--keep-logs` to keep the log). It also

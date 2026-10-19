@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.3.9.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.0.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -43,6 +43,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc  # noqa: E402
 import relay_test  # noqa: E402  (v1.3.8: the /test end-to-end check)
+import uuid  # noqa: E402
 
 STATE_PATH = os.path.join(rc.APP_DIR, 'host_state.json')
 LOCK_PATH = os.path.join(rc.APP_DIR, 'host_state.lock')
@@ -51,6 +52,10 @@ DEDUPE_WINDOW_S = 60.0
 MAX_TEXT = 4000
 MAX_MSG_BYTES = 1024 * 1024
 SELFTEST_MAX_AGE_S = 15 * 60
+NOTIFY_TIMEOUT_S = 12            # v1.4.0: was 4 s; the webhook trigger often takes ~4 s to answer
+NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')   # body-free events the watcher re-posts
+NEW_CONTACT_WINDOW_S = 130.0     # the /yes window for texting someone new from Contacts (2 min + slack)
+CONTACTS_WAIT_S = 8.0
 
 
 # ---------- native messaging framing ----------
@@ -150,8 +155,19 @@ def notify(cfg, poster, payload):
     if not cfg.get('webhookUrl'):
         return False
     rc.ensure_event_id(payload)   # every status event gets a unique id so a retried webhook dedupes (item B)
-    ok = bool(poster(cfg['webhookUrl'], payload, cfg.get('webhookToken', ''), timeout=4))
-    rc.log_event('notify', type=payload.get('type'), ok=ok)
+    ok = bool(poster(cfg['webhookUrl'], payload, cfg.get('webhookToken', ''), timeout=NOTIFY_TIMEOUT_S))
+    queued = False
+    if not ok:
+        # v1.4.0: a slow or failed webhook used to drop the owner's "Who's this for?" (the host gave up
+        # after 4 s). Queue the body-free event; the watcher re-posts it with the SAME id (so the routine
+        # dedupes a POST that did land) for up to 10 minutes.
+        try:
+            rc.write_json_atomic(os.path.join(NOTIFY_RETRY_DIR, uuid.uuid4().hex + '.json'),
+                                 {'queuedAt': time.time(), 'payload': payload}, mode=0o600)
+            queued = True
+        except OSError:
+            pass
+    rc.log_event('notify', type=payload.get('type'), ok=ok, **({'queuedRetry': True} if queued else {}))
     return ok
 
 
@@ -365,6 +381,10 @@ def parse_owner_command(text):
             confirm, rest = True, ''
         elif rest.lower().endswith(' yes'):
             confirm, rest = True, rest[:-4].strip()
+        m = re.match(r'^(.*?)\s+(\+?[0-9][0-9().\s-]{5,}[0-9]|[^\s@]+@[^\s@]+\.[^\s@]+)$', rest)
+        if m and m.group(1).strip():
+            # v1.4.0: "/add Austin +1 555 555 0123" adds that person directly (no text is sent).
+            return {'cmd': 'add', 'name': m.group(1).strip()[:80], 'handle': m.group(2).strip(), 'confirm': False}
         return {'cmd': 'add', 'name': rest[:80], 'confirm': confirm}
     if cmd == 'test':                         # "/test" or "/test send" (own handle only); never routed
         return {'cmd': 'test', 'send': rest.lower() == 'send'}
@@ -448,6 +468,28 @@ def add_contact(handle, name):
 
 def handle_add(oc, cfg, now, poster):
     base = {'dryRun': cfg['dryRun']}
+    if oc.get('handle'):
+        name = rc.clean_label(oc.get('name')) or ''
+        h = rc.normalize_handle(oc['handle'], cfg['defaultCountryCode'])
+        detail = None
+        if not name:
+            detail = 'Say "/add <Name> <number>".'
+        elif not rc.valid_handle(h):
+            detail = 'That doesn\u2019t look like a phone number or email. Say "/add %s +1 555 555 0123".' % name
+        elif h in rc.owner_handle_set(cfg):
+            detail = 'That\u2019s your own number; it can\u2019t be a relay contact.'
+        if detail:
+            notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
+            return dict(base, ok=False, command='add', error=detail)
+        if cfg['dryRun']:
+            detail = '(dry run) would add %s as %s. Nothing changed.' % (rc.mask_handle(h), name)
+            notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
+            return dict(base, ok=True, command='add', dryRun=True, added=name)
+        add_contact(h, name)
+        rc.log_event('contact_added', via='command-handle')
+        detail = 'Added %s (%s). Start a reply with "%s: \u2026" to text them.' % (name, rc.mask_handle(h), name)
+        notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
+        return dict(base, ok=True, command='add', added=name)
     if oc.get('confirm'):
         pend = _take_pending_add(now())
         if not pend:
@@ -534,6 +576,93 @@ def guess_is_risky(contact, cfg, now_t):
     return False
 
 
+# ---------- v1.4.0: a reply to someone on no relay list ("Austin Robinson: hey") ----------
+def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S):
+    """Ask the watcher (it can read Contacts) for exact / unique name matches. None when it does not
+    answer in time. The job result holds handles, so it is deleted the moment it is read."""
+    jobs = os.path.join(rc.APP_DIR, 'jobs')
+    jid = 'contacts' + uuid.uuid4().hex[:10]
+    job_p, res_p = os.path.join(jobs, jid + '.job.json'), os.path.join(jobs, jid + '.result.json')
+    rc.write_json_atomic(job_p, {'id': jid, 'type': 'contacts_lookup', 'name': str(name)[:80], 'createdAt': now()})
+    deadline = now() + wait_s
+    while True:
+        res = rc.read_json(res_p)
+        if isinstance(res, dict):
+            try:
+                os.unlink(res_p)
+            except OSError:
+                pass
+            return res if res.get('ok') else None
+        if now() >= deadline:
+            break
+        sleeper(0.5)
+    for p in (job_p, res_p):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    return None
+
+
+def _store_pending_new(handle, name, at):
+    def fn():
+        state = load_state()
+        state['pendingNewContact'] = {'handle': handle, 'name': name, 'at': float(at)}
+        rc.write_json_atomic(STATE_PATH, state)
+    _with_host_lock(fn)
+
+
+def _peek_pending_new(handle, now_t):
+    p = load_state().get('pendingNewContact')
+    if isinstance(p, dict) and p.get('handle') == handle and now_t - float(p.get('at') or 0) <= NEW_CONTACT_WINDOW_S:
+        return p
+    return None
+
+
+def _finish_new_contact(handle, name, cfg):
+    """After the confirmed first text went out: they become a relay contact (same as /add), so the
+    owner's later "Austin: ..." replies and Austin's texts flow without asking again. Name + handle only."""
+    def fn():
+        state = load_state()
+        state.pop('pendingNewContact', None)
+        rc.write_json_atomic(STATE_PATH, state)
+    _with_host_lock(fn)
+    if not rc.contact_by_handle(cfg, handle):
+        add_contact(handle, rc.clean_label(name) or rc.format_handle(handle))
+        rc.log_event('contact_added', via='contacts-yes')
+
+
+def handle_unknown_name(route, cfg, sleeper, now, poster, base):
+    """The reply starts with a name nobody on the relay list has. Look it up in Contacts and ask; never
+    send on a guess. Names only in the prompts (a unique match shows the number's last 4 digits)."""
+    name = route['unknownName']
+    first = rc.first_name(name)
+    res = contacts_lookup(name, sleeper, now)
+    matches = (res or {}).get('matches') or []
+    rc.log_event('needs_target', reason='unknown-name', contactsMatches=len(matches), contactsChecked=res is not None)
+    if len(matches) == 1:
+        m = matches[0]
+        _store_pending_new(m['handle'], m['name'], now())
+        detail = ('\u2753 %s isn\u2019t on your relay list yet. Reply /add %s <number>, or /yes within 2 min to text '
+                  'the %s in your Contacts (%s).' % (first, first, m['name'], rc.mask_handle(m['handle'])))
+        notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
+                             'at': rc.iso_utc(now())})
+        return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
+                    contact=m['name'], routedBy='contacts')
+    if matches:
+        names = ', '.join(x['name'] for x in matches[:3]) + (', \u2026' if len(matches) > 3 else '')
+        detail = ('%s isn\u2019t on your relay list yet, and your Contacts have more than one: %s. Start with the full '
+                  'name ("%s: \u2026"), or /add %s <number>.' % (first, names, matches[0]['name'], first))
+    elif res is None:
+        detail = ('%s isn\u2019t on your relay list yet (I couldn\u2019t check your Contacts just now). Reply /add %s '
+                  '<number>.' % (first, first))
+    else:
+        detail = ('%s isn\u2019t on your relay list yet, and I didn\u2019t find "%s" in your Contacts. Reply /add %s '
+                  '<number>.' % (first, name, first))
+    notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'unknown-name', 'at': rc.iso_utc(now())})
+    return dict(base, ok=False, needsTarget=True, error=detail, reason='unknown-name')
+
+
 def handle_send(msg, cfg, runner, sleeper, now, poster):
     text = msg.get('text')
     quoted = msg.get('quotedText') if isinstance(msg.get('quotedText'), str) else ''
@@ -579,6 +708,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     confirmed = bool(msg.get('confirmed'))
     hint = msg.get('handle')
     hint_norm = rc.normalize_handle(hint, cfg['defaultCountryCode']) if hint else None
+    new_contact = None
     if confirmed:
         # C1: a "/yes" confirmation must go to the EXACT handle the owner confirmed, never a re-guess.
         # (Between the prompt and the "/yes", someone else may have texted, which would otherwise make
@@ -587,14 +717,25 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             return refuse('confirmed reply without a target handle')
         directory = rc.build_directory(cfg, rc.load_roster())
         tgt = next((e for e in directory if e['handle'] == hint_norm), None)
+        pend_new = _peek_pending_new(hint_norm, now())
+        if pend_new and (not tgt or tgt.get('kind') != 'group'):
+            # v1.4.0: the owner said /yes to texting someone found in Contacts. Only the exact handle that
+            # was offered (and only within 2 minutes) qualifies; the name prefix is stripped.
+            new_contact = pend_new
+            tgt = tgt or {'kind': 'new', 'label': rc.clean_label(pend_new['name']) or rc.format_handle(hint_norm),
+                          'name': pend_new['name'], 'handle': hint_norm, 'lastInboundAt': None}
         if not tgt or tgt.get('kind') == 'group':
             return refuse('confirmed handle is not a current recipient', handle=hint_norm)
         if not route.get('needsTarget') and route['contact']['handle'] == hint_norm:
             contact, body, by = route['contact'], route['body'], route['by']   # same target: use its stripped body
+        elif new_contact and route.get('unknownName'):
+            contact, body, by = tgt, route['body'], 'contacts'                  # "Austin Robinson: hey" -> "hey"
         else:
             contact, body, by = tgt, text, 'confirmed'                         # target drifted: send the full reply
         handle = contact['handle']
     else:
+        if route.get('needsTarget') and route.get('unknownName'):
+            return handle_unknown_name(route, cfg, sleeper, now, poster, base)
         if route.get('needsTarget'):
             rc.log_event('needs_target', textLength=len(text), quoted=bool(quoted))   # reason may name a label; owner gets it via webhook, not the log
             notify(cfg, poster, {'type': 'needs_target', 'detail': route['error'], 'reason': route['reason'],
@@ -682,6 +823,11 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             elif cfg.get('deliveryCheck', True):
                 rc.add_pending_send(handle, t, len(outgoing), label=contact['label'])   # record inside the lock
         rc.write_json_atomic(STATE_PATH, state)
+    if new_contact and ok and not dry:
+        try:
+            _finish_new_contact(handle, new_contact['name'], cfg)
+        except Exception:
+            pass
     if dry:
         rc.log_event('dry_run', handle=handle, contact=contact['label'], routedBy=by, textLength=len(body), outgoingLength=len(outgoing))
         if cfg['confirmSends']:
