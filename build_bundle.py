@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.8, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.9, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=29e689910cd7527b58982552770fdc685663e99de931cedfd45dbcb04992d8d8 nl=1
-# iMessage Relay v1.4.8
+@@@@ FILE README.md mode=644 sha256=449ae5208f36e03702dcda1d9431b4f57f2ed2548bb10664652f913136c8ff6d nl=1
+# iMessage Relay v1.4.9
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,7 +41,10 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
-- The Chrome extension did not change in v1.4.7 or v1.4.8 (no reload needed from v1.4.6).
+- The Chrome extension did not change in v1.4.7, v1.4.8 or v1.4.9 (no reload needed from v1.4.6).
+- v1.4.9 (bot side only; the Mac code is v1.4.8): a relayed photo always carries the sender's label, even
+  right after another text from them, and the routine's upload failures are logged with a short code.
+  Photos need the sender's X connection to have the `media.write` permission.
 - v1.4.8: every photo run reports body-free `media_status` codes and appends a counts-only line to the
   bot's `media.log`, so a "couldn't be relayed" notice always says why (e.g. `no_key`, `fetch_failed`).
 
@@ -121,7 +124,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.8)
+## Limits (v1.4.9)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -10782,9 +10785,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=204c2ec0ed065ff2f46d0cd07d6e0f22c1244194913803aa816ccb4fbc986843 nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=0b509eb12babcc91d38957828f72cd14f40b08b2980d157921298a36bf43111a nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.8 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.9 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -10872,6 +10875,10 @@ STDOUT (one JSON object):
   counts-only line to <state dir>/media.log: not_requested, routine_media_off, no_drop, no_key, bad_url,
   fetch_failed, size_mismatch, decrypt_failed, sha_mismatch, no_media_helper, prepare_failed,
   upload_ready, attached, missing_after_upload.
+  v1.4.9: a photo line is never "quiet" (it always starts "Jordan:"; a photo-only message's caption is
+  "Jordan:", its notice "Jordan: 📷 Photo couldn't be relayed …"). With "media_off" the routine may add
+  "media_error": "<call>_<http status>" (e.g. "initialize_403", "append_413", "file_ref"), logged as
+  routine_media_off:<code>.
   The routine never touches the Mac.
   Photos are in flight only: the copy, the parts and a tiny state file (mode 600) are deleted when the
   send is built, on any error, or by the sweep after 15 min. Nothing about them is logged.
@@ -10921,9 +10928,13 @@ def _message_line(m):
         head = tag + head               # v1.4.6: Messages filed it under Spam / Promotions / Transactions
     elif m.get('unknown') and not gl:
         head = UNKNOWN_TAG + head       # v1.4.5 spamMode tag: not in Contacts / flagged by Messages
-    if m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown'):
+    if (m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown')
+            and not m.get('media') and not _PHOTO_PLACEHOLDER.fullmatch(text.strip())):
         return text                     # v1.4.6 quiet names: same sender as the line just above
+        # (v1.4.9: never for a photo line -- an image bubble or a photo notice always says who sent it)
     sep = ' ' if m.get('reaction') else ': '
+    if not text.strip() and not m.get('reaction'):
+        return head + ':'               # v1.4.9: a photo with no caption -> "Jordan:" (the image's caption)
     return head + sep + text
 
 
@@ -10975,6 +10986,8 @@ def _with_media(line, m):
     media = media_meta((m or {}).get('media'))
     if media:
         line['media'] = media
+        if not str((m or {}).get('text') or '').strip():
+            line['bare'] = True         # v1.4.9: photo-only message: a notice goes right after "Jordan:"
     return line
 
 
@@ -11098,7 +11111,7 @@ def drop_get(url, key, max_bytes, timeout=DROP_TIMEOUT_S):
     """GET one ciphertext (served once). bytes or None. Never logs anything."""
     import urllib.request
     import urllib.error
-    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'imessage-relay-post/1.4.8'})
+    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'imessage-relay-post/1.4.9'})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             if r.status != 200:
@@ -11248,10 +11261,13 @@ def media_log(state_dir, status, photos, nbytes, now=None):
         pass
 
 
-def media_failed_text(text, n):
-    """The line when its photo(s) could not be relayed: a clear notice instead of a silent drop."""
+def media_failed_text(text, n, bare=False):
+    """The line when its photo(s) could not be relayed: a clear notice instead of a silent drop.
+    v1.4.9: a photo-only line ("Jordan:") gets the notice on the same line: "Jordan: 📷 Photo couldn't …"."""
     note = '\U0001f4f7 %s couldn\u2019t be relayed \u2014 open Messages to see %s' % (
         ('Photo', 'it') if n == 1 else ('%d photos' % n, 'them'))
+    if bare:
+        return (text.rstrip() + ' ' + note) if text.strip() else note
     if _PHOTO_PLACEHOLDER.search(text):
         return _PHOTO_PLACEHOLDER.sub(lambda _m: note, text)
     return text + '\n\u2002' + note
@@ -11786,12 +11802,15 @@ def process(req, runner=None):
         req = dict(req, media_off=True)
         _st('not_requested', len(all_media))
     elif all_media and req.get('media_off'):
-        _st('routine_media_off', len(all_media))
+        # v1.4.9: the routine may say which X call failed ("media_error": "initialize_403", "append_413",
+        # "file_ref", …); only a short [a-z0-9_] code is kept, never any message or response text.
+        err = re.sub(r'[^a-z0-9_]', '', str(req.get('media_error') or '').lower())[:32]
+        _st('routine_media_off' + (':' + err if err else ''), len(all_media))
     if all_media and req.get('media_off'):
         media_cleanup(all_media, media_dir)
         for ln in lines:
             if ln.get('media'):
-                ln['text'] = media_failed_text(ln['text'], len(ln['media']))
+                ln['text'] = media_failed_text(ln['text'], len(ln['media']), ln.get('bare'))
     elif all_media and not media_keys:
         # v1.4.7: fetch each photo from the encrypted drop first (served once; the routine never touches the Mac)
         ready = []
@@ -11841,7 +11860,7 @@ def process(req, runner=None):
                 else:
                     missing += 1
             if missing:
-                ln['text'] = media_failed_text(ln['text'], missing)
+                ln['text'] = media_failed_text(ln['text'], missing, ln.get('bare') and missing == len(ln['media']))
                 if media_keys:
                     _st('missing_after_upload', missing)
             if entries:
@@ -22136,6 +22155,90 @@ class CtlWrap(unittest.TestCase):
         m = fresh(tmpdir())
         with self.assertRaises(m.ctl.CtlError):
             m.ctl.cmd_set('dropWrapKey', WK)
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
+@@@@ FILE tests/py/test_v149_labels.py mode=644 sha256=e3b0bce9d119f81464a8925e6cfc5fef9791e81ce05840f4bf8224049a72990d nl=1
+"""v1.4.9: a photo line always carries the sender label (never "quiet"), and a routine media_off may
+carry a body-free media_error code. Replays 2026-10-19 16:45: a quiet, photo-only 1:1 message whose
+upload failed in the routine posted an unnamed notice. Fictional names only; fake drop, no network."""
+import json
+import os
+import unittest
+
+import test_v146_media as v146
+import test_v148_wrap as v148
+import relay_drop  # noqa: E402
+rp = v148.rp
+
+NOTE = '\U0001f4f7 Photo couldn\u2019t be relayed \u2014 open Messages to see it'
+
+
+class Labels(unittest.TestCase):
+    runner = v146.RoutineMedia.runner
+    req = v146.RoutineMedia.req
+    files = v146.RoutineMedia.files
+    getter = v148.RoutineV2.getter
+    dreq = v148.RoutineV2.dreq
+
+    def setUp(self):
+        v148.RoutineV2.setUp(self)
+
+    def quiet_req(self, text='', **over):
+        r = self.dreq(**over)
+        msg = dict(r['payload'], quiet=True, text=text)
+        r['payload'] = {'type': 'batch', 'id': 'b-1', 'messages': [msg]}
+        return r
+
+    def log(self):
+        with open(os.path.join(self.d, 'media.log')) as fh:
+            return [json.loads(x)['status'] for x in fh]
+
+    def test_replay_quiet_photo_upload_failed(self):
+        r1 = rp.process(self.quiet_req(), runner=self.runner)
+        self.assertEqual(r1['action'], 'upload')
+        r2 = rp.process(self.quiet_req(media_off=True, media_error='initialize_403'), runner=self.runner)
+        self.assertEqual(r2['action'], 'send')
+        self.assertEqual(len(r2['sends']), 1, 'one post only')
+        self.assertEqual(self.calls[-1][1]['text'], 'Jordan: ' + NOTE)
+        self.assertEqual(self.log(), [{'upload_ready': 1}, {'routine_media_off:initialize_403': 1}])
+        self.assertEqual(self.files(), [])
+
+    def test_quiet_photo_attached_has_label_caption(self):
+        rp.process(self.quiet_req(), runner=self.runner)
+        r2 = rp.process(self.quiet_req(media_keys={v148.TOK: 'HASHKEY'}), runner=self.runner)
+        self.assertEqual(r2['sends'][0]['media_finalize'][0]['media_hash_key'], 'HASHKEY')
+        self.assertEqual(self.calls[-1][1]['text'], 'Jordan:')
+
+    def test_quiet_photo_with_caption(self):
+        rp.process(self.quiet_req(text='look'), runner=self.runner)
+        rp.process(self.quiet_req(text='look', media_keys={v148.TOK: 'HASHKEY'}), runner=self.runner)
+        self.assertEqual(self.calls[-1][1]['text'], 'Jordan: look')
+
+    def test_quiet_photo_caption_with_failed_photo(self):
+        rp.process(self.quiet_req(text='look', media_off=True), runner=self.runner)
+        self.assertEqual(self.calls[-1][1]['text'], 'Jordan: look\n\u2002' + NOTE)
+
+    def test_media_error_is_sanitized(self):
+        rp.process(self.quiet_req(media_off=True, media_error='Append 413: <b>too big</b> ' + 'x' * 80), runner=self.runner)
+        [st] = self.log()
+        [code] = st
+        self.assertRegex(code, r'^routine_media_off:[a-z0-9_]{1,32}$')
+        self.assertNotIn('<', code)
+
+    def test_text_lines_stay_quiet(self):
+        line = rp._message_line({'label': 'Jordan', 'contactName': 'Jordan', 'text': 'on my way', 'quiet': True})
+        self.assertEqual(line, 'on my way')
+
+    def test_placeholder_only_line_is_named(self):
+        line = rp._message_line({'label': 'Jordan', 'contactName': 'Jordan', 'text': '\U0001f4f7 Photo', 'quiet': True})
+        self.assertEqual(line, 'Jordan: \U0001f4f7 Photo')
+
+    def test_not_quiet_photo_only_notice(self):
+        rp.process(self.dreq(media_off=True), runner=self.runner)
+        self.assertEqual(self.calls[-1][1]['text'], 'Jordan: ' + NOTE)
 
 
 if __name__ == '__main__':

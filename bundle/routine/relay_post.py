@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.8 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.9 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -87,6 +87,10 @@ STDOUT (one JSON object):
   counts-only line to <state dir>/media.log: not_requested, routine_media_off, no_drop, no_key, bad_url,
   fetch_failed, size_mismatch, decrypt_failed, sha_mismatch, no_media_helper, prepare_failed,
   upload_ready, attached, missing_after_upload.
+  v1.4.9: a photo line is never "quiet" (it always starts "Jordan:"; a photo-only message's caption is
+  "Jordan:", its notice "Jordan: 📷 Photo couldn't be relayed …"). With "media_off" the routine may add
+  "media_error": "<call>_<http status>" (e.g. "initialize_403", "append_413", "file_ref"), logged as
+  routine_media_off:<code>.
   The routine never touches the Mac.
   Photos are in flight only: the copy, the parts and a tiny state file (mode 600) are deleted when the
   send is built, on any error, or by the sweep after 15 min. Nothing about them is logged.
@@ -136,9 +140,13 @@ def _message_line(m):
         head = tag + head               # v1.4.6: Messages filed it under Spam / Promotions / Transactions
     elif m.get('unknown') and not gl:
         head = UNKNOWN_TAG + head       # v1.4.5 spamMode tag: not in Contacts / flagged by Messages
-    if m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown'):
+    if (m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown')
+            and not m.get('media') and not _PHOTO_PLACEHOLDER.fullmatch(text.strip())):
         return text                     # v1.4.6 quiet names: same sender as the line just above
+        # (v1.4.9: never for a photo line -- an image bubble or a photo notice always says who sent it)
     sep = ' ' if m.get('reaction') else ': '
+    if not text.strip() and not m.get('reaction'):
+        return head + ':'               # v1.4.9: a photo with no caption -> "Jordan:" (the image's caption)
     return head + sep + text
 
 
@@ -190,6 +198,8 @@ def _with_media(line, m):
     media = media_meta((m or {}).get('media'))
     if media:
         line['media'] = media
+        if not str((m or {}).get('text') or '').strip():
+            line['bare'] = True         # v1.4.9: photo-only message: a notice goes right after "Jordan:"
     return line
 
 
@@ -313,7 +323,7 @@ def drop_get(url, key, max_bytes, timeout=DROP_TIMEOUT_S):
     """GET one ciphertext (served once). bytes or None. Never logs anything."""
     import urllib.request
     import urllib.error
-    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'imessage-relay-post/1.4.8'})
+    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'imessage-relay-post/1.4.9'})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             if r.status != 200:
@@ -463,10 +473,13 @@ def media_log(state_dir, status, photos, nbytes, now=None):
         pass
 
 
-def media_failed_text(text, n):
-    """The line when its photo(s) could not be relayed: a clear notice instead of a silent drop."""
+def media_failed_text(text, n, bare=False):
+    """The line when its photo(s) could not be relayed: a clear notice instead of a silent drop.
+    v1.4.9: a photo-only line ("Jordan:") gets the notice on the same line: "Jordan: 📷 Photo couldn't …"."""
     note = '\U0001f4f7 %s couldn\u2019t be relayed \u2014 open Messages to see %s' % (
         ('Photo', 'it') if n == 1 else ('%d photos' % n, 'them'))
+    if bare:
+        return (text.rstrip() + ' ' + note) if text.strip() else note
     if _PHOTO_PLACEHOLDER.search(text):
         return _PHOTO_PLACEHOLDER.sub(lambda _m: note, text)
     return text + '\n\u2002' + note
@@ -1001,12 +1014,15 @@ def process(req, runner=None):
         req = dict(req, media_off=True)
         _st('not_requested', len(all_media))
     elif all_media and req.get('media_off'):
-        _st('routine_media_off', len(all_media))
+        # v1.4.9: the routine may say which X call failed ("media_error": "initialize_403", "append_413",
+        # "file_ref", …); only a short [a-z0-9_] code is kept, never any message or response text.
+        err = re.sub(r'[^a-z0-9_]', '', str(req.get('media_error') or '').lower())[:32]
+        _st('routine_media_off' + (':' + err if err else ''), len(all_media))
     if all_media and req.get('media_off'):
         media_cleanup(all_media, media_dir)
         for ln in lines:
             if ln.get('media'):
-                ln['text'] = media_failed_text(ln['text'], len(ln['media']))
+                ln['text'] = media_failed_text(ln['text'], len(ln['media']), ln.get('bare'))
     elif all_media and not media_keys:
         # v1.4.7: fetch each photo from the encrypted drop first (served once; the routine never touches the Mac)
         ready = []
@@ -1056,7 +1072,7 @@ def process(req, runner=None):
                 else:
                     missing += 1
             if missing:
-                ln['text'] = media_failed_text(ln['text'], missing)
+                ln['text'] = media_failed_text(ln['text'], missing, ln.get('bare') and missing == len(ln['media']))
                 if media_keys:
                     _st('missing_after_upload', missing)
             if entries:

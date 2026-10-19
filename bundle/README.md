@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.8
+# iMessage Relay v1.4.9
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,7 +22,10 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
-- The Chrome extension did not change in v1.4.7 or v1.4.8 (no reload needed from v1.4.6).
+- The Chrome extension did not change in v1.4.7, v1.4.8 or v1.4.9 (no reload needed from v1.4.6).
+- v1.4.9 (bot side only; the Mac code is v1.4.8): a relayed photo always carries the sender's label, even
+  right after another text from them, and the routine's upload failures are logged with a short code.
+  Photos need the sender's X connection to have the `media.write` permission.
 - v1.4.8: every photo run reports body-free `media_status` codes and appends a counts-only line to the
   bot's `media.log`, so a "couldn't be relayed" notice always says why (e.g. `no_key`, `fetch_failed`).
 
@@ -102,7 +105,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.8)
+## Limits (v1.4.9)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best

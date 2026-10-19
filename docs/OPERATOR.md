@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.8)
+# iMessage Relay: operator reference (v1.4.9)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -418,8 +418,12 @@ For each webhook call:
      then for EACH part chat_media_upload_append with id = that session id, media = the part's `media`
      value EXACTLY as given (a "$file:/…" reference; never open, read or paste the file), segment_index =
      the part's, and that conversation_id and media_hash_key. Then write the step-2 object again to a NEW
-     unique file with "media_keys": {"<token>": "<media_hash_key>", …} added and run the same command. If
-     any upload call failed, add "media_off": true instead (the text then posts with a notice).
+     unique file with "media_keys": {"<token>": "<media_hash_key>", …} added and run the same command.
+     A call succeeded when it returns a "data" object: initialize returns session_id, media_hash_key and
+     conversation_id; append returns {"data":{"expires_at":0}}, which is SUCCESS (expires_at 0 is normal).
+     If any upload call returned an error, add "media_off": true and "media_error": "<initialize|append>_<HTTP
+     status, or error>" instead (e.g. "initialize_403"; "file_ref" if a "$file:" reference was not replaced;
+     never any response text). The text then posts with a notice.
    - {"action":"skip",...}  -> do nothing.
    - {"action":"send","sends":[...],"ack_ids":[...]} -> for each send: if it has a non-null
      `add_conversation_keys`, call add_conversation_keys with it first; if it has `media_finalize`, call
@@ -645,7 +649,9 @@ posts with the "couldn't be relayed" notice and the drop copy expires unfetched.
 **Diagnosing a notice (v1.4.8).** Every photo run's output has `media_status` {code: count}, and relay_post
 appends one counts-only line (time, photos, bytes, codes; never tokens, keys, URLs, hashes or names) to
 `~/.imessage-relay-routine/media.log` (mode 600). Codes: `not_requested` (no media_upload anywhere),
-`routine_media_off` (the routine sent media_off after an upload call failed), `no_drop`, `no_key` (v1: the
+`routine_media_off` (the routine sent media_off after an upload call failed; v1.4.9:
+`routine_media_off:<media_error>`, e.g. `:initialize_403` = the sender's X connection lacks `media.write`,
+reconnect it), `no_drop`, `no_key` (v1: the
 item's key didn't survive; v2: no wrap_key in drop.json), `bad_url`, `fetch_failed` (gone, expired or
 refused), `size_mismatch`, `decrypt_failed` (wrong wrap key), `sha_mismatch`, `no_media_helper`,
 `prepare_failed` (encrypt-media), `upload_ready`, `attached`, `missing_after_upload`. On the drop, its request
@@ -838,6 +844,11 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.9 changes only relay_post.py** (bot side; the Mac stays on v1.4.8): a photo line always carries the
+sender label ("Jordan:" as the image caption, "Jordan: 📷 Photo couldn't be relayed …" as its notice), and the
+routine can report a body-free `media_error` with `media_off`. The template's upload step gained the
+success/`media_error` wording; an older prompt keeps working (media.log then says `routine_media_off`). The
+sender's X connection needs the `media.write` scope for photos (a 403 on initialize means reconnect it).
 **v1.4.8 does not change the extension** or the drop service, and needs no routine prompt change. It keeps the
 photo key out of the webhook (wrap key, see "Photos into X Chat") and adds `media_status` / `media.log`.
 **Bot side first:** rebuild `~/imr/bundle` and copy relay_post.py, add `wrap_key` (and `"media_upload": true`
