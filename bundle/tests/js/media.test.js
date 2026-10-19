@@ -154,6 +154,19 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     assert.strictEqual(b.host.filter(m => m.type === 'attach_chunk').length, 0);
   });
 
+  await test('background (v1.4.11): "2" answers a pick prompt with the 2nd offered handle', async () => {
+    const sends = [];
+    const b = bootBg({ tab: tabOk, send: m => { sends.push(m); return m.confirmed ? { ok: true, delivered: true, contact: 'Jordan Rivera' }
+      : { ok: false, needsConfirm: true, label: 'Jordan Rivera', handle: '+15555550103', reason: 'new_contact', options: ['+15555550103', '+15555550101', '+15555550102'] }; } });
+    await b.reply('Jordan Rivera: hi there', {});
+    await b.reply('2', {});
+    const c = sends.filter(m => m.confirmed);
+    assert.strictEqual(c.length, 1, JSON.stringify(sends));
+    assert.strictEqual(c[0].handle, '+15555550101');
+    assert.strictEqual(c[0].text, 'Jordan Rivera: hi there');
+    await b.reply('3', {});
+    assert.strictEqual(sends.filter(m => m.confirmed).length, 1, 'the pick is used once');
+  });
   await test('background (v1.4.10): a skipped reply is never silent: it gets a warning reaction', async () => {
     const b = bootBg({ send: () => ({ ok: true }), tab: tabOk });
     await b.reply('', {});

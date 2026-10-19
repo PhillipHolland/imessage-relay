@@ -475,6 +475,17 @@ async function handleItem(item, src) {
     await handleTest(item, tm[1]);
     return;
   }
+  const pm = /^\s*([1-9])\s*[.)!]?\s*$/.exec(String(item.text || ''));
+  if (pm) {                                   // v1.4.11: "2" picks a number from a pending pick prompt
+    const g = await getPendingGuess();
+    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS ? g.options[Number(pm[1]) - 1] : '';
+    if (h) {
+      if (await isDuplicate(item.key)) return;
+      await setPendingGuess(Object.assign({}, g, { handle: String(h) }));
+      await handleYes(item, '', src);
+      return;
+    }
+  }
   const bw = bareConfirmWord(item.text);
   if (bw) {                                   // v1.4.1: plain "yes" / "no" answers a pending reply prompt
     const c0 = await getConfig(false);
@@ -542,7 +553,8 @@ async function handleItem(item, src) {
     else if (res.needsConfirm && res.handle) {  // item 3 / W1: hold the text in session; confirm with /yes
       await setPendingGuess({ text: item.text, label: String(res.label || ''), handle: String(res.handle || ''),
                               conversationId: item.conversationId, quotedText: item.quotedText || '', at: Date.now(),
-                              xUuid: payload.xUuid || '', attachments: payload.attachments || null });
+                              xUuid: payload.xUuid || '', attachments: payload.attachments || null,
+                              options: Array.isArray(res.options) ? res.options.slice(0, 9).map(String) : null });
       try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: 2 }); } catch (e) { /* tests */ }
       status = 'needs-confirm';
       detail = (res.reason === 'new_contact')

@@ -724,10 +724,38 @@ def _take_pending_group(handle, now_t):
     return _with_host_lock(fn)
 
 
-def _store_pending_new(handle, name, at, prefix='', existing=False):
+def _merge_same_name(matches):
+    """v1.4.11: several Contacts cards with the same full name are ONE person: merge their handles (already
+    normalized by the watcher; deduped), keep the order they came in."""
+    groups, order = {}, []
+    for m in matches:
+        k = ' '.join(str(m.get('name') or '').lower().split())
+        g = groups.get(k)
+        if g is None:
+            g = groups[k] = dict(m, handles=[])
+            order.append(k)
+        g['exact'] = bool(g.get('exact') or m.get('exact'))
+        for x in (m.get('handles') or [{'handle': m['handle'], 'label': ''}]):
+            if x.get('handle') and x['handle'] not in [y['handle'] for y in g['handles']]:
+                g['handles'].append(x)
+    return [groups[k] for k in order]
+
+
+def _by_recent_use(handles, best=''):
+    """v1.4.11: the handle this person last used with the relay (roster times, handles only) goes first."""
+    seen = {}
+    for r in rc.load_roster():
+        t = max(float(r.get(k) or 0) for k in ('lastInboundAt', 'lastOutboundAt', 'lastSentAt'))
+        seen[r.get('handle')] = t
+    return sorted(handles, key=lambda x: (-seen.get(x['handle'], 0.0), x['handle'] != best))   # ties: the card's best
+
+
+def _store_pending_new(handle, name, at, prefix='', existing=False, options=None):
     def fn():
         state = load_state()
         state['pendingNewContact'] = {'handle': handle, 'name': name, 'at': float(at)}
+        if options:
+            state['pendingNewContact']['options'] = [str(h) for h in options][:9]   # v1.4.11: "1/2/3" pick
         if prefix:
             state['pendingNewContact']['prefix'] = str(prefix)[:80]     # which candidate name was offered
         if existing:
@@ -738,7 +766,8 @@ def _store_pending_new(handle, name, at, prefix='', existing=False):
 
 def _peek_pending_new(handle, now_t):
     p = load_state().get('pendingNewContact')
-    if isinstance(p, dict) and p.get('handle') == handle and now_t - float(p.get('at') or 0) <= NEW_CONTACT_WINDOW_S:
+    if (isinstance(p, dict) and (p.get('handle') == handle or handle in (p.get('options') or []))
+            and now_t - float(p.get('at') or 0) <= NEW_CONTACT_WINDOW_S):
         return p
     return None
 
@@ -808,35 +837,47 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
                              'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
                     contact=m['name'], routedBy='contacts')
+    matches, fuzzy = _merge_same_name(matches), _merge_same_name(fuzzy)   # v1.4.11: duplicate cards = one person
     if not matches and fuzzy:
         matches = fuzzy                          # several close names: list them (names only), send nothing
     if not matches and not (res is None and any(c.get('nameLike') and c.get('form', 'colon') == 'colon' for c in cands)):
         return dict(base, _fallback=True)        # not a name anyone knows: ordinary text
     if len(matches) == 1:
-        m = matches[0]
-        hs = m.get('handles') or [{'handle': m['handle'], 'label': ''}]
+        m = dict(matches[0])
+        hs = _by_recent_use(m.get('handles') or [{'handle': m['handle'], 'label': ''}], m['handle'])
+        m['handle'] = hs[0]['handle']
         if cfg['confirmNewContacts'] == 'exact-skip' and m.get('exact') and len(hs) == 1:
             # v1.4.1: "Jordan Rivera: hey" names exactly one Contacts card, by its full name, with one
             # number/email: no question to ask. The caller sends it and adds them as a contact.
             rc.log_event('new_contact_direct')
             return dict(base, _direct={'handle': m['handle'], 'name': m['name'], 'body': chosen['body']})
-        _store_pending_new(m['handle'], m['name'], now(), prefix=name)
+        hs = hs[:9]
+        _store_pending_new(m['handle'], m['name'], now(), prefix=name,
+                           options=[x['handle'] for x in hs] if len(hs) > 1 else None)
         _note_prompt(now())
         if len(hs) > 1:
-            def opt(x):
-                return rc.mask_handle(x['handle']) + ((' ' + x['label']) if x.get('label') else '')
-            others = ', '.join(opt(x) for x in hs if x['handle'] != m['handle'])
-            detail = ('\u2753 %s has %d numbers in your Contacts. Reply yes within 2 min to text %s, or /add %s '
-                      '<number> to use another (%s).' % (m['name'], len(hs), opt(next(x for x in hs if x['handle'] == m['handle'])),
-                                                          first, others))
+            # v1.4.11: a pick prompt (masked handles only), never a dead end. 1 = the one used most recently.
+            def opt(i, x):
+                return '%d) %s%s' % (i + 1, _short_mask(x['handle']), (' ' + x['label']) if x.get('label') else '')
+            detail = ('\u2753 %s has %d numbers in your Contacts: %s. Reply yes (or \U0001f44d) within 2 min to text 1, '
+                      'reply 2-%d to pick another, or no to cancel.' % (m['name'], len(hs),
+                                                                       ', '.join(opt(i, x) for i, x in enumerate(hs)), len(hs)))
         else:
             detail = ('\u2753 %s isn\u2019t on your relay list yet. Reply yes within 2 min to text the %s in your '
                       'Contacts (%s), or /add %s <number>.' % (first, m['name'], rc.mask_handle(m['handle']), first))
         notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
-        return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
-                    contact=m['name'], routedBy='contacts')
-    if matches:
+        r = dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
+                 contact=m['name'], routedBy='contacts')
+        if len(hs) > 1:
+            r['options'] = [x['handle'] for x in hs]
+        return r
+    if matches and ' ' in name.strip():
+        # v1.4.11: he already typed a full name; never tell him to "start with the full name"
+        names = ', '.join(x['name'] for x in matches[:3]) + (', \u2026' if len(matches) > 3 else '')
+        detail = ('%s isn\u2019t on your relay list yet, and several Contacts match: %s. Reply /add %s <number>.'
+                  % (name, names, first))
+    elif matches:
         names = ', '.join(x['name'] for x in matches[:3]) + (', \u2026' if len(matches) > 3 else '')
         detail = ('%s isn\u2019t on your relay list yet, and your Contacts have more than one: %s. Start with the full '
                   'name ("%s: \u2026"), or /add %s <number>.' % (first, names, matches[0]['name'], first))

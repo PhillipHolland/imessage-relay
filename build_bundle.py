@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.10, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.11, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=f06bb40b9f9c2311878953d776c51dc0c47119136029c2e815ec0e640823f92d nl=1
-# iMessage Relay v1.4.10
+@@@@ FILE README.md mode=644 sha256=cef96d2cf4cf306906ff0b60bb1a758489d97edfe66f12f9e79f9f81026959e0 nl=1
+# iMessage Relay v1.4.11
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,11 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.11 (Mac helper + extension): several Contacts cards with the same full name are one person (their
+  numbers merged and deduped). One number: an exact full name sends and saves, a first name asks "yes". Several:
+  a numbered pick prompt (masked numbers, the one used most recently first); reply 1/2/3, or yes / 👍 for 1.
+  A full name is never told to "start with the full name". Install on the Mac (no watcher rebuild), then reload
+  the extension and press Cmd+R on the X Chat tab.
 - v1.4.10 (Chrome extension only; Mac helper stays v1.4.8, bot side v1.4.9): a native Reply to a relayed photo
   (the image bubble or its "Name: 📷 Photo" caption) now reaches the Mac. Emoji-only replies ("❤️❤️❤️", drawn by X as
   emoji images) count as text, the quoted thumbnail is never sent as your photo, a caption quote routes to that name,
@@ -130,7 +135,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.10)
+## Limits (v1.4.11)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -1125,7 +1130,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=9cefa04cd24ee6c4049a3e93bb85e9651ff8a62c31c1da99e3bac48f03eec813 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=e24ba77cacb84396af3956e4c0b458510715cd4543bfd7413cf01cafbc94df36 nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1603,6 +1608,17 @@ async function handleItem(item, src) {
     await handleTest(item, tm[1]);
     return;
   }
+  const pm = /^\s*([1-9])\s*[.)!]?\s*$/.exec(String(item.text || ''));
+  if (pm) {                                   // v1.4.11: "2" picks a number from a pending pick prompt
+    const g = await getPendingGuess();
+    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS ? g.options[Number(pm[1]) - 1] : '';
+    if (h) {
+      if (await isDuplicate(item.key)) return;
+      await setPendingGuess(Object.assign({}, g, { handle: String(h) }));
+      await handleYes(item, '', src);
+      return;
+    }
+  }
   const bw = bareConfirmWord(item.text);
   if (bw) {                                   // v1.4.1: plain "yes" / "no" answers a pending reply prompt
     const c0 = await getConfig(false);
@@ -1670,7 +1686,8 @@ async function handleItem(item, src) {
     else if (res.needsConfirm && res.handle) {  // item 3 / W1: hold the text in session; confirm with /yes
       await setPendingGuess({ text: item.text, label: String(res.label || ''), handle: String(res.handle || ''),
                               conversationId: item.conversationId, quotedText: item.quotedText || '', at: Date.now(),
-                              xUuid: payload.xUuid || '', attachments: payload.attachments || null });
+                              xUuid: payload.xUuid || '', attachments: payload.attachments || null,
+                              options: Array.isArray(res.options) ? res.options.slice(0, 9).map(String) : null });
       try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: 2 }); } catch (e) { /* tests */ }
       status = 'needs-confirm';
       detail = (res.reason === 'new_contact')
@@ -3495,11 +3512,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=3ab6d6642a21d28362ca1c21a5b0e887088820c7007ff800f022ae5bfd97af39 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=648604d58d9f9e051317ccf2c23a893a897a0b2f8d1a9e9adc27d691ff80b5fd nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.10",
+  "version": "1.4.11",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -3711,7 +3728,7 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=904f71e3439afb1e08a7a9ceb4845698c6d03a2d335aa7f296f23132400fe03c nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=7525f3a0bd0f3fc08218f38e737aff452d6f04b23db9b45159a7b1146c983876 nl=1
 #!/usr/bin/python3
 """
 com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.8.
@@ -4438,10 +4455,38 @@ def _take_pending_group(handle, now_t):
     return _with_host_lock(fn)
 
 
-def _store_pending_new(handle, name, at, prefix='', existing=False):
+def _merge_same_name(matches):
+    """v1.4.11: several Contacts cards with the same full name are ONE person: merge their handles (already
+    normalized by the watcher; deduped), keep the order they came in."""
+    groups, order = {}, []
+    for m in matches:
+        k = ' '.join(str(m.get('name') or '').lower().split())
+        g = groups.get(k)
+        if g is None:
+            g = groups[k] = dict(m, handles=[])
+            order.append(k)
+        g['exact'] = bool(g.get('exact') or m.get('exact'))
+        for x in (m.get('handles') or [{'handle': m['handle'], 'label': ''}]):
+            if x.get('handle') and x['handle'] not in [y['handle'] for y in g['handles']]:
+                g['handles'].append(x)
+    return [groups[k] for k in order]
+
+
+def _by_recent_use(handles, best=''):
+    """v1.4.11: the handle this person last used with the relay (roster times, handles only) goes first."""
+    seen = {}
+    for r in rc.load_roster():
+        t = max(float(r.get(k) or 0) for k in ('lastInboundAt', 'lastOutboundAt', 'lastSentAt'))
+        seen[r.get('handle')] = t
+    return sorted(handles, key=lambda x: (-seen.get(x['handle'], 0.0), x['handle'] != best))   # ties: the card's best
+
+
+def _store_pending_new(handle, name, at, prefix='', existing=False, options=None):
     def fn():
         state = load_state()
         state['pendingNewContact'] = {'handle': handle, 'name': name, 'at': float(at)}
+        if options:
+            state['pendingNewContact']['options'] = [str(h) for h in options][:9]   # v1.4.11: "1/2/3" pick
         if prefix:
             state['pendingNewContact']['prefix'] = str(prefix)[:80]     # which candidate name was offered
         if existing:
@@ -4452,7 +4497,8 @@ def _store_pending_new(handle, name, at, prefix='', existing=False):
 
 def _peek_pending_new(handle, now_t):
     p = load_state().get('pendingNewContact')
-    if isinstance(p, dict) and p.get('handle') == handle and now_t - float(p.get('at') or 0) <= NEW_CONTACT_WINDOW_S:
+    if (isinstance(p, dict) and (p.get('handle') == handle or handle in (p.get('options') or []))
+            and now_t - float(p.get('at') or 0) <= NEW_CONTACT_WINDOW_S):
         return p
     return None
 
@@ -4522,35 +4568,47 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
                              'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
                     contact=m['name'], routedBy='contacts')
+    matches, fuzzy = _merge_same_name(matches), _merge_same_name(fuzzy)   # v1.4.11: duplicate cards = one person
     if not matches and fuzzy:
         matches = fuzzy                          # several close names: list them (names only), send nothing
     if not matches and not (res is None and any(c.get('nameLike') and c.get('form', 'colon') == 'colon' for c in cands)):
         return dict(base, _fallback=True)        # not a name anyone knows: ordinary text
     if len(matches) == 1:
-        m = matches[0]
-        hs = m.get('handles') or [{'handle': m['handle'], 'label': ''}]
+        m = dict(matches[0])
+        hs = _by_recent_use(m.get('handles') or [{'handle': m['handle'], 'label': ''}], m['handle'])
+        m['handle'] = hs[0]['handle']
         if cfg['confirmNewContacts'] == 'exact-skip' and m.get('exact') and len(hs) == 1:
             # v1.4.1: "Jordan Rivera: hey" names exactly one Contacts card, by its full name, with one
             # number/email: no question to ask. The caller sends it and adds them as a contact.
             rc.log_event('new_contact_direct')
             return dict(base, _direct={'handle': m['handle'], 'name': m['name'], 'body': chosen['body']})
-        _store_pending_new(m['handle'], m['name'], now(), prefix=name)
+        hs = hs[:9]
+        _store_pending_new(m['handle'], m['name'], now(), prefix=name,
+                           options=[x['handle'] for x in hs] if len(hs) > 1 else None)
         _note_prompt(now())
         if len(hs) > 1:
-            def opt(x):
-                return rc.mask_handle(x['handle']) + ((' ' + x['label']) if x.get('label') else '')
-            others = ', '.join(opt(x) for x in hs if x['handle'] != m['handle'])
-            detail = ('\u2753 %s has %d numbers in your Contacts. Reply yes within 2 min to text %s, or /add %s '
-                      '<number> to use another (%s).' % (m['name'], len(hs), opt(next(x for x in hs if x['handle'] == m['handle'])),
-                                                          first, others))
+            # v1.4.11: a pick prompt (masked handles only), never a dead end. 1 = the one used most recently.
+            def opt(i, x):
+                return '%d) %s%s' % (i + 1, _short_mask(x['handle']), (' ' + x['label']) if x.get('label') else '')
+            detail = ('\u2753 %s has %d numbers in your Contacts: %s. Reply yes (or \U0001f44d) within 2 min to text 1, '
+                      'reply 2-%d to pick another, or no to cancel.' % (m['name'], len(hs),
+                                                                       ', '.join(opt(i, x) for i, x in enumerate(hs)), len(hs)))
         else:
             detail = ('\u2753 %s isn\u2019t on your relay list yet. Reply yes within 2 min to text the %s in your '
                       'Contacts (%s), or /add %s <number>.' % (first, m['name'], rc.mask_handle(m['handle']), first))
         notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
-        return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
-                    contact=m['name'], routedBy='contacts')
-    if matches:
+        r = dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
+                 contact=m['name'], routedBy='contacts')
+        if len(hs) > 1:
+            r['options'] = [x['handle'] for x in hs]
+        return r
+    if matches and ' ' in name.strip():
+        # v1.4.11: he already typed a full name; never tell him to "start with the full name"
+        names = ', '.join(x['name'] for x in matches[:3]) + (', \u2026' if len(matches) > 3 else '')
+        detail = ('%s isn\u2019t on your relay list yet, and several Contacts match: %s. Reply /add %s <number>.'
+                  % (name, names, first))
+    elif matches:
         names = ', '.join(x['name'] for x in matches[:3]) + (', \u2026' if len(matches) > 3 else '')
         detail = ('%s isn\u2019t on your relay list yet, and your Contacts have more than one: %s. Start with the full '
                   'name ("%s: \u2026"), or /add %s <number>.' % (first, names, matches[0]['name'], first))
@@ -6690,7 +6748,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=fa10749cc367a35d432bf10704ffa1f0a281bc5e67d3edf608699d2d70a67b9e nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=5d8c48266023451990cc093a3a7529cb3156a9f265b562d95352df1f5d09efe3 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -6716,8 +6774,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.8'
-EXTENSION_VERSION = '1.4.10'   # v1.4.10: emoji-only replies and replies to a relayed photo (reload + Cmd+R)
+VERSION = '1.4.11'
+EXTENSION_VERSION = '1.4.11'   # v1.4.11: "2" answers a Contacts pick prompt (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -13308,7 +13366,7 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/js/media.test.js mode=644 sha256=b0619bec8fe5838405454309806f91dace4d5002b0a8ccfe6672a532c8350057 nl=1
+@@@@ FILE tests/js/media.test.js mode=644 sha256=b48897721f3b036f951fe23f2e51e453392f7e2c25a2c06a0d78f0c16f1a19c7 nl=1
 /* v1.4.6: his photos in X Chat go out as iMessage attachments. content.js finds images in HIS outbound
  * bubble only (not emoji, not the quoted message) and reads them in 512 KiB chunks; background.js streams
  * them to the Mac (attach_chunk), sends metadata only with the reply, and keeps them for a "yes".
@@ -13465,6 +13523,19 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     assert.strictEqual(b.host.filter(m => m.type === 'attach_chunk').length, 0);
   });
 
+  await test('background (v1.4.11): "2" answers a pick prompt with the 2nd offered handle', async () => {
+    const sends = [];
+    const b = bootBg({ tab: tabOk, send: m => { sends.push(m); return m.confirmed ? { ok: true, delivered: true, contact: 'Jordan Rivera' }
+      : { ok: false, needsConfirm: true, label: 'Jordan Rivera', handle: '+15555550103', reason: 'new_contact', options: ['+15555550103', '+15555550101', '+15555550102'] }; } });
+    await b.reply('Jordan Rivera: hi there', {});
+    await b.reply('2', {});
+    const c = sends.filter(m => m.confirmed);
+    assert.strictEqual(c.length, 1, JSON.stringify(sends));
+    assert.strictEqual(c[0].handle, '+15555550101');
+    assert.strictEqual(c[0].text, 'Jordan Rivera: hi there');
+    await b.reply('3', {});
+    assert.strictEqual(sends.filter(m => m.confirmed).length, 1, 'the pick is used once');
+  });
   await test('background (v1.4.10): a skipped reply is never silent: it gets a warning reaction', async () => {
     const b = bootBg({ send: () => ({ ok: true }), tab: tabOk });
     await b.reply('', {});
@@ -14249,7 +14320,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=1aafc22cf2ec089c6169dbee7bd1314b4a1ad72e34040baf9e769a607128d7ed nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=425518db2105fd968df5e3ce4b339c36e7a7df9a2685c37927389573df080015 nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -14304,7 +14375,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.10');
+  assert.strictEqual(m.version, '1.4.11');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -19861,6 +19932,74 @@ class PhotoReply(Quote):
 
 del Quote
 @@@@ END
+@@@@ FILE tests/py/test_v1411_dupcards.py mode=644 sha256=910ff4ab39eb1d15b6dc9f47c6c763c7cb6c9b70f47303d18e145e6856d014bf nl=1
+"""v1.4.11: duplicate Contacts cards with the same full name are one person (handles merged, deduped);
+several numbers -> a numbered pick prompt (most recently used first), never "start with the full name"."""
+from helpers import read_log
+from test_v140 import Base, make_ab
+
+SAME = [('Jordan', 'Rivera', [('_$!<Mobile>!$_', '(555) 555-0101')]),
+        ('Jordan', 'Rivera', [('', '555-555-0101')]),
+        ('Jordan', 'Rivera', [('iPhone', '+1 555 555 0101')])]
+DIFF = [('Jordan', 'Rivera', [('_$!<Mobile>!$_', '(555) 555-0101')]),
+        ('Jordan', 'Rivera', [('', '555-555-0102')]),
+        ('Jordan', 'Rivera', [('iPhone', '555-555-0103'), ('', '555-555-0101')])]
+
+
+class DupCards(Base):
+    def details(self):
+        return ' | '.join(p.get('detail', '') for p, _ in self.posts)
+
+    def test_full_name_three_cards_one_number_is_one_match(self):
+        make_ab(self.tmp, SAME)
+        r = self.send('Jordan Rivera: hi there')
+        self.assertNotIn('full name', self.details())
+        self.assertNotIn('more than one', self.details())
+        if r.get('ok'):                                    # exact-skip: sent and saved
+            self.assertEqual(self.osa()[0][2:4], ['hi there', '+15555550101'])
+        else:
+            self.assertTrue(r.get('needsConfirm'), r)
+            self.assertEqual(r['handle'], '+15555550101')
+            self.assertNotIn('options', r)
+
+    def test_first_name_three_cards_one_number_confirms(self):
+        make_ab(self.tmp, SAME)
+        r = self.send('Jordan: hi')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual((r['label'], r['handle']), ('Jordan Rivera', '+15555550101'))
+        self.assertEqual(self.osa(), [])
+
+    def test_full_name_three_numbers_pick_prompt_recent_first_then_pick_sends(self):
+        make_ab(self.tmp, DIFF)
+        self.m.rc.record_inbound('+15555550103', self.clock.t - 5)
+        r = self.send('Jordan Rivera: hi there')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(r['options'][0], '+15555550103')           # most recently used is 1
+        self.assertEqual(sorted(r['options']), ['+15555550101', '+15555550102', '+15555550103'])
+        d = self.details()
+        for t in ('1) \u2022\u2022\u20220103', '2) ', '3) ', 'Reply yes', 'reply 2-3'):
+            self.assertIn(t, d)
+        self.assertNotIn('full name', d)
+        self.assertNotIn('5550102', d)
+        self.assertEqual(self.osa(), [])
+        r = self.send('Jordan Rivera: hi there', confirmed=True, handle=r['options'][2])   # he answered "3"
+        self.assertTrue(r['ok'], r)
+        self.assertIn(self.osa()[0][3], ('+15555550101', '+15555550102'))
+        self.assertNotIn('hi there', read_log())
+
+    def test_unoffered_handle_still_refused(self):
+        make_ab(self.tmp, DIFF)
+        self.send('Jordan Rivera: hi')
+        r = self.send('Jordan Rivera: hi', confirmed=True, handle='+15555550141')
+        self.assertFalse(r['ok'])
+        self.assertEqual(self.osa(), [])
+
+    def test_full_name_of_different_people_never_says_full_name(self):
+        r = self.m.host._merge_same_name([{'name': 'Jordan Rivera', 'handle': 'a', 'handles': [{'handle': 'a'}]},
+                                          {'name': 'jordan  rivera', 'handle': 'b', 'handles': [{'handle': 'b'}, {'handle': 'a'}]}])
+        self.assertEqual(len(r), 1)
+        self.assertEqual([x['handle'] for x in r[0]['handles']], ['a', 'b'])
+@@@@ END
 @@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=c445fb291fdea4cdc89b2bd5f7ab91094df5a633c64ffa6e67098166e2e4446c nl=1
 """v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),
 and an exact full-name match to one Contacts card with one number sends without asking."""
@@ -21934,7 +22073,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=6fa108e6796e9b1fef3d59953cd776e2509722197337059646a6246bf20d4cd4 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=50438d0d85403b372145a9c9521d718ca1cddd95847a8b9391c941d80d6f35e8 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -22127,7 +22266,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.8')
+        self.assertEqual(m.rc.VERSION, '1.4.11')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)
