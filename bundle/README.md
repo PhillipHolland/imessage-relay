@@ -1,4 +1,4 @@
-# iMessage Relay v1.3.8
+# iMessage Relay v1.3.9
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -34,7 +34,7 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.3.8)
+## Limits (v1.3.9)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -79,7 +79,7 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.3.8 changes the extension) and press Cmd+R
+reload the extension card in chrome://extensions (v1.3.9 changes the extension: X Chat bubble times are no longer appended to replies) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations

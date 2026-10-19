@@ -15,6 +15,10 @@
  * wrong_account status is surfaced in the popup. Message text is read only from the bubble's own
  * message-text-<uuid> element, line breaks kept, time/status chips stripped, and an over-limit
  * reply is refused (owner notice) rather than truncated.
+ *
+ * v1.3.9: X Chat now renders the bubble time as plain spans inside message-text-<uuid> (twice: a
+ * visible and a screen-reader copy). Trailing clock-time / status chips are dropped (element and
+ * line level); clock times inside the message text are kept.
  */
 (function () {
   'use strict';
@@ -59,6 +63,12 @@
 
     // Dropped from the body text: <time>, [datetime], and testids that read as time/status/receipts.
     stripTestIdPattern: /time|timestamp|status|receipt|seen|edited|delivered|reaction/i,
+    // v1.3.9: X Chat now renders the bubble time as plain <span>s (a visible copy plus a screen-reader
+    // copy) INSIDE message-text-<uuid>, with no <time>/[datetime]/testid. A "chip" is an element (or a
+    // line) whose whole text is a clock time ("9:07 AM", "21:07") or a status word (Edited/Sent/Seen/
+    // Delivered), optionally combined ("Edited · 9:07 AM"). Chips are dropped ONLY at the end of the
+    // body, after real text; a clock time inside the message is never touched.
+    chipLinePattern: /^(?:(?:\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]\.?\s?m\.?)?|edited|sent|seen|delivered)(?:\s*[\u00b7\u2022,|\-\u2013\u2014]?\s*)?)+$/i,
     blockTags: ['DIV', 'P', 'LI', 'SECTION', 'ARTICLE', 'UL', 'OL', 'BLOCKQUOTE'],
 
     excludeAncestorTags: ['NAV', 'HEADER', 'FORM', 'TEXTAREA', 'INPUT'],
@@ -267,8 +277,22 @@
 
     // Item 10: innerText-style extraction. Keeps line breaks (block boundaries + <br>), collapses
     // intra-line whitespace, strips only time/status chips, and never truncates.
+    function normSpaces(t) { return String(t || '').replace(/[\u00a0\u202f\u2009\u200a\u2007]/g, ' ').replace(/[\u200b-\u200d\u2060\u200e\u200f\ufeff]/g, ''); }
+    function isChipText(t) { const v = normSpaces(t).replace(/\s+/g, ' ').trim(); return !!v && cfg.chipLinePattern.test(v); }
+    // v1.3.9: drop trailing lines that are only clock times / status words (any number, blank lines
+    // between). Keeps at least the first line, so a message that IS just "9:07 AM" survives.
+    function stripTrailingChips(text) {
+      const lines = String(text || '').split('\n');
+      let end = lines.length;
+      while (end > 1 && (!lines[end - 1].trim() || isChipText(lines[end - 1]))) end--;
+      if (end === lines.length) return text;
+      // only strip if something real remains (the first kept line is not itself a chip-only body)
+      const kept = lines.slice(0, end);
+      if (!kept.some(l => l.trim() && !isChipText(l))) return kept.filter(l => l.trim())[0] || text;
+      return kept.join('\n').replace(/\n+$/, '');
+    }
     function extractText(textEl) {
-      const parts = [];
+      const parts = [];   // strings, or {chip: text} for chip-only elements (kept only if not trailing)
       function walk(node) {
         for (let c = node.firstChild; c; c = c.nextSibling) {
           if (c.nodeType === 3) { parts.push(c.nodeValue); continue; }
@@ -276,6 +300,10 @@
           if (c.tagName === 'BR') { parts.push('\n'); continue; }
           if (isStripEl(c)) continue;
           const block = cfg.blockTags.includes(c.tagName);
+          if (!c.shadowRoot && isChipText(c.textContent)) {
+            parts.push({ chip: (block ? '\n' : '') + c.textContent + (block ? '\n' : '') });
+            continue;
+          }
           if (block) parts.push('\n');
           if (c.shadowRoot) walk(c.shadowRoot);
           walk(c);
@@ -283,9 +311,18 @@
         }
       }
       walk(textEl);
-      let text = parts.join('').replace(/[\u00a0\u202f]/g, ' ').replace(/[ \t]+/g, ' ');
+      // A chip element counts as real text unless everything after it is whitespace/chips and some
+      // real (non-chip) text comes before it.
+      let lastReal = -1;
+      parts.forEach((p, i) => { if (typeof p === 'string' && p.trim()) lastReal = i; });
+      // A body that is ONLY chips (the owner typed just "9:07 AM", wrapped in its own span) keeps the
+      // first one and drops the copies X appends after it.
+      const firstChip = lastReal >= 0 ? -1 : parts.findIndex(p => typeof p !== 'string');
+      const out = parts.map((p, i) => (typeof p === 'string' ? p
+        : (lastReal >= 0 ? (i > lastReal ? '' : p.chip) : (i === firstChip ? p.chip : ''))));
+      let text = normSpaces(out.join('')).replace(/[ \t]+/g, ' ');
       text = text.split('\n').map(l => l.trim()).join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '');
-      return text;
+      return stripTrailingChips(text);
     }
 
     // ---------- per-entry analysis ----------
@@ -672,6 +709,8 @@
     return {
       config: cfg,
       doc,
+      extractText,                 // v1.3.9: exposed for unit tests (pure, no side effects)
+      stripTrailingChips,
       start() {
         lastUrl = getContextUrl();
         observer = new MO(onMutations);

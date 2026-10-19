@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.3.8, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.3.9, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=c422d8cbbb968691841250a271d8bdac328d011c6e5a9d87c8ab116cea0ae920 nl=1
-# iMessage Relay v1.3.8
+@@@@ FILE README.md mode=644 sha256=29e25da1a664a16454f4b9abdad20cd2bdf2bf7638a8d243fdd2c9c729c3575a nl=1
+# iMessage Relay v1.3.9
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -53,7 +53,7 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.3.8)
+## Limits (v1.3.9)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -98,7 +98,7 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.3.8 changes the extension) and press Cmd+R
+reload the extension card in chrome://extensions (v1.3.9 changes the extension: X Chat bubble times are no longer appended to replies) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations
@@ -149,9 +149,9 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing","detail","at"}` (no message body)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=738fba0afcf37eccf87790dcf90c4135cb3b8d7423df0c7fdbe2ae593494270e nl=1
+@@@@ FILE install.sh mode=755 sha256=aea25c3824a2a968514472eda8b7d09f918c621c1fd8b9b1d174b96df2f5b9bb nl=1
 #!/bin/bash
-# iMessage Relay v1.3.8 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
+# iMessage Relay v1.3.9 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
 # roster.json, and the existing "iMessage Relay Watcher" app (never rebuilt or re-signed, so
 # its Full Disk Access grant survives), and keeps the LaunchAgent pointing at that app.
@@ -580,7 +580,7 @@ cat <<NEXT
 Log (counts only, never message text): $LOGS/imessage-relay.log
 NEXT
 @@@@ END
-@@@@ FILE run_tests.sh mode=755 sha256=349d29e2683e92ccc4a39e90b3cc366592a7869a78e90f38a2eef26e14efd489 nl=1
+@@@@ FILE run_tests.sh mode=755 sha256=789dd56af45b1228a4e8569d65492c82f38cbbd7efb0c8b263724a691383d69a nl=1
 #!/bin/bash
 # Runs every test. Needs python3 (3.9+); the JS tests also need node and jsdom
 # (NODE_PATH pointing at a node_modules with jsdom, or `npm i jsdom` here).
@@ -600,7 +600,7 @@ if command -v node >/dev/null 2>&1 && ! node -e "require('jsdom')" >/dev/null 2>
   _gr="$(npm root -g 2>/dev/null)"; [[ -n "$_gr" ]] && export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gr"
 fi
 if command -v node >/dev/null 2>&1 && node -e "require('jsdom')" >/dev/null 2>&1; then
-  for t in detect frames owner native guess e2etest smoke-chrome; do
+  for t in detect frames owner native guess e2etest chips smoke-chrome; do
     echo "== JS: $t =="
     node "tests/js/$t.test.js" 2>&1 | grep -E 'passed|FAIL|PASS chrome' ; [[ ${PIPESTATUS[0]} -eq 0 ]] || fail=1
   done
@@ -696,9 +696,9 @@ Also, by hand if you like:
   - System Settings > Privacy & Security > Automation -> turn off Messages for Google Chrome
 DONE
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=7b6aa5c12eb5749ae1c9b02e26997d6719e1e59178d7eef6964b6759eccbebed nl=1
+@@@@ FILE extension/background.js mode=644 sha256=b0636a764d6b38c977db2d57f154461255291043afe8b5d9c607cb956780b7a5 nl=1
 /*
- * iMessage Relay v1.3.8: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.3.9: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -1178,7 +1178,7 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=e7796ef9bc57b6397254887387dd93a9a924bf212b047e496a9aff5384e4c884 nl=1
+@@@@ FILE extension/content.js mode=644 sha256=3967bc8a38320abc4aac3a402dd4b01a6a921ae2f77a4fde5c2d2e113d4ac15a nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -1196,6 +1196,10 @@ chrome.runtime.onStartup.addListener(boot);
  * wrong_account status is surfaced in the popup. Message text is read only from the bubble's own
  * message-text-<uuid> element, line breaks kept, time/status chips stripped, and an over-limit
  * reply is refused (owner notice) rather than truncated.
+ *
+ * v1.3.9: X Chat now renders the bubble time as plain spans inside message-text-<uuid> (twice: a
+ * visible and a screen-reader copy). Trailing clock-time / status chips are dropped (element and
+ * line level); clock times inside the message text are kept.
  */
 (function () {
   'use strict';
@@ -1240,6 +1244,12 @@ chrome.runtime.onStartup.addListener(boot);
 
     // Dropped from the body text: <time>, [datetime], and testids that read as time/status/receipts.
     stripTestIdPattern: /time|timestamp|status|receipt|seen|edited|delivered|reaction/i,
+    // v1.3.9: X Chat now renders the bubble time as plain <span>s (a visible copy plus a screen-reader
+    // copy) INSIDE message-text-<uuid>, with no <time>/[datetime]/testid. A "chip" is an element (or a
+    // line) whose whole text is a clock time ("9:07 AM", "21:07") or a status word (Edited/Sent/Seen/
+    // Delivered), optionally combined ("Edited · 9:07 AM"). Chips are dropped ONLY at the end of the
+    // body, after real text; a clock time inside the message is never touched.
+    chipLinePattern: /^(?:(?:\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]\.?\s?m\.?)?|edited|sent|seen|delivered)(?:\s*[\u00b7\u2022,|\-\u2013\u2014]?\s*)?)+$/i,
     blockTags: ['DIV', 'P', 'LI', 'SECTION', 'ARTICLE', 'UL', 'OL', 'BLOCKQUOTE'],
 
     excludeAncestorTags: ['NAV', 'HEADER', 'FORM', 'TEXTAREA', 'INPUT'],
@@ -1448,8 +1458,22 @@ chrome.runtime.onStartup.addListener(boot);
 
     // Item 10: innerText-style extraction. Keeps line breaks (block boundaries + <br>), collapses
     // intra-line whitespace, strips only time/status chips, and never truncates.
+    function normSpaces(t) { return String(t || '').replace(/[\u00a0\u202f\u2009\u200a\u2007]/g, ' ').replace(/[\u200b-\u200d\u2060\u200e\u200f\ufeff]/g, ''); }
+    function isChipText(t) { const v = normSpaces(t).replace(/\s+/g, ' ').trim(); return !!v && cfg.chipLinePattern.test(v); }
+    // v1.3.9: drop trailing lines that are only clock times / status words (any number, blank lines
+    // between). Keeps at least the first line, so a message that IS just "9:07 AM" survives.
+    function stripTrailingChips(text) {
+      const lines = String(text || '').split('\n');
+      let end = lines.length;
+      while (end > 1 && (!lines[end - 1].trim() || isChipText(lines[end - 1]))) end--;
+      if (end === lines.length) return text;
+      // only strip if something real remains (the first kept line is not itself a chip-only body)
+      const kept = lines.slice(0, end);
+      if (!kept.some(l => l.trim() && !isChipText(l))) return kept.filter(l => l.trim())[0] || text;
+      return kept.join('\n').replace(/\n+$/, '');
+    }
     function extractText(textEl) {
-      const parts = [];
+      const parts = [];   // strings, or {chip: text} for chip-only elements (kept only if not trailing)
       function walk(node) {
         for (let c = node.firstChild; c; c = c.nextSibling) {
           if (c.nodeType === 3) { parts.push(c.nodeValue); continue; }
@@ -1457,6 +1481,10 @@ chrome.runtime.onStartup.addListener(boot);
           if (c.tagName === 'BR') { parts.push('\n'); continue; }
           if (isStripEl(c)) continue;
           const block = cfg.blockTags.includes(c.tagName);
+          if (!c.shadowRoot && isChipText(c.textContent)) {
+            parts.push({ chip: (block ? '\n' : '') + c.textContent + (block ? '\n' : '') });
+            continue;
+          }
           if (block) parts.push('\n');
           if (c.shadowRoot) walk(c.shadowRoot);
           walk(c);
@@ -1464,9 +1492,18 @@ chrome.runtime.onStartup.addListener(boot);
         }
       }
       walk(textEl);
-      let text = parts.join('').replace(/[\u00a0\u202f]/g, ' ').replace(/[ \t]+/g, ' ');
+      // A chip element counts as real text unless everything after it is whitespace/chips and some
+      // real (non-chip) text comes before it.
+      let lastReal = -1;
+      parts.forEach((p, i) => { if (typeof p === 'string' && p.trim()) lastReal = i; });
+      // A body that is ONLY chips (the owner typed just "9:07 AM", wrapped in its own span) keeps the
+      // first one and drops the copies X appends after it.
+      const firstChip = lastReal >= 0 ? -1 : parts.findIndex(p => typeof p !== 'string');
+      const out = parts.map((p, i) => (typeof p === 'string' ? p
+        : (lastReal >= 0 ? (i > lastReal ? '' : p.chip) : (i === firstChip ? p.chip : ''))));
+      let text = normSpaces(out.join('')).replace(/[ \t]+/g, ' ');
       text = text.split('\n').map(l => l.trim()).join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '');
-      return text;
+      return stripTrailingChips(text);
     }
 
     // ---------- per-entry analysis ----------
@@ -1853,6 +1890,8 @@ chrome.runtime.onStartup.addListener(boot);
     return {
       config: cfg,
       doc,
+      extractText,                 // v1.3.9: exposed for unit tests (pure, no side effects)
+      stripTrailingChips,
       start() {
         lastUrl = getContextUrl();
         observer = new MO(onMutations);
@@ -2047,11 +2086,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=4a3a1035f3d1ab768dc7abd3b2826262e9a77ec8ca2e0e54ba3fe035fb65d03b nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=b807f69edddbead5e1d666c41acad238bcba32e1f040d63019c86662d2af152d nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.3.8",
+  "version": "1.3.9",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open chat page only; never posts, types, or calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -2234,10 +2273,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=89b0b44f5a8e590ee5481c70078a189ba221aeb43054ee602d204894ef989ba0 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=c343fc99da27a2468505f3ef29236d3f4034da9e66f279fd6cf997039c200ce0 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.3.8.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.3.9.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -2788,6 +2827,9 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         return refuse('not the relay conversation')
     if not isinstance(text, str) or not text.strip():
         return refuse('empty text')
+    # v1.3.9: drop X Chat time/status chips an older extension may have appended ("hi\n9:07 AM\n\n9:07 AM").
+    text = rc.strip_trailing_chips(text)
+    quoted = rc.strip_trailing_chips(quoted)
     if len(text) > MAX_TEXT:
         return refuse('text too long', textLength=len(text))
     oc = parse_owner_command(text)            # /who /pause /resume /help /add /test run even while paused (item 2)
@@ -3037,10 +3079,10 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=d891179b6791e290bee3ac14005eeada0896a93478ad05614ee773ef00be294e nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=8d1e40c26b96b66827838514ca7d3ec7673db75fada9415bc4aefa48a409e3c7 nl=1
 #!/usr/bin/python3
 """
-iMessage Relay v1.3.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.3.9: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -3976,9 +4018,9 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=741e39db3e426615e60cf524b55e5c3994f11b107b965ed6ee9ae3d9ecba4757 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=b0f6b149aacf4e2b5a27ecc266a015b3118cc79f396d43c67e74535feab584d2 nl=1
 """
-iMessage Relay v1.3.8: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.3.9: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -4002,7 +4044,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.3.8'
+VERSION = '1.3.9'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -4072,6 +4114,38 @@ CONV_RE = re.compile(r'^[A-Za-z0-9:_.-]{3,120}$')
 HHMM_RE = re.compile(r'^([01]?[0-9]|2[0-3]):([0-5][0-9])$')
 LABEL_BAD_RE = re.compile(r'[:$`"\\\x00-\x1f\x7f]')   # strip risky metachars + controls; apostrophes kept (labels are argv-only)
 MAX_LABEL = 24
+
+# v1.3.9 defense in depth: X Chat renders the bubble time as plain spans inside the message text, and
+# an older extension appended it to the reply ("hi\n9:07 AM\n\n9:07 AM"). A chip line is only a clock
+# time ("9:07 AM", "21:07", "9:07 p.m.") and/or a status word (Edited/Sent/Seen/Delivered). Only
+# TRAILING chip lines are removed (any number, blank lines between); clock times inside the message
+# are never touched, and a message that is nothing but a time keeps its first line.
+_CHIP_LINE_RE = re.compile(
+    r'^(?:(?:\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]\.?\s?m\.?)?|edited|sent|seen|delivered)'
+    r'(?:\s*[\u00b7\u2022,|\-\u2013\u2014]?\s*)?)+$', re.IGNORECASE)
+_SPACE_TRANS = {ord(c): ' ' for c in '\u00a0\u202f\u2009\u200a\u2007'}
+_SPACE_TRANS.update({ord(c): None for c in '\u200b\u200c\u200d\u2060\u200e\u200f\ufeff'})
+
+
+def _is_chip_line(line):
+    v = ' '.join(str(line or '').translate(_SPACE_TRANS).split())
+    return bool(v) and bool(_CHIP_LINE_RE.match(v))
+
+
+def strip_trailing_chips(text):
+    """Remove trailing X Chat time/status chip lines from an outgoing reply (see _CHIP_LINE_RE)."""
+    if not isinstance(text, str) or '\n' not in text:
+        return text
+    lines = text.split('\n')
+    end = len(lines)
+    while end > 1 and (not lines[end - 1].strip() or _is_chip_line(lines[end - 1])):
+        end -= 1
+    if end == len(lines):
+        return text
+    kept = lines[:end]
+    if not any(l.strip() and not _is_chip_line(l) for l in kept):
+        return next((l for l in kept if l.strip()), text)
+    return '\n'.join(kept).rstrip('\n')
 
 
 # ---------- handles ----------
@@ -4986,8 +5060,8 @@ def __getattr__(name):
         return getattr(relay_echo, name)
     raise AttributeError("module 'relay_common' has no attribute %r" % name)
 @@@@ END
-@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=30bcde6fca40b41fb61b152d303673fcb08982db8db7c6816154fe6aebf34431 nl=1
-"""iMessage Relay v1.3.8 -- conversational addressing (directive parsing).
+@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=a867831b4789239fb9f074465d1c151dcd4622e8cb88dab227ee98a4efa94e73 nl=1
+"""iMessage Relay v1.3.9 -- conversational addressing (directive parsing).
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.parse_directive, rc.DIRECTIVE_DICT_WORDS, ...); relay_common re-exports these
 names lazily. Do not import relay_directive before relay_common.
@@ -5111,8 +5185,8 @@ def parse_directive(text, cfg, directory=None):
                 return h, text, 'unknown_handle', 'handle', ''
     return None, text, 'none', '', ''
 @@@@ END
-@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=64ef8e7f202354b882c5ba78208261c4edbf57e5e93c7c91f4f554e823180781 nl=1
-"""iMessage Relay v1.3.8 -- echo guard + bot-output detection.
+@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=06ae7eed47edfc0a6eb342be4fbfde8b76d4a9b4724f36e0b210df05668696e8 nl=1
+"""iMessage Relay v1.3.9 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
 these names lazily. Do not import relay_echo before relay_common."""
@@ -5233,8 +5307,8 @@ def is_echoed_inbound(text, prefix_stripped=None, at=None, path=None, handle='')
             return True
     return False
 @@@@ END
-@@@@ FILE mac-helper/relay_send.py mode=644 sha256=a59efe6e2b84d6b5873d5b2f73a837148d0ca9a21b7b10afecd827bc2275bd05 nl=1
-"""iMessage Relay v1.3.8 -- delivery-proof queries and Messages.app sending.
+@@@@ FILE mac-helper/relay_send.py mode=644 sha256=fde9c2f8c06b572d8584c5358b3245cc25ca5aa8682fc518401dc92b1f3b1634 nl=1
+"""iMessage Relay v1.3.9 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
@@ -5446,9 +5520,9 @@ def open_messages_hidden(runner=subprocess.run):
     except Exception:
         return False
 @@@@ END
-@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=54b7114d4cd51dc89d930d55565174233d0c8c898c2d9e097b80c1e7e7581904 nl=1
+@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=34dcfaa94bcc522fffaa652a570421be499407a582725ca1577a6b5cf20d9e11 nl=1
 """
-iMessage Relay v1.3.8: guided-setup helpers shared by relayctl and the watcher.
+iMessage Relay v1.3.9: guided-setup helpers shared by relayctl and the watcher.
 
   detect_owner_handles(con, cc)   the owner's OWN iMessage/SMS addresses, read from chat.db rows the
                                   owner sent (message.account / destination_caller_id). Handles only;
@@ -5600,9 +5674,9 @@ def apply_setup(values, token=None):
     rc.with_host_lock(_do)
     return out
 @@@@ END
-@@@@ FILE mac-helper/relay_test.py mode=644 sha256=3e9bd915c31e3d1147ab86c121e864e1c7d056f4be97ec7cfd6960a59e2c9c99 nl=1
+@@@@ FILE mac-helper/relay_test.py mode=644 sha256=e62ae4ebdbb6a363cf6c1e0d84526c411fbe28003b1f58af133665407bb2eca6 nl=1
 """
-iMessage Relay v1.3.8: the /test end-to-end check (runs inside the native host).
+iMessage Relay v1.3.9: the /test end-to-end check (runs inside the native host).
 
 The owner types "/test" (or "/test send") in the relay chat. The extension intercepts it before any
 reply routing and asks the host for {type:"test"}. The host then checks, each with its own timeout:
@@ -6665,9 +6739,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=09e6f425cf0eba5b0c00eb0d6ac6148cd5dd37bb57b220870d6d9cfb5b6e04e5 nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=8ced61200051c08408843901764c478f2e7f90e6acdc8a7237d1f4ccde0f1f92 nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.3.8 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.3.9 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -7221,6 +7295,80 @@ if __name__ == '__main__':
   [" mailto:Someone@Example.com ", "someone@example.com"],
   ["", ""]
 ]
+@@@@ END
+@@@@ FILE tests/js/chips.test.js mode=644 sha256=aecce5f677ea626f3cf20ece930227049f908d42a64b9884f4de35eb3f2ac764 nl=1
+/* v1.3.9: X Chat time/status chips rendered as plain spans inside message-text-<uuid> must never
+ * reach the iMessage body. Run: NODE_PATH=/path/to/node_modules node tests/js/chips.test.js */
+'use strict';
+const assert = require('assert');
+const { JSDOM } = require('jsdom');
+const { createRelayDetector } = require('../../extension/content.js');
+
+let passed = 0, failed = 0;
+function test(name, fn) {
+  try { fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+const dom = new JSDOM('<!doctype html><body></body>', { url: 'https://x.com/i/chat/111-222' });
+const { window } = dom;
+const doc = window.document;
+const det = createRelayDetector({ window, document: doc, log: () => {} });
+function ex(html) {
+  const el = doc.createElement('span');
+  el.setAttribute('data-testid', 'message-text-df48633d-6588-4b18-bc77-000000000001');
+  el.innerHTML = html;
+  return det.extractText(el);
+}
+const S = det.stripTrailingChips;
+
+// --- post-process (string level) ---
+test('exact delivered example: love-you + doubled 9:07 AM', () => {
+  assert.strictEqual(S('Good morning - love you so!!\u2764\ufe0f\n9:07 AM\n\n9:07 AM'), 'Good morning - love you so!!\u2764\ufe0f');
+});
+test('exact earlier example: test + doubled 10:54 PM', () => {
+  assert.strictEqual(S('test\n10:54 PM\n\n10:54 PM'), 'test');
+});
+test('24h clock, seconds, lowercase/dotted am-pm, status words, any repetition', () => {
+  assert.strictEqual(S('hi\n21:07'), 'hi');
+  assert.strictEqual(S('hi\n21:07:33\n\n\n21:07:33\n21:07:33'), 'hi');
+  assert.strictEqual(S('hi\n9:07 a.m.\n9:07pm'), 'hi');
+  assert.strictEqual(S('hi\nEdited\n\nSent\nSeen\nDelivered'), 'hi');
+  assert.strictEqual(S('hi\nEdited \u00b7 9:07 AM\n\n9:07\u202fAM'), 'hi');
+});
+test('clock times inside the message are kept', () => {
+  assert.strictEqual(S('meet at 9:07 AM ok?\n9:07 AM'), 'meet at 9:07 AM ok?');
+  assert.strictEqual(S('line one\n9:07 AM\nline three\n9:08 AM\n\n9:08 AM'), 'line one\n9:07 AM\nline three');
+  assert.strictEqual(S('see you at 10:54 PM'), 'see you at 10:54 PM');
+  assert.strictEqual(S('I sent it'), 'I sent it');
+});
+test('a message that is only a time keeps its first line; plain text untouched', () => {
+  assert.strictEqual(S('9:07 AM\n9:07 AM\n\n9:07 AM'), '9:07 AM');
+  assert.strictEqual(S('9:07 AM'), '9:07 AM');
+  assert.strictEqual(S('Sent'), 'Sent');
+  assert.strictEqual(S('hello\n\nworld'), 'hello\n\nworld');
+});
+
+// --- DOM level (X's plain-span chips) ---
+test('DOM: visible + screen-reader time spans after the text are dropped', () => {
+  assert.strictEqual(ex('<span>Good morning - love you so!!\u2764\ufe0f</span><div><span>9:07 AM</span></div><div><span aria-hidden="true">9:07 AM</span></div>'),
+    'Good morning - love you so!!\u2764\ufe0f');
+  assert.strictEqual(ex('test<div>10:54 PM</div><div></div><div>10:54 PM</div>'), 'test');
+  assert.strictEqual(ex('test<span>10:54 PM</span><span class="sr-only">10:54\u202fPM</span>'), 'test');
+  assert.strictEqual(ex('hi<div><span>Edited</span><span>9:07 AM</span></div><span>Seen</span>'), 'hi');
+});
+test('DOM: a time span in the middle of the text is kept', () => {
+  assert.strictEqual(ex('meet at <span>9:07 AM</span> sharp<div>9:07 AM</div>'), 'meet at 9:07 AM sharp');
+  assert.strictEqual(ex('<div>first</div><div>9:07 AM</div><div>last</div><div>9:09 AM</div><div>9:09 AM</div>'), 'first\n\n9:07 AM\n\nlast');   // same block spacing as plain divs
+});
+test('DOM: a body that is only a time keeps one copy', () => {
+  assert.strictEqual(ex('<span>9:07 AM</span><span>9:07 AM</span><span>9:07 AM</span>'), '9:07 AM');
+});
+test('DOM: old markup still works (<time>, testid chips, line breaks)', () => {
+  assert.strictEqual(ex('a<br>b<div>c</div><time datetime="2026-10-19T14:07:00Z">9:07 AM</time><span data-testid="read-receipt">Seen</span>'), 'a\nb\nc');
+});
+
+console.log(passed + ' passed, ' + failed + ' failed (v1.3.9 chips)');
+process.exit(failed ? 1 : 0);
 @@@@ END
 @@@@ FILE tests/js/detect.test.js mode=644 sha256=bfd48959e69097f29256f5b3b405fed6ac501aefeb09cc7c986a9d47a03fe388 nl=1
 /* jsdom test for content.js detection logic (v1.3.2: uuid-only). Run:
@@ -8234,7 +8382,7 @@ t('T10 no twid, no switcher, account-nav avatar outside any panel -> true', chec
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=51bb52fba2d9402c26046af19f5ea244fcf4ebce62f766f739d68b3f01dbc4c6 nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=7863f695e6ba31dfa54c7b7a13fb2ffc2590c0f0282673877dbc14580080fef3 nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -8289,7 +8437,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.3.8');
+  assert.strictEqual(m.version, '1.3.9');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -8685,7 +8833,7 @@ class RosterTolerance(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_host.py mode=644 sha256=74f55f6d148a827ca67a8a3e83e02654d436b787e073e5111190b259c522bc26 nl=1
+@@@@ FILE tests/py/test_host.py mode=644 sha256=e67adb9df764dcf293bd2e642b389f7586938e6fc8b05fbb490ead28ac43d6a7 nl=1
 """Native host: framing, get_config, send gating (paused / relay chat / routing / normalization /
 rate limit), confirmations and "who is this for?" webhooks, dry run, -1712 retry, self-test, and
 an end-to-end run of the real script."""
@@ -8749,7 +8897,7 @@ class GetConfig(Base):
         r = self.h.handle_request({'type': 'get_config'}, cfg=self.cfg(ownerXHandle='OwnerAcct', senderXHandle='SenderBot',
                                                                         ownerXUserId='99887766', webhookToken='tok'), now=self.clock.now)
         self.assertEqual(r['ok'], True)
-        self.assertEqual(r['version'], '1.3.8')
+        self.assertEqual(r['version'], '1.3.9')
         self.assertEqual((r['paused'], r['dryRun']), (False, True))
         self.assertEqual(r['contacts'], [{'name': 'Test Contact', 'label': 'Test', 'handle': '+15555550123'}])
         self.assertEqual(r['relayConversationId'], CONV)
@@ -12507,6 +12655,99 @@ class RelayctlSetup(Base):
         finally:
             sys.stdout = old
         self.assertEqual((rc1, rc2, rc3), (0, 0, 1))
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
+@@@@ FILE tests/py/test_v139.py mode=644 sha256=27b741e4a60979e6a1a57ce9c78c5df55386fdb74ae722120a3c6ac8a2a89f70 nl=1
+"""v1.3.9: X Chat time/status chips ("9:07 AM", shown twice) appended to a reply by an older extension
+are stripped by the native host before Messages.app ever sees the text. Only trailing chip lines go;
+clock times inside the message stay."""
+import unittest
+
+from helpers import fresh, tmpdir, read_log, FakeClock, FakeRunner
+
+CONV = '1111-2222'
+
+
+class StripUnit(unittest.TestCase):
+    def setUp(self):
+        self.rc = fresh(tmpdir()).rc
+
+    def s(self, t):
+        return self.rc.strip_trailing_chips(t)
+
+    def test_exact_examples(self):
+        self.assertEqual(self.s('Good morning - love you so!!\u2764\ufe0f\n9:07 AM\n\n9:07 AM'),
+                         'Good morning - love you so!!\u2764\ufe0f')
+        self.assertEqual(self.s('test\n10:54 PM\n\n10:54 PM'), 'test')
+
+    def test_variants(self):
+        self.assertEqual(self.s('hi\n21:07'), 'hi')
+        self.assertEqual(self.s('hi\n21:07:33\n\n\n21:07:33\n21:07:33'), 'hi')
+        self.assertEqual(self.s('hi\n9:07 a.m.\n9:07pm'), 'hi')
+        self.assertEqual(self.s('hi\n9:07\u202fAM\n\n9:07\u00a0AM'), 'hi')
+        self.assertEqual(self.s('hi\nEdited\n\nSent\nSeen\nDelivered'), 'hi')
+        self.assertEqual(self.s('hi\nEdited \u00b7 9:07 AM\n\n9:07 AM\n'), 'hi')
+
+    def test_times_inside_message_kept(self):
+        self.assertEqual(self.s('meet at 9:07 AM ok?\n9:07 AM'), 'meet at 9:07 AM ok?')
+        self.assertEqual(self.s('line one\n9:07 AM\nline three\n9:08 AM\n\n9:08 AM'), 'line one\n9:07 AM\nline three')
+        self.assertEqual(self.s('see you at 10:54 PM'), 'see you at 10:54 PM')
+        self.assertEqual(self.s('hello\n\nworld'), 'hello\n\nworld')
+        self.assertEqual(self.s('I sent it\nseen it?'), 'I sent it\nseen it?')
+
+    def test_time_only_message_keeps_one(self):
+        self.assertEqual(self.s('9:07 AM\n9:07 AM\n\n9:07 AM'), '9:07 AM')
+        self.assertEqual(self.s('9:07 AM'), '9:07 AM')
+        self.assertEqual(self.s('Sent'), 'Sent')
+        self.assertEqual(self.s(''), '')
+        self.assertIsNone(self.s(None))
+
+
+class HostSendPath(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tmpdir()
+        self.m = fresh(self.tmp)
+        self.clock = FakeClock()
+        self.raw = {'dryRun': True, 'relayConversationId': CONV,
+                    'contacts': [{'name': 'Test Contact', 'handle': '15555550123'}],
+                    'ownerHandle': '+15555550199', 'confirmSends': False, 'confirmGuessed': 'off'}
+        self.m.rc.record_inbound('+15555550123', self.clock.t - 60)
+
+    def send(self, text, runner, **over):
+        cfg = self.m.rc.sanitize_config(dict(self.raw, **over))
+        return self.m.host.handle_request({'type': 'send', 'text': text, 'conversationId': CONV}, cfg=cfg, runner=runner,
+                                          sleeper=self.clock.sleep, now=self.clock.now, poster=lambda *a, **k: True)
+
+    def test_old_extension_chips_never_reach_messages(self):
+        for i, (raw, want) in enumerate([('Good morning - love you so!!\u2764\ufe0f\n9:07 AM\n\n9:07 AM',
+                                          'Good morning - love you so!!\u2764\ufe0f'),
+                                         ('test\n10:54 PM\n\n10:54 PM', 'test'),
+                                         ('call me at 9:30 PM\n9:07 PM', 'call me at 9:30 PM')]):
+            self.clock.t += 120
+            r = FakeRunner([(0, '')])
+            resp = self.send(raw, r, dryRun=False)
+            self.assertTrue(resp['ok'], resp)
+            osa = [c for c in r.calls if c[0] == '/usr/bin/osascript']
+            self.assertEqual(len(osa), 1)
+            self.assertEqual(osa[0][2], want)
+        log = read_log()
+        self.assertNotIn('love you', log)
+        self.assertNotIn('9:07', log)
+
+    def test_name_prefix_still_routes_after_strip(self):
+        r = FakeRunner([(0, '')])
+        resp = self.send('Test: on my way\n9:07 AM\n\n9:07 AM', r, dryRun=False)
+        self.assertTrue(resp['ok'], resp)
+        self.assertEqual([c for c in r.calls if c[0] == '/usr/bin/osascript'][0][2], 'on my way')
+
+    def test_dry_run_sends_nothing(self):
+        r = FakeRunner([])
+        resp = self.send('test\n10:54 PM\n\n10:54 PM', r)
+        self.assertTrue(resp['ok'] and resp['dryRun'], resp)
+        self.assertEqual(r.count('/usr/bin/osascript'), 0)
 
 
 if __name__ == '__main__':

@@ -17,7 +17,7 @@ if command -v node >/dev/null 2>&1 && ! node -e "require('jsdom')" >/dev/null 2>
   _gr="$(npm root -g 2>/dev/null)"; [[ -n "$_gr" ]] && export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gr"
 fi
 if command -v node >/dev/null 2>&1 && node -e "require('jsdom')" >/dev/null 2>&1; then
-  for t in detect frames owner native guess e2etest smoke-chrome; do
+  for t in detect frames owner native guess e2etest chips smoke-chrome; do
     echo "== JS: $t =="
     node "tests/js/$t.test.js" 2>&1 | grep -E 'passed|FAIL|PASS chrome' ; [[ ${PIPESTATUS[0]} -eq 0 ]] || fail=1
   done

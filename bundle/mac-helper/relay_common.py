@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.3.8: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.3.9: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -23,7 +23,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.3.8'
+VERSION = '1.3.9'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -93,6 +93,38 @@ CONV_RE = re.compile(r'^[A-Za-z0-9:_.-]{3,120}$')
 HHMM_RE = re.compile(r'^([01]?[0-9]|2[0-3]):([0-5][0-9])$')
 LABEL_BAD_RE = re.compile(r'[:$`"\\\x00-\x1f\x7f]')   # strip risky metachars + controls; apostrophes kept (labels are argv-only)
 MAX_LABEL = 24
+
+# v1.3.9 defense in depth: X Chat renders the bubble time as plain spans inside the message text, and
+# an older extension appended it to the reply ("hi\n9:07 AM\n\n9:07 AM"). A chip line is only a clock
+# time ("9:07 AM", "21:07", "9:07 p.m.") and/or a status word (Edited/Sent/Seen/Delivered). Only
+# TRAILING chip lines are removed (any number, blank lines between); clock times inside the message
+# are never touched, and a message that is nothing but a time keeps its first line.
+_CHIP_LINE_RE = re.compile(
+    r'^(?:(?:\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]\.?\s?m\.?)?|edited|sent|seen|delivered)'
+    r'(?:\s*[\u00b7\u2022,|\-\u2013\u2014]?\s*)?)+$', re.IGNORECASE)
+_SPACE_TRANS = {ord(c): ' ' for c in '\u00a0\u202f\u2009\u200a\u2007'}
+_SPACE_TRANS.update({ord(c): None for c in '\u200b\u200c\u200d\u2060\u200e\u200f\ufeff'})
+
+
+def _is_chip_line(line):
+    v = ' '.join(str(line or '').translate(_SPACE_TRANS).split())
+    return bool(v) and bool(_CHIP_LINE_RE.match(v))
+
+
+def strip_trailing_chips(text):
+    """Remove trailing X Chat time/status chip lines from an outgoing reply (see _CHIP_LINE_RE)."""
+    if not isinstance(text, str) or '\n' not in text:
+        return text
+    lines = text.split('\n')
+    end = len(lines)
+    while end > 1 and (not lines[end - 1].strip() or _is_chip_line(lines[end - 1])):
+        end -= 1
+    if end == len(lines):
+        return text
+    kept = lines[:end]
+    if not any(l.strip() and not _is_chip_line(l) for l in kept):
+        return next((l for l in kept if l.strip()), text)
+    return '\n'.join(kept).rstrip('\n')
 
 
 # ---------- handles ----------

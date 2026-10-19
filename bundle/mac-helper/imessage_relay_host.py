@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.3.8.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.3.9.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -551,6 +551,9 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         return refuse('not the relay conversation')
     if not isinstance(text, str) or not text.strip():
         return refuse('empty text')
+    # v1.3.9: drop X Chat time/status chips an older extension may have appended ("hi\n9:07 AM\n\n9:07 AM").
+    text = rc.strip_trailing_chips(text)
+    quoted = rc.strip_trailing_chips(quoted)
     if len(text) > MAX_TEXT:
         return refuse('text too long', textLength=len(text))
     oc = parse_owner_command(text)            # /who /pause /resume /help /add /test run even while paused (item 2)

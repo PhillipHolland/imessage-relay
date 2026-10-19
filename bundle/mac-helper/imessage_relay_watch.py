@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-iMessage Relay v1.3.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.3.9: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
