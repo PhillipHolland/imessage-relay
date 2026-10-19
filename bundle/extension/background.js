@@ -1,5 +1,5 @@
 /*
- * iMessage Relay v1.4.0: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.1: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -27,6 +27,16 @@ const CONFIG_TTL_MS = 30 * 1000;
 const DEDUPE_MS = 10 * 60 * 1000;
 const GUESS_WINDOW_MS = 2 * 60 * 1000;   // item 3: the owner has 2 minutes to confirm a guessed reply
 const YES_RE = /^\s*\/yes\b\s*(.*)$/i; // "/yes" or "/yes <Name>" confirms the pending guessed reply
+// v1.4.1: while a confirmation is pending, a plain "yes"/"ok"/"send"/"do it" confirms and "no"/"cancel"
+// cancels (any case, punctuation or emoji around it). Never sent as a text while a prompt is pending.
+const CONFIRM_WORDS = ['yes', 'y', 'yep', 'yeah', 'yes please', 'ok', 'okay', 'send', 'send it', 'do it'];
+const CANCEL_WORDS = ['no', 'n', 'nope', 'cancel', 'cancel it', 'dont', "don't", 'dont send', "don't send"];
+function bareConfirmWord(text) {
+  const t = String(text || '').toLowerCase().replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter(Boolean).join(' ');
+  if (CONFIRM_WORDS.indexOf(t) >= 0) return 'yes';
+  if (CANCEL_WORDS.indexOf(t) >= 0) return 'no';
+  return null;
+}
 // v1.3.8 /test: an end-to-end check. Exactly "/test" or "/test send" (send = also text the owner's OWN
 // number); anything else after /test is not a test command. Never routed as a reply, never texts a contact.
 const TEST_RE = /^\s*\/test(?:\s+(send))?\s*$/i;
@@ -216,6 +226,12 @@ async function clearPendingGuess() {
 
 // item 3: the owner typed "/yes" (optionally "/yes <Name>"). Re-send the STORED text with confirmed:true
 // so the host skips the guess check. The raw "/yes" is never forwarded to the host.
+async function handleCancel(item, g) {
+  await clearPendingGuess();
+  await addEvent({ kind: 'reply', key: item.key, contactName: g.label || '', status: 'skipped', detail: 'cancelled' });
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_cancelled', label: g.label || '' }); } catch (e) { /* host may be down */ }
+}
+
 async function handleYes(item, nameArg) {
   const g = await getPendingGuess();
   if (!g || Date.now() - (g.at || 0) > GUESS_WINDOW_MS) {
@@ -350,6 +366,16 @@ async function handleItem(item) {
     await handleTest(item, tm[1]);
     return;
   }
+  const bw = bareConfirmWord(item.text);
+  if (bw) {                                   // v1.4.1: plain "yes" / "no" answers a pending reply prompt
+    const g = await getPendingGuess();
+    if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
+      if (await isDuplicate(item.key)) return;
+      if (bw === 'yes') await handleYes(item, '');
+      else await handleCancel(item, g);
+      return;
+    }                                         // nothing pending here: the host checks its own prompts
+  }
   const ym = YES_RE.exec(String(item.text || ''));
   if (ym) {                                   // "/yes [Name]" confirms a pending guessed reply (item 3)
     if (await isDuplicate(item.key)) return;
@@ -375,10 +401,10 @@ async function handleItem(item) {
       try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: 2 }); } catch (e) { /* tests */ }
       status = 'needs-confirm';
       detail = (res.reason === 'new_contact')
-        ? 'text ' + (res.label || 'them') + ' (from Contacts)? say "/yes" within 2 min'
+        ? 'text ' + (res.label || 'them') + ' (from Contacts)? reply yes within 2 min'
         : (res.reason === 'directive')
-        ? 'send to ' + (res.label || 'them') + '? say "/yes" within 2 min'
-        : 'reply to ' + (res.label || 'them') + '? say "/yes" within 2 min';
+        ? 'send to ' + (res.label || 'them') + '? reply yes within 2 min'
+        : 'reply to ' + (res.label || 'them') + '? reply yes within 2 min';
     }
     else if (res.needsTarget) { status = 'needs-name'; detail = res.error || "Who's this for? Start with a name."; }
     else if (!res.ok) { status = 'refused'; detail = res.error || 'host refused'; }

@@ -16,7 +16,8 @@ Every command prints one JSON object. Message bodies are never printed or stored
   relayctl set KEY VALUE                  relayConversationId, footer, webhookUrl, ownerHandle,
                                           ownerXHandle, ownerXUserId, senderXHandle, maxSendsPerMinute, deliveryCheck,
                                           pollSeconds, defaultCountryCode, replyWindowMinutes,
-                                          ambiguousSeconds, confirmSends, rosterDays, skipShortCodes
+                                          ambiguousSeconds, confirmSends, rosterDays, skipShortCodes,
+                                          confirmNewContacts exact-skip|always (v1.4.1)
   relayctl set-webhook --url URL --token-stdin   set webhookUrl + webhookToken together; the key is
                                           read from stdin so it never lands in argv or shell history
   relayctl contacts                       list opted-in contacts with their labels
@@ -59,6 +60,7 @@ SETTABLE = {
     'senderXHandle': str, 'ownerXUserId': str, 'maxSendsPerMinute': int, 'deliveryCheck': 'bool', 'pollSeconds': int,
     'defaultCountryCode': str, 'relayConversationId': str, 'replyWindowMinutes': int, 'ambiguousSeconds': int,
     'confirmSends': 'bool', 'rosterDays': int, 'skipShortCodes': 'bool', 'redactCodes': 'bool',
+    'confirmNewContacts': ('exact-skip', 'always'),   # v1.4.1
 }
 
 
@@ -122,6 +124,10 @@ def cmd_set(key, value):
             v = int(value)
         except ValueError:
             raise CtlError('%s needs a number' % key)
+    elif isinstance(typ, tuple):
+        v = str(value).strip().lower()
+        if v not in typ:
+            raise CtlError('%s must be one of: %s' % (key, ', '.join(typ)))
     else:
         v = str(value)
     if key == 'ownerHandle' and v and not rc.valid_handle(rc.normalize_handle(v)):

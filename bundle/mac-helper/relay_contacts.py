@@ -1,4 +1,4 @@
-"""iMessage Relay v1.4.0 -- look a name up in the Mac's Contacts (for a reply to someone new).
+"""iMessage Relay v1.4.1 -- look a name up in the Mac's Contacts (for a reply to someone new).
 
 When the owner starts a reply with a name that is on no relay list ("Austin Robinson: hey"), the host
 asks the watcher (it holds Full Disk Access, which covers the Contacts database) to look that name up.
@@ -67,13 +67,15 @@ def best_handle(handles, cc='1'):
 
 def lookup(name, cfg, globs=None):
     """Exact full name (case/space-insensitive), else a unique-or-several first-name match.
-    Returns {'ok':True,'matches':[{'name','handle'}]} (at most MAX_RESULTS). The owner's own handles
-    are never returned."""
+    Returns {'ok':True,'matches':[{'name','handle','exact','handles'}]} (at most MAX_RESULTS): `exact` is a
+    full-name match, `handles` every valid number/email on that card (v1.4.1: one card with one handle
+    and an exact name may be texted without a /yes). The owner's own handles are never returned."""
     q = ' '.join(str(name or '').lower().split())
     if not q:
         return {'ok': True, 'matches': []}
     people = _people(globs or _globs()).values()
     exact = [p for p in people if ' '.join(p['name'].lower().split()) == q]
+    is_exact = bool(exact) and ' ' in q        # a one-word "name" is never an exact full-name match
     hits = exact or ([p for p in people if p['first'].lower() == q] if ' ' not in q else [])
     own = rc.owner_handle_set(cfg)
     out, seen = [], set()
@@ -82,7 +84,14 @@ def lookup(name, cfg, globs=None):
         if not h or h in own or h in seen:
             continue
         seen.add(h)
-        out.append({'name': re.sub(r'[\x00-\x1f\x7f]', ' ', p['name'])[:60], 'handle': h})
+        cc = cfg.get('defaultCountryCode', '1')
+        hs = []
+        for kind, label, v in p['handles']:
+            n = rc.normalize_handle(v, cc)
+            if rc.valid_handle(n) and n not in own and n not in [x['handle'] for x in hs]:
+                hs.append({'handle': n, 'label': re.sub(r'[^A-Za-z ]', '', label).strip().lower()[:12]})
+        out.append({'name': re.sub(r'[\x00-\x1f\x7f]', ' ', p['name'])[:60], 'handle': h, 'exact': is_exact,
+                    'handles': hs})
         if len(out) >= MAX_RESULTS:
             break
     return {'ok': True, 'matches': out}

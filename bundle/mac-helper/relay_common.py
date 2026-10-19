@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.4.0: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.1: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -23,7 +23,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.0'
+VERSION = '1.4.1'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -85,6 +85,7 @@ DEFAULT_CONFIG = {
     'autoReopenMessages': False,
     'pollSeconds': 10,
     'defaultCountryCode': '1',
+    'confirmNewContacts': 'exact-skip',   # v1.4.1: exact-skip (an exact full name, one card, one number: send) | always
 }
 
 E164_RE = re.compile(r'^\+[1-9][0-9]{6,14}$')
@@ -260,6 +261,8 @@ def sanitize_config(user):
     cfg['redactCodes'] = truthy(cfg.get('redactCodes'), True)
     cfg['relayAll'] = truthy(cfg.get('relayAll'), False)
     cfg['skipShortCodes'] = truthy(cfg.get('skipShortCodes'), True)
+    cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()
+    cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
     mute = []
     for m in cfg.get('mute') if isinstance(cfg.get('mute'), list) else []:
         if not isinstance(m, str) or not m.strip():

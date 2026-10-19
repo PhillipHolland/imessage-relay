@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.0, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.1, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=0b0efb5d14ee7577edb4973dc1be756c49eca4d7c47df241b3df8ba4a8d32935 nl=1
-# iMessage Relay v1.4.0
+@@@@ FILE README.md mode=644 sha256=7933e64beb9b60c1c27c4cfa088071bac7bbabc3dfd8b759920bf978dce8adb0 nl=1
+# iMessage Relay v1.4.1
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -39,9 +39,17 @@ Your reply in the relay chat (x.com in Chrome)
   contacts), nothing is sent and the bot asks "Who's this for? Start with a name, like Alex: …".
 - Full names work as the prefix ("Mary Ann Jones: hi"). A name that nobody on the relay list has
   ("Austin Robinson: hey") is never guessed: the Mac looks it up in your Contacts and asks first
-  ("Austin isn't on your relay list yet. Reply /add Austin <number>, or /yes within 2 min to text the
-  Austin Robinson in your Contacts (+1 •••0177)"). `/yes` sends "hey" and saves Austin as a contact.
-  Two matches list the names only. `/add Austin +1 555 555 0177` adds someone directly.
+  ("Austin isn't on your relay list yet. Reply yes within 2 min to text the Austin Robinson in your
+  Contacts (•••0177), or /add Austin <number>."). `yes` sends "hey" and saves Austin as a contact.
+  Two matches list the names only; a card with several numbers lists them masked.
+  v1.4.1: an **exact full name** ("Austin Robinson: hey", any case) that matches exactly one Contacts
+  card with exactly one number or email sends right away, saves the contact and reports
+  "→ Austin Robinson ✓ (new contact, •••0177)". `relayctl set confirmNewContacts always` asks every time
+  (default `exact-skip`). `/add Austin +1 555 555 0177` adds someone directly.
+- v1.4.1: while the relay is waiting for a confirmation (a reply prompt, `/block`, `/add`), a plain
+  `yes` / `y` / `yep` / `ok` / `send` / `do it` confirms and `no` / `cancel` cancels (any case, with
+  punctuation or emoji). Those words are never texted to anyone while a prompt is pending, nor within
+  10 minutes of one ("Nothing is waiting for a yes …"). With nothing pending, "ok" is an ordinary reply.
 - Contacts sharing a first name get distinct labels ("Alex R.", "Alex J."), or set your own
   with `relayctl label`.
 - Only contacts you opt in are relayed, unless you turn on **relay-all**
@@ -58,7 +66,7 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.0)
+## Limits (v1.4.1)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -103,8 +111,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.0 changes the extension slightly: the popup's
-wording for a Contacts confirmation; v1.3.9 changed it too) and press Cmd+R
+reload the extension card in chrome://extensions (v1.4.1 changes the extension: a plain "yes"/"no"
+answers a reply prompt; v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations
@@ -155,9 +163,9 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing","detail","at"}` (no message body)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=8db4af132cf5d0cfc28883deb46ca73d91115b89d7901e0995276bc45dd77cae nl=1
+@@@@ FILE install.sh mode=755 sha256=a1b35bb86d6af2d9469b0273f50a54a808648d1e0107ab5735d9570089a06922 nl=1
 #!/bin/bash
-# iMessage Relay v1.4.0 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
+# iMessage Relay v1.4.1 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
 # roster.json, and the existing "iMessage Relay Watcher" app (never rebuilt or re-signed, so
 # its Full Disk Access grant survives), and keeps the LaunchAgent pointing at that app.
@@ -586,7 +594,7 @@ cat <<NEXT
 Log (counts only, never message text): $LOGS/imessage-relay.log
 NEXT
 @@@@ END
-@@@@ FILE run_tests.sh mode=755 sha256=789dd56af45b1228a4e8569d65492c82f38cbbd7efb0c8b263724a691383d69a nl=1
+@@@@ FILE run_tests.sh mode=755 sha256=8a2d62179e3f3d368aab93b84ab6c28eeb3ef7e348fdcaf311d9060ed13f5373 nl=1
 #!/bin/bash
 # Runs every test. Needs python3 (3.9+); the JS tests also need node and jsdom
 # (NODE_PATH pointing at a node_modules with jsdom, or `npm i jsdom` here).
@@ -606,7 +614,7 @@ if command -v node >/dev/null 2>&1 && ! node -e "require('jsdom')" >/dev/null 2>
   _gr="$(npm root -g 2>/dev/null)"; [[ -n "$_gr" ]] && export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gr"
 fi
 if command -v node >/dev/null 2>&1 && node -e "require('jsdom')" >/dev/null 2>&1; then
-  for t in detect frames owner native guess e2etest chips smoke-chrome; do
+  for t in detect frames owner native guess yes e2etest chips smoke-chrome; do
     echo "== JS: $t =="
     node "tests/js/$t.test.js" 2>&1 | grep -E 'passed|FAIL|PASS chrome' ; [[ ${PIPESTATUS[0]} -eq 0 ]] || fail=1
   done
@@ -702,9 +710,9 @@ Also, by hand if you like:
   - System Settings > Privacy & Security > Automation -> turn off Messages for Google Chrome
 DONE
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=853d4f6b00be1028c4f35baeb8d8bc66e8cf0e8a8dc87495f57a092968764514 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=57f4b39bbe3d731051bff477354dd4ce1446b95347006472a5171a300d643d3b nl=1
 /*
- * iMessage Relay v1.4.0: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.1: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -732,6 +740,16 @@ const CONFIG_TTL_MS = 30 * 1000;
 const DEDUPE_MS = 10 * 60 * 1000;
 const GUESS_WINDOW_MS = 2 * 60 * 1000;   // item 3: the owner has 2 minutes to confirm a guessed reply
 const YES_RE = /^\s*\/yes\b\s*(.*)$/i; // "/yes" or "/yes <Name>" confirms the pending guessed reply
+// v1.4.1: while a confirmation is pending, a plain "yes"/"ok"/"send"/"do it" confirms and "no"/"cancel"
+// cancels (any case, punctuation or emoji around it). Never sent as a text while a prompt is pending.
+const CONFIRM_WORDS = ['yes', 'y', 'yep', 'yeah', 'yes please', 'ok', 'okay', 'send', 'send it', 'do it'];
+const CANCEL_WORDS = ['no', 'n', 'nope', 'cancel', 'cancel it', 'dont', "don't", 'dont send', "don't send"];
+function bareConfirmWord(text) {
+  const t = String(text || '').toLowerCase().replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter(Boolean).join(' ');
+  if (CONFIRM_WORDS.indexOf(t) >= 0) return 'yes';
+  if (CANCEL_WORDS.indexOf(t) >= 0) return 'no';
+  return null;
+}
 // v1.3.8 /test: an end-to-end check. Exactly "/test" or "/test send" (send = also text the owner's OWN
 // number); anything else after /test is not a test command. Never routed as a reply, never texts a contact.
 const TEST_RE = /^\s*\/test(?:\s+(send))?\s*$/i;
@@ -921,6 +939,12 @@ async function clearPendingGuess() {
 
 // item 3: the owner typed "/yes" (optionally "/yes <Name>"). Re-send the STORED text with confirmed:true
 // so the host skips the guess check. The raw "/yes" is never forwarded to the host.
+async function handleCancel(item, g) {
+  await clearPendingGuess();
+  await addEvent({ kind: 'reply', key: item.key, contactName: g.label || '', status: 'skipped', detail: 'cancelled' });
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_cancelled', label: g.label || '' }); } catch (e) { /* host may be down */ }
+}
+
 async function handleYes(item, nameArg) {
   const g = await getPendingGuess();
   if (!g || Date.now() - (g.at || 0) > GUESS_WINDOW_MS) {
@@ -1055,6 +1079,16 @@ async function handleItem(item) {
     await handleTest(item, tm[1]);
     return;
   }
+  const bw = bareConfirmWord(item.text);
+  if (bw) {                                   // v1.4.1: plain "yes" / "no" answers a pending reply prompt
+    const g = await getPendingGuess();
+    if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
+      if (await isDuplicate(item.key)) return;
+      if (bw === 'yes') await handleYes(item, '');
+      else await handleCancel(item, g);
+      return;
+    }                                         // nothing pending here: the host checks its own prompts
+  }
   const ym = YES_RE.exec(String(item.text || ''));
   if (ym) {                                   // "/yes [Name]" confirms a pending guessed reply (item 3)
     if (await isDuplicate(item.key)) return;
@@ -1080,10 +1114,10 @@ async function handleItem(item) {
       try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: 2 }); } catch (e) { /* tests */ }
       status = 'needs-confirm';
       detail = (res.reason === 'new_contact')
-        ? 'text ' + (res.label || 'them') + ' (from Contacts)? say "/yes" within 2 min'
+        ? 'text ' + (res.label || 'them') + ' (from Contacts)? reply yes within 2 min'
         : (res.reason === 'directive')
-        ? 'send to ' + (res.label || 'them') + '? say "/yes" within 2 min'
-        : 'reply to ' + (res.label || 'them') + '? say "/yes" within 2 min';
+        ? 'send to ' + (res.label || 'them') + '? reply yes within 2 min'
+        : 'reply to ' + (res.label || 'them') + '? reply yes within 2 min';
     }
     else if (res.needsTarget) { status = 'needs-name'; detail = res.error || "Who's this for? Start with a name."; }
     else if (!res.ok) { status = 'refused'; detail = res.error || 'host refused'; }
@@ -2094,11 +2128,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=95aafc5cd8fe2f34c6bce2b9ce6c865635312816f882116881fd3c81cfd4cc08 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=b13d4363a9d1439975546e7c0d6dc49abef2fe6c1ed1632f2f3f04f6e773707c nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open chat page only; never posts, types, or calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -2281,10 +2315,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=1051cb4738f48ff40f0d8193786d79c1b578493492985512bc78cfff57c6ad35 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=3236637261f043c9220b4fefd7c11796eca650bcf58d73def5b6de1b81c1cc75 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.0.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.1.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -2604,7 +2638,7 @@ def handle_command(cmd, quoted, cfg, now, poster):
                 tgt = resolve_mute_target(cmd['target'], '', cfg, now())
                 if tgt.get('handle') and tgt['handle'] != pend['handle']:
                     _store_pending_block(pend['handle'], pend['label'], pend['at'])   # keep the staged one
-                    detail = ('That name doesn\u2019t match the block waiting on %s. Reply "/block yes" to '
+                    detail = ('That name doesn\u2019t match the block waiting on %s. Reply yes to '
                               'mute %s, or "/block %s" to start over.' % (pend['label'], pend['label'], tgt['label']))
                     return dict(base, ok=False, needsConfirm=True, label=pend['label'], error=detail)
             if not cfg['dryRun']:
@@ -2621,7 +2655,8 @@ def handle_command(cmd, quoted, cfg, now, poster):
             notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': tgt['reason'], 'at': rc.iso_utc(now())})
             return dict(base, ok=False, needsTarget=True, error=detail, reason=tgt['reason'])
         _store_pending_block(tgt['handle'], tgt['label'], now())
-        detail = 'To stop relaying %s, reply "/block yes" within 2 minutes.' % tgt['label']
+        _note_prompt(now())
+        detail = 'To stop relaying %s, reply yes within 2 min (no to cancel).' % tgt['label']
         notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'confirm-block', 'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=tgt['label'], error=detail)
     # unblock: safe, no confirmation
@@ -2809,7 +2844,8 @@ def handle_add(oc, cfg, now, poster):
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=False, command='add', needsTarget=True, error=detail)
     _store_pending_add(who['handle'], name, now())
-    detail = 'Add %s as %s? Reply "/add yes" within 2 minutes.' % (rc.mask_handle(who['handle']), name)
+    _note_prompt(now())
+    detail = 'Add %s as %s? Reply yes within 2 min.' % (rc.mask_handle(who['handle']), name)
     notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
     return dict(base, ok=False, command='add', needsConfirm=True, label=name)
 
@@ -2926,9 +2962,24 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
     rc.log_event('needs_target', reason='unknown-name', contactsMatches=len(matches), contactsChecked=res is not None)
     if len(matches) == 1:
         m = matches[0]
+        hs = m.get('handles') or [{'handle': m['handle'], 'label': ''}]
+        if cfg['confirmNewContacts'] == 'exact-skip' and m.get('exact') and len(hs) == 1:
+            # v1.4.1: "Austin Robinson: hey" names exactly one Contacts card, by its full name, with one
+            # number/email: no question to ask. The caller sends it and adds them as a contact.
+            rc.log_event('new_contact_direct')
+            return dict(base, _direct={'handle': m['handle'], 'name': m['name']})
         _store_pending_new(m['handle'], m['name'], now())
-        detail = ('\u2753 %s isn\u2019t on your relay list yet. Reply /add %s <number>, or /yes within 2 min to text '
-                  'the %s in your Contacts (%s).' % (first, first, m['name'], rc.mask_handle(m['handle'])))
+        _note_prompt(now())
+        if len(hs) > 1:
+            def opt(x):
+                return rc.mask_handle(x['handle']) + ((' ' + x['label']) if x.get('label') else '')
+            others = ', '.join(opt(x) for x in hs if x['handle'] != m['handle'])
+            detail = ('\u2753 %s has %d numbers in your Contacts. Reply yes within 2 min to text %s, or /add %s '
+                      '<number> to use another (%s).' % (m['name'], len(hs), opt(next(x for x in hs if x['handle'] == m['handle'])),
+                                                          first, others))
+        else:
+            detail = ('\u2753 %s isn\u2019t on your relay list yet. Reply yes within 2 min to text the %s in your '
+                      'Contacts (%s), or /add %s <number>.' % (first, m['name'], rc.mask_handle(m['handle']), first))
         notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
@@ -2945,6 +2996,77 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
                   '<number>.' % (first, name, first))
     notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'unknown-name', 'at': rc.iso_utc(now())})
     return dict(base, ok=False, needsTarget=True, error=detail, reason='unknown-name')
+
+
+# ---------- v1.4.1: a plain "yes" / "no" answers a pending confirmation ----------
+CONFIRM_WORDS = frozenset(['yes', 'y', 'yep', 'yeah', 'yes please', 'ok', 'okay', 'send', 'send it', 'do it'])
+CANCEL_WORDS = frozenset(['no', 'n', 'nope', 'cancel', 'cancel it', 'dont', "don't", 'dont send', "don't send"])
+PROMPT_GRACE_S = 600.0     # a stray "yes" this soon after any prompt is never sent as a text
+
+
+def bare_confirm_word(text):
+    """'yes' / 'no' when the WHOLE reply is a confirm or cancel word (any case, punctuation or emoji
+    around it: "Yes!", "ok 👍", "Do it."), else None."""
+    t = re.sub(r"[^a-z' ]+", ' ', str(text or '').lower())
+    t = ' '.join(t.split())
+    if t in CONFIRM_WORDS:
+        return 'yes'
+    if t in CANCEL_WORDS:
+        return 'no'
+    return None
+
+
+def _note_prompt(at):
+    def fn():
+        state = load_state()
+        state['lastPromptAt'] = float(at)
+        rc.write_json_atomic(STATE_PATH, state)
+    _with_host_lock(fn)
+
+
+def _fresh(state, key, now_t, window):
+    p = state.get(key)
+    return isinstance(p, dict) and now_t - float(p.get('at') or 0) <= window
+
+
+def handle_bare_confirm(word, quoted, cfg, now, poster):
+    """The extension answers a pending reply confirmation itself (it holds the text). Anything that
+    reaches here is a host-side prompt (block, add) or a word that came too late. Returns a response,
+    or None when no prompt is anywhere near (then "ok" is just a reply)."""
+    base = {'dryRun': cfg['dryRun']}
+    t = now()
+    state = load_state()
+    block = _fresh(state, 'pendingBlock', t, CONFIRM_WINDOW_S)
+    add = _fresh(state, 'pendingAdd', t, ADD_WINDOW_S)
+    recent = t - float(state.get('lastPromptAt') or 0) <= PROMPT_GRACE_S
+    if word == 'yes':
+        if block:
+            return handle_command({'action': 'block', 'confirm': True, 'target': ''}, quoted, cfg, now, poster)
+        if add:
+            return handle_add({'cmd': 'add', 'name': '', 'confirm': True}, cfg, now, poster)
+        if not recent:
+            return None
+        detail = 'Nothing is waiting for a yes (confirmations expire after 2 minutes), so nothing was sent. Send your message again.'
+    else:
+        if not (block or add or recent):
+            return None
+
+        def fn():
+            st = load_state()
+            for k in ('pendingBlock', 'pendingAdd', 'pendingNewContact'):
+                st.pop(k, None)
+            rc.write_json_atomic(STATE_PATH, st)
+        _with_host_lock(fn)
+        detail = 'Cancelled. Nothing was sent or changed.'
+    rc.log_event('bare_confirm', word=word, pending=bool(block or add))
+    notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(t)})
+    return dict(base, ok=True, skipped=detail)
+
+
+def _short_mask(handle):
+    """'+1 \u2022\u2022\u20220177' -> '\u2022\u2022\u20220177' for the "(new contact, ...)" note; emails stay masked as is."""
+    m = rc.mask_handle(handle)
+    return m.split(' ', 1)[1] if m.startswith('+') and ' ' in m else m
 
 
 def handle_send(msg, cfg, runner, sleeper, now, poster):
@@ -2976,6 +3098,11 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         return handle_owner_command(oc, quoted, cfg, now, poster)
     if cfg['paused']:
         return refuse('paused')
+    bw = bare_confirm_word(text)
+    if bw and not msg.get('confirmed'):
+        r = handle_bare_confirm(bw, quoted, cfg, now, poster)
+        if r is not None:                     # a confirm/cancel word answered a prompt: never an iMessage
+            return r
     cmd = parse_command(text)
     if cmd:                                   # an explicit /block|/mute|/unblock never becomes an outgoing iMessage
         return handle_command(cmd, quoted, cfg, now, poster)
@@ -3018,8 +3145,18 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             contact, body, by = tgt, text, 'confirmed'                         # target drifted: send the full reply
         handle = contact['handle']
     else:
+        direct = None
         if route.get('needsTarget') and route.get('unknownName'):
-            return handle_unknown_name(route, cfg, sleeper, now, poster, base)
+            r = handle_unknown_name(route, cfg, sleeper, now, poster, base)
+            if '_direct' not in r:
+                return r
+            direct = r['_direct']
+        if direct:
+            # v1.4.1 exact-skip: one Contacts card by its exact full name with one number -> send now.
+            new_contact = {'handle': direct['handle'], 'name': direct['name']}
+            route = {'contact': {'kind': 'new', 'label': rc.clean_label(direct['name']) or rc.format_handle(direct['handle']),
+                                 'name': direct['name'], 'handle': direct['handle'], 'lastInboundAt': None},
+                     'body': route['body'], 'by': 'contacts'}
         if route.get('needsTarget'):
             rc.log_event('needs_target', textLength=len(text), quoted=bool(quoted))   # reason may name a label; owner gets it via webhook, not the log
             notify(cfg, poster, {'type': 'needs_target', 'detail': route['error'], 'reason': route['reason'],
@@ -3047,10 +3184,11 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             c = route['confirm']
             alt = c.get('altLabel')
             detail = ('Send to %s instead of %s?' % (contact['label'], alt)) if alt else ('Send to %s?' % contact['label'])
-            detail = '❓ ' + detail + ' Say /yes within 2 min.'
+            detail = '❓ ' + detail + ' Reply yes within 2 min.'
             rc.log_event('needs_confirm', routedBy=by, reason='directive', textLength=len(body))
+            _note_prompt(now())
             notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'alt': alt or '',
-                                 'reason': 'directive', 'at': rc.iso_utc(now())})
+                                 'reason': 'directive', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, needsConfirm=True, label=contact['label'], handle=handle,
                         reason='directive', contact=contact['label'], routedBy=by)
         # Confirm-when-guessed (item 3): a 'recent'-routed reply may be going to the wrong person. Ask first
@@ -3058,10 +3196,11 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         # storage and re-sends it with confirmed:true (and the handle) on "/yes".
         if (by == 'recent' and cfg['confirmGuessed'] != 'off'
                 and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
-            detail = '❓ Reply to %s? Say /yes within 2 min.' % contact['label']
+            detail = '❓ Reply to %s? Reply yes within 2 min.' % contact['label']
             rc.log_event('needs_confirm', routedBy=by, reason='guessed', textLength=len(body))
+            _note_prompt(now())
             notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'reason': 'guessed',
-                                 'at': rc.iso_utc(now())})
+                                 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, needsConfirm=True, guess=True, label=contact['label'],
                         handle=handle, reason='guessed', contact=contact['label'], routedBy=by)
     if not body.strip():
@@ -3105,18 +3244,23 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                     window.pop()
                 # a timeout is ambiguous (it may actually have sent): keep the fingerprint, no double-send
             elif cfg.get('deliveryCheck', True):
-                rc.add_pending_send(handle, t, len(outgoing), label=contact['label'])   # record inside the lock
+                rc.add_pending_send(handle, t, len(outgoing), label=contact['label'],   # record inside the lock
+                                    note=('new contact, ' + _short_mask(handle)) if new_contact else '')
         rc.write_json_atomic(STATE_PATH, state)
     if new_contact and ok and not dry:
         try:
             _finish_new_contact(handle, new_contact['name'], cfg)
         except Exception:
             pass
+    note = ('new contact, ' + _short_mask(handle)) if new_contact else ''
+    if note:
+        who['note'] = note
     if dry:
         rc.log_event('dry_run', handle=handle, contact=contact['label'], routedBy=by, textLength=len(body), outgoingLength=len(outgoing))
         if cfg['confirmSends']:
             notify(cfg, poster, {'type': 'sent', 'label': contact['label'], 'contactName': contact['name'], 'dryRun': True,
                                  'delivered': None, 'routedBy': by, 'at': rc.iso_utc(t)})
+        who.pop('note', None)
         return dict({'ok': True, 'dryRun': True, 'textLength': len(body)}, **who)
     if not ok:
         rc.log_event('send_failed', textLength=len(body), error=err)      # err is a fixed code, never raw text
@@ -3127,8 +3271,11 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     # item 6: when deliveryCheck is on, the WATCHER posts the single confirmation (✓✓ delivered, or ✓ sent
     # after ~20s). The host only confirms here when delivery checking is off, so the owner still hears back.
     if cfg['confirmSends'] and not cfg.get('deliveryCheck', True):
-        notify(cfg, poster, {'type': 'sent', 'label': contact['label'], 'contactName': contact['name'], 'dryRun': False,
-                             'delivered': None, 'routedBy': by, 'at': rc.iso_utc(t)})
+        p = {'type': 'sent', 'label': contact['label'], 'contactName': contact['name'], 'dryRun': False,
+             'delivered': None, 'routedBy': by, 'at': rc.iso_utc(t)}
+        if note:
+            p['note'] = note
+        notify(cfg, poster, p)
     return dict({'ok': True, 'dryRun': False, 'sent': True, 'delivered': None, 'deliveryCheck': 'pending'}, **who)
 
 
@@ -3176,6 +3323,13 @@ def handle_signal(msg, cfg, now, poster):
         at = str(msg.get('at') or '')
         ep_id = ('wrong_account:' + at) if at else 'wrong_account'
         notify(cfg, poster, {'type': 'wrong_account', 'id': ep_id, 'at': rc.iso_utc(now())})
+        return {'ok': True}
+    if status == 'guess_cancelled':
+        # v1.4.1: the owner answered a reply prompt with "no" / "cancel" (the extension dropped the text)
+        label = str(msg.get('label') or '').strip()
+        rc.log_event('signal', status='guess_cancelled')
+        detail = ('Cancelled. Nothing was sent to %s.' % label) if label else 'Cancelled. Nothing was sent.'
+        notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return {'ok': True}
     if status == 'guess_expired':
         # the extension's 2-minute confirm window lapsed with no "/yes"; tell the owner, body-free (item 3)
@@ -3233,10 +3387,10 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=3f2409381d85aa57e7190211f1807a2c680bbfe4a05ade89fded0a68b4b643e8 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=c43e580a74c14da6160e8fc5d963e2f56330989e2300e32bd5a2ca15530ff0a7 nl=1
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.0: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.1: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -3983,8 +4137,10 @@ class Watcher:
 
         def confirm(e, delivered):
             if cfg.get('confirmSends', True) and not cfg['paused'] and cfg['webhookUrl']:
-                self.post(cfg, {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered,
-                                'dryRun': False, 'at': rc.iso_utc(t)})
+                p = {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered, 'dryRun': False, 'at': rc.iso_utc(t)}
+                if e.get('note'):
+                    p['note'] = e['note']             # v1.4.1: "(new contact, •••0177)"
+                self.post(cfg, p)
 
         def fail(e, error=None, reason=None, superseded=False):
             if not cfg['paused'] and cfg['webhookUrl']:
@@ -4214,9 +4370,9 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=2e297eae223ce33f28845b2574ed0367721011b3a1512e0de609a29414088817 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=0bb2ad937b9f5d9450d3d97abc5d2495b89e71489c93f68b7ea910778049e035 nl=1
 """
-iMessage Relay v1.4.0: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.1: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -4240,7 +4396,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.0'
+VERSION = '1.4.1'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -4302,6 +4458,7 @@ DEFAULT_CONFIG = {
     'autoReopenMessages': False,
     'pollSeconds': 10,
     'defaultCountryCode': '1',
+    'confirmNewContacts': 'exact-skip',   # v1.4.1: exact-skip (an exact full name, one card, one number: send) | always
 }
 
 E164_RE = re.compile(r'^\+[1-9][0-9]{6,14}$')
@@ -4477,6 +4634,8 @@ def sanitize_config(user):
     cfg['redactCodes'] = truthy(cfg.get('redactCodes'), True)
     cfg['relayAll'] = truthy(cfg.get('relayAll'), False)
     cfg['skipShortCodes'] = truthy(cfg.get('skipShortCodes'), True)
+    cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()
+    cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
     mute = []
     for m in cfg.get('mute') if isinstance(cfg.get('mute'), list) else []:
         if not isinstance(m, str) or not m.strip():
@@ -5293,8 +5452,8 @@ def __getattr__(name):
         return getattr(relay_echo, name)
     raise AttributeError("module 'relay_common' has no attribute %r" % name)
 @@@@ END
-@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=45f375a5ef8b8fa433ddfe517bfc307b04b6a64680f964ee18cbb303fb7730ca nl=1
-"""iMessage Relay v1.4.0 -- look a name up in the Mac's Contacts (for a reply to someone new).
+@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=c4e0bbe25fba33b5cbeb1a404b6d40f6d8c701771de2ed3187c64bf45bbaa824 nl=1
+"""iMessage Relay v1.4.1 -- look a name up in the Mac's Contacts (for a reply to someone new).
 
 When the owner starts a reply with a name that is on no relay list ("Austin Robinson: hey"), the host
 asks the watcher (it holds Full Disk Access, which covers the Contacts database) to look that name up.
@@ -5363,13 +5522,15 @@ def best_handle(handles, cc='1'):
 
 def lookup(name, cfg, globs=None):
     """Exact full name (case/space-insensitive), else a unique-or-several first-name match.
-    Returns {'ok':True,'matches':[{'name','handle'}]} (at most MAX_RESULTS). The owner's own handles
-    are never returned."""
+    Returns {'ok':True,'matches':[{'name','handle','exact','handles'}]} (at most MAX_RESULTS): `exact` is a
+    full-name match, `handles` every valid number/email on that card (v1.4.1: one card with one handle
+    and an exact name may be texted without a /yes). The owner's own handles are never returned."""
     q = ' '.join(str(name or '').lower().split())
     if not q:
         return {'ok': True, 'matches': []}
     people = _people(globs or _globs()).values()
     exact = [p for p in people if ' '.join(p['name'].lower().split()) == q]
+    is_exact = bool(exact) and ' ' in q        # a one-word "name" is never an exact full-name match
     hits = exact or ([p for p in people if p['first'].lower() == q] if ' ' not in q else [])
     own = rc.owner_handle_set(cfg)
     out, seen = [], set()
@@ -5378,13 +5539,20 @@ def lookup(name, cfg, globs=None):
         if not h or h in own or h in seen:
             continue
         seen.add(h)
-        out.append({'name': re.sub(r'[\x00-\x1f\x7f]', ' ', p['name'])[:60], 'handle': h})
+        cc = cfg.get('defaultCountryCode', '1')
+        hs = []
+        for kind, label, v in p['handles']:
+            n = rc.normalize_handle(v, cc)
+            if rc.valid_handle(n) and n not in own and n not in [x['handle'] for x in hs]:
+                hs.append({'handle': n, 'label': re.sub(r'[^A-Za-z ]', '', label).strip().lower()[:12]})
+        out.append({'name': re.sub(r'[\x00-\x1f\x7f]', ' ', p['name'])[:60], 'handle': h, 'exact': is_exact,
+                    'handles': hs})
         if len(out) >= MAX_RESULTS:
             break
     return {'ok': True, 'matches': out}
 @@@@ END
-@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=988dbd49f79d442037c3c494eb4ee565b9b6232a6d0de687fcb897b81971287f nl=1
-"""iMessage Relay v1.4.0 -- conversational addressing (directive parsing).
+@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=53eec98488ede59187f36c6d1d7904aefc4e4d9618068579c39c0f2a10b91059 nl=1
+"""iMessage Relay v1.4.1 -- conversational addressing (directive parsing).
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.parse_directive, rc.DIRECTIVE_DICT_WORDS, ...); relay_common re-exports these
 names lazily. Do not import relay_directive before relay_common.
@@ -5508,8 +5676,8 @@ def parse_directive(text, cfg, directory=None):
                 return h, text, 'unknown_handle', 'handle', ''
     return None, text, 'none', '', ''
 @@@@ END
-@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=c9c19bd3d9e6fd28b628661268a081eb161eeca9beec084e91fd69716bc62237 nl=1
-"""iMessage Relay v1.4.0 -- echo guard + bot-output detection.
+@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=047f6045797d9d91df375e4a88b45c993a72adc830eaa7cfc98d35d640e2aff7 nl=1
+"""iMessage Relay v1.4.1 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
 these names lazily. Do not import relay_echo before relay_common."""
@@ -5630,8 +5798,8 @@ def is_echoed_inbound(text, prefix_stripped=None, at=None, path=None, handle='')
             return True
     return False
 @@@@ END
-@@@@ FILE mac-helper/relay_send.py mode=644 sha256=f76313b798d119b91643791cf417468b9d6b1d58b4c02d36b2c492dddda233cc nl=1
-"""iMessage Relay v1.4.0 -- delivery-proof queries and Messages.app sending.
+@@@@ FILE mac-helper/relay_send.py mode=644 sha256=aa898ca803cd4354f9e5e1ea592beb737839ea0430c6b708969710217218ffd2 nl=1
+"""iMessage Relay v1.4.1 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
@@ -5667,11 +5835,14 @@ DELIVERY_FALLBACK_WINDOW_S = 4.0
 # ---------- delivery proof (watcher only; it holds Full Disk Access) ----------
 # One file per pending send, so a concurrent host append and a watcher resolve never lose each other's
 # record. Records are body-free: handle, send time, text length and label only -- never the body or a hash.
-def add_pending_send(handle, at, text_length, label='', path=None):
-    """Host (no chat.db access) records a send for the watcher to verify. NEVER stores the body."""
+def add_pending_send(handle, at, text_length, label='', path=None, note=''):
+    """Host (no chat.db access) records a send for the watcher to verify. NEVER stores the body.
+    v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0177")."""
     d = path or rc.PENDING_DIR
     rec = {'id': uuid.uuid4().hex, 'handle': rc.normalize_handle(handle), 'at': float(at),
            'textLength': int(text_length), 'label': rc.clean_label(label)}
+    if note:
+        rec['note'] = str(note)[:60]
     rc.write_json_atomic(os.path.join(d, rec['id'] + '.json'), rec, mode=0o600)
     return rec['id']
 
@@ -5843,9 +6014,9 @@ def open_messages_hidden(runner=subprocess.run):
     except Exception:
         return False
 @@@@ END
-@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=9a7020e584419b8158277db12b1afc67aeaa715bc6a3ff1e181d3a7ac4f91e2e nl=1
+@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=dd0b13a5147bbe1ba1394e351008bc0d2a5189cd398b4660d19a621dfaed35f1 nl=1
 """
-iMessage Relay v1.4.0: guided-setup helpers shared by relayctl and the watcher.
+iMessage Relay v1.4.1: guided-setup helpers shared by relayctl and the watcher.
 
   detect_owner_handles(con, cc)   the owner's OWN iMessage/SMS addresses, read from chat.db rows the
                                   owner sent (message.account / destination_caller_id). Handles only;
@@ -5997,9 +6168,9 @@ def apply_setup(values, token=None):
     rc.with_host_lock(_do)
     return out
 @@@@ END
-@@@@ FILE mac-helper/relay_test.py mode=644 sha256=44b52ea73b47990a33d7947952e1be9dde6fd51b28dd0bb55458abc1f38ba0b0 nl=1
+@@@@ FILE mac-helper/relay_test.py mode=644 sha256=30cae9afb5841d62c447013d503daf75d009227ab7b3013eff5b77a2b5b278e7 nl=1
 """
-iMessage Relay v1.4.0: the /test end-to-end check (runs inside the native host).
+iMessage Relay v1.4.1: the /test end-to-end check (runs inside the native host).
 
 The owner types "/test" (or "/test send") in the relay chat. The extension intercepts it before any
 reply routing and asks the host for {type:"test"}. The host then checks, each with its own timeout:
@@ -6178,7 +6349,7 @@ def record_routine(test_id, seen, now):
     rc.log_event('test_routine', testId=rec['testId'], seen=bool(seen))
     return True
 @@@@ END
-@@@@ FILE mac-helper/relayctl.py mode=755 sha256=bd5a0eda1f2410927e46a6e8b0ac1b92f172e5ae8e2a845da0a6352ecd689e14 nl=1
+@@@@ FILE mac-helper/relayctl.py mode=755 sha256=e6fc53fa4a71e2b64890500cbd272dbb3a3b6cd39c8e7561b328a5b2b76f2e31 nl=1
 #!/usr/bin/python3
 """
 relayctl: the one command the bot (or you) uses to operate iMessage Relay on the Mac.
@@ -6197,7 +6368,8 @@ Every command prints one JSON object. Message bodies are never printed or stored
   relayctl set KEY VALUE                  relayConversationId, footer, webhookUrl, ownerHandle,
                                           ownerXHandle, ownerXUserId, senderXHandle, maxSendsPerMinute, deliveryCheck,
                                           pollSeconds, defaultCountryCode, replyWindowMinutes,
-                                          ambiguousSeconds, confirmSends, rosterDays, skipShortCodes
+                                          ambiguousSeconds, confirmSends, rosterDays, skipShortCodes,
+                                          confirmNewContacts exact-skip|always (v1.4.1)
   relayctl set-webhook --url URL --token-stdin   set webhookUrl + webhookToken together; the key is
                                           read from stdin so it never lands in argv or shell history
   relayctl contacts                       list opted-in contacts with their labels
@@ -6240,6 +6412,7 @@ SETTABLE = {
     'senderXHandle': str, 'ownerXUserId': str, 'maxSendsPerMinute': int, 'deliveryCheck': 'bool', 'pollSeconds': int,
     'defaultCountryCode': str, 'relayConversationId': str, 'replyWindowMinutes': int, 'ambiguousSeconds': int,
     'confirmSends': 'bool', 'rosterDays': int, 'skipShortCodes': 'bool', 'redactCodes': 'bool',
+    'confirmNewContacts': ('exact-skip', 'always'),   # v1.4.1
 }
 
 
@@ -6303,6 +6476,10 @@ def cmd_set(key, value):
             v = int(value)
         except ValueError:
             raise CtlError('%s needs a number' % key)
+    elif isinstance(typ, tuple):
+        v = str(value).strip().lower()
+        if v not in typ:
+            raise CtlError('%s must be one of: %s' % (key, ', '.join(typ)))
     else:
         v = str(value)
     if key == 'ownerHandle' and v and not rc.valid_handle(rc.normalize_handle(v)):
@@ -7062,9 +7239,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=3375628b0743f8f5a425230cf0923561c609809cbbb72a30b862ba7d4c9b0393 nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=44a690c4d6e1c6ad95a2f91f64a5e937c677268c6a918226639d76f67941d8fa nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.0 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.1 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -7199,8 +7376,11 @@ def format_event(payload):
         # item 6: ONE confirmation, posted by the watcher: \u2713\u2713 when chat.db shows delivered, else \u2713
         # after the ~20s fallback. (Dry runs and delivery-check-off still come from the host.)
         label = _label(payload)
+        note = str(payload.get('note') or '').strip()[:60]     # v1.4.1: "new contact, \u2022\u2022\u20220177"
         if payload.get('dryRun'):
             line = '\u2192 ' + label + ' (dry run, not sent)'
+        elif note:
+            line = '\u2192 ' + label + (' \u2713\u2713' if payload.get('delivered') else ' \u2713') + ' (' + note + ')'
         elif payload.get('delivered'):
             line = '\u2192 ' + label + ' \u2713\u2713 delivered'
         else:
@@ -7229,13 +7409,15 @@ def format_event(payload):
         if payload.get('reason') == 'new_contact':
             # v1.4.0: someone found in the Mac's Contacts (host-composed, name + last 4 digits, no body).
             detail = str(payload.get('detail') or '').strip()[:400]
-            text = detail or ('\u2753 Text %s from your Contacts? Say /yes within 2 min.' % label)
+            text = detail or ('\u2753 Text %s from your Contacts? Reply yes within 2 min.' % label)
             return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': text, 'body': False}]}
         if payload.get('reason') == 'directive':
             core = ('Send to %s instead of %s?' % (label, alt)) if alt else ('Send to %s?' % label)
         else:
             core = 'Reply to %s?' % label
-        return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': '❓ ' + core + ' Say /yes within 2 min.', 'body': False}]}
+        detail = str(payload.get('detail') or '').strip()[:400]      # v1.4.1: host-composed, body-free
+        text = detail or ('\u2753 ' + core + ' Reply yes within 2 min.')
+        return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': text, 'body': False}]}
     if t == 'needs_target':
         detail = str(payload.get('detail') or 'Who\u2019s this for? Start with a name, like "Alex: \u2026" or "text Alex \u2026".').strip()
         return {'kind': 'needs_target', 'lines': [{'id': base_id, 'text': detail, 'body': False}]}
@@ -8710,7 +8892,7 @@ t('T10 no twid, no switcher, account-nav avatar outside any panel -> true', chec
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=c694bf7ca9544524f23cde07321e272800feaf31a94f76b5aee2181d2a791eac nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=aea6076dbcf55f25ab10a32ca2499c54f9e2e13454d76378bf1055b4c0932d11 nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -8765,7 +8947,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.0');
+  assert.strictEqual(m.version, '1.4.1');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -8795,6 +8977,94 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
   console.log('PASS chrome wiring smoke: sent=', JSON.stringify(sends), 'badge(paused)=', badge.text, 'events=', store.events.map(e => e.status).join(','));
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.message); process.exit(1); });
+@@@@ END
+@@@@ FILE tests/js/yes.test.js mode=644 sha256=aa718e6976e915a3aa8788351102664270a570dc18e2c347973d519c3f724071 nl=1
+/* v1.4.1: a plain "yes"/"ok" confirms a pending reply prompt and "no"/"cancel" cancels it; neither is texted.
+ * (Header kept from the v1.3.4 guess test harness.)
+ * A guessed reply (host returns needsConfirm) is held in chrome.storage.session (never in local),
+ * "/yes" re-sends the stored text with confirmed:true, and a lapsed window signals guess_expired.
+ *   NODE_PATH=/path/to/node_modules node tests/js/guess.test.js
+ */
+'use strict';
+const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const EXT = path.join(__dirname, '../../extension');
+
+const local = {}; const session = {}; const bgListeners = []; const alarmListeners = [];
+const hostCalls = []; let nextSendResponse = { ok: true, dryRun: true };
+function mkStorage(bag) {
+  return {
+    async get(keys) { const ks = keys == null ? Object.keys(bag) : (typeof keys === 'string' ? [keys] : keys); const o = {}; ks.forEach(k => { if (k in bag) o[k] = JSON.parse(JSON.stringify(bag[k])); }); return o; },
+    async set(obj) { for (const k in obj) bag[k] = obj[k]; },
+    async remove(k) { delete bag[k]; },
+  };
+}
+const chrome = {
+  runtime: {
+    id: 'ext', onMessage: { addListener: f => bgListeners.push(f) }, onInstalled: { addListener() {} }, onStartup: { addListener() {} },
+    sendNativeMessage: async (host, msg) => {
+      hostCalls.push(msg);
+      if (msg.type === 'get_config') return { ok: true, paused: false, dryRun: true, relayConversationId: '111-222', ownerXHandle: 'OwnerAcct', senderXHandle: 'SenderBot', contacts: [{ name: 'Sam Alpha', label: 'Sam', handle: '+15555550123' }] };
+      if (msg.type === 'send') return nextSendResponse;
+      return { ok: true };
+    },
+  },
+  storage: { local: mkStorage(local), session: mkStorage(session), onChanged: { addListener() {} } },
+  tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} }, query: async () => [] },
+  alarms: { create() {}, clear() {}, onAlarm: { addListener: f => alarmListeners.push(f) } },
+  action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
+};
+vm.runInNewContext(fs.readFileSync(path.join(EXT, 'background.js'), 'utf8'), { chrome, console: { log() {}, warn() {} } });
+
+function relayLog(text) {
+  const item = { ts: new Date().toISOString(), conversationId: '111-222', direction: 'outbound', text, key: 'k-' + Math.random(), score: 5, source: 'frame' };
+  return new Promise(res => { bgListeners.forEach(f => f({ type: 'relay-log', item }, { id: 'ext', tab: { id: 1 } }, () => {})); setTimeout(res, 40); });
+}
+
+(async () => {
+  await sleep(30);
+  const sends = () => hostCalls.filter(c => c.type === 'send');
+  // 1) a guessed reply is staged
+  nextSendResponse = { ok: false, needsConfirm: true, guess: true, label: 'Sam', handle: '+15555550123', contact: 'Sam', routedBy: 'recent' };
+  await relayLog('running late');
+  assert.strictEqual(sends().length, 1);
+  // 2) a plain "Yes!" confirms with the stored body; the word itself is never sent
+  nextSendResponse = { ok: true, dryRun: true, contact: 'Sam' };
+  await relayLog('Yes!');
+  const conf = sends().filter(c => c.confirmed === true);
+  assert.strictEqual(conf.length, 1, 'plain yes confirmed');
+  assert.strictEqual(conf[0].text, 'running late');
+  assert.ok(!sends().some(c => /^yes/i.test(c.text)), '"Yes!" never sent as a text');
+  assert.ok(!session.pendingGuess, 'cleared');
+  // 3) "do it" and "ok" confirm too
+  for (const w of ['do it', 'OK \u{1F44D}']) {
+    nextSendResponse = { ok: false, needsConfirm: true, guess: true, label: 'Sam', handle: '+15555550123' };
+    await relayLog('again');
+    nextSendResponse = { ok: true, dryRun: true };
+    const n = sends().filter(c => c.confirmed === true).length;
+    await relayLog(w);
+    assert.strictEqual(sends().filter(c => c.confirmed === true).length, n + 1, w + ' confirms');
+  }
+  // 4) "no" cancels: nothing sent, a body-free guess_cancelled signal
+  nextSendResponse = { ok: false, needsConfirm: true, guess: true, label: 'Sam', handle: '+15555550123' };
+  await relayLog('see you');
+  const n2 = sends().length;
+  await relayLog('Cancel.');
+  assert.strictEqual(sends().length, n2, 'cancel sends nothing');
+  const sig = hostCalls.filter(c => c.type === 'signal' && c.status === 'guess_cancelled');
+  assert.strictEqual(sig.length, 1);
+  assert.strictEqual(sig[0].label, 'Sam');
+  assert.ok(!JSON.stringify(sig[0]).includes('see you'), 'no body in the signal');
+  assert.ok(!session.pendingGuess, 'cleared on cancel');
+  // 5) with nothing pending here, "yes" goes to the host (which knows about its own prompts)
+  nextSendResponse = { ok: true, dryRun: true };
+  await relayLog('yes');
+  const last = sends()[sends().length - 1];
+  assert.strictEqual(last.text, 'yes');
+  assert.ok(!last.confirmed);
+  console.log('5 passed, 0 failed (v1.4.1 plain yes/no)');
+  process.exit(0);
+})().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
 @@@@ FILE tests/py/helpers.py mode=644 sha256=7e30a4d7699ee67d640ac74942f1c375e498560b6798baa4f0534fc324ca5bfe nl=1
 """Shared test helpers: fresh module state per test, fakes, and a temp chat.db shaped like the real one."""
@@ -9163,7 +9433,7 @@ class RosterTolerance(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_host.py mode=644 sha256=1bdfe911dabb89349b98ff428d2769c1e5148f4bf244d04fb4fc580596f9f74c nl=1
+@@@@ FILE tests/py/test_host.py mode=644 sha256=39e8c720314259d1d04672c99784f46fd020c76828d2708dad78e3878e9d2b30 nl=1
 """Native host: framing, get_config, send gating (paused / relay chat / routing / normalization /
 rate limit), confirmations and "who is this for?" webhooks, dry run, -1712 retry, self-test, and
 an end-to-end run of the real script."""
@@ -9227,7 +9497,7 @@ class GetConfig(Base):
         r = self.h.handle_request({'type': 'get_config'}, cfg=self.cfg(ownerXHandle='OwnerAcct', senderXHandle='SenderBot',
                                                                         ownerXUserId='99887766', webhookToken='tok'), now=self.clock.now)
         self.assertEqual(r['ok'], True)
-        self.assertEqual(r['version'], '1.4.0')
+        self.assertEqual(r['version'], '1.4.1')
         self.assertEqual((r['paused'], r['dryRun']), (False, True))
         self.assertEqual(r['contacts'], [{'name': 'Test Contact', 'label': 'Test', 'handle': '+15555550123'}])
         self.assertEqual(r['relayConversationId'], CONV)
@@ -12502,7 +12772,7 @@ class TapbackLastSenderW(_WatchBase):
         self.assertEqual(after.get(self.ALLOWED), before_at.get(self.ALLOWED),
                          'a tapback must not advance the last-inbound time')
 @@@@ END
-@@@@ FILE tests/py/test_v138.py mode=644 sha256=6a3174a2abf025aa1cf0804f8aac7d6418611fd0f5238955d154f0ee13efd8c4 nl=1
+@@@@ FILE tests/py/test_v138.py mode=644 sha256=1ba411524c384c66b4f62080041b31f29bc79e4ed3877db9a53436d1ac01c9b1 nl=1
 """v1.3.8: the /test end-to-end check (host, watcher probe, relay_post rendering, never texts a
 contact, every step time-boxed) and the guided setup helpers (owner-handle detection from chat.db,
 relayctl setup / test-result, relay-all pending until the owner's handles are known)."""
@@ -12760,7 +13030,9 @@ class RelayPostTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     rp.format_event(g['payload'])
             else:
-                self.assertEqual(rp.format_event(g['payload']), g['expect'], g['payload']['type'])
+                # v1.4.1: confirmation prompts now say "Reply yes" (a plain yes confirms); nothing else changed
+                want = json.loads(json.dumps(g['expect'], ensure_ascii=False).replace('Say /yes within 2 min.', 'Reply yes within 2 min.'))
+                self.assertEqual(rp.format_event(g['payload']), want, g['payload']['type'])
 
     def test_relay_test_through_process_is_silent(self):
         calls = []
@@ -13083,7 +13355,7 @@ class HostSendPath(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v140.py mode=644 sha256=8baf028be69c91c796a9105e92822b9ef0b60d894e7a4bb7689cede8533aea9a nl=1
+@@@@ FILE tests/py/test_v140.py mode=644 sha256=a68830dbaa62a5860360162bea8108926079316698d4f914272b4e579e9fa560 nl=1
 """v1.4.0: multi-word names, a reply to someone new (Contacts lookup + /yes), and host notifications
 that no longer vanish when the webhook is slow (the needs_target notify ok:false bug)."""
 import json
@@ -13182,17 +13454,17 @@ class MultiWordNames(Base):
 
 
 class NewContact(Base):
-    def test_unique_full_name_asks_then_yes_sends(self):
+    def test_unique_full_name_with_two_numbers_asks_then_yes_sends(self):
         r = self.send('Austin Robinson: hey there')
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual(r['reason'], 'new_contact')
         self.assertEqual(r['handle'], '+15555550177')          # the mobile number, not home
         self.assertEqual(self.osa(), [])
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]
-        self.assertIn('Austin isn\u2019t on your relay list yet', ev['detail'])
-        self.assertIn('/add Austin <number>', ev['detail'])
-        self.assertIn('/yes', ev['detail'])
-        self.assertIn('Austin Robinson', ev['detail'])
+        self.assertIn('Austin Robinson has 2 numbers', ev['detail'])   # v1.4.1: choices listed (masked)
+        self.assertIn('\u2022\u2022\u20220177 mobile', ev['detail'])
+        self.assertIn('\u2022\u2022\u20220101 home', ev['detail'])
+        self.assertIn('Reply yes', ev['detail'])
         self.assertNotIn('5550177', ev['detail'])              # masked
         self.assertNotIn('hey there', json.dumps(ev))
         self.clock.t += 30
@@ -13323,6 +13595,130 @@ class RoutineNewContact(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+@@@@ END
+@@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=8bc2a0e951996c6857e7ee426c79f52fbed08596ac7a4fe7756142e0271a291b nl=1
+"""v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),
+and an exact full-name match to one Contacts card with one number sends without asking."""
+import json
+import os
+
+from helpers import read_log
+from test_v140 import Base, make_ab
+
+SOLO = [('Austin', 'Robinson', [('_$!<Mobile>!$_', '(555) 555-0177')]),
+        ('Austin', 'Avery', [('', '555-555-0178')]),
+        ('Jo', 'Park', [('', '555-555-0161')])]
+
+
+class BareWords(Base):
+    def test_word_table(self):
+        b = self.m.host.bare_confirm_word
+        for t in ('yes', 'Yes', 'YES!', 'y', 'yep', 'ok', 'OK.', 'okay', 'send', 'Send it', 'do it', 'yes \U0001F44D'):
+            self.assertEqual(b(t), 'yes', t)
+        for t in ('no', 'No.', 'cancel', 'nope', "don't send"):
+            self.assertEqual(b(t), 'no', t)
+        for t in ('yes I will be there', 'ok see you at 5', 'sounds good', '', 'Sam: yes', 'yesterday'):
+            self.assertIsNone(b(t), t)
+
+    def test_plain_yes_confirms_block(self):
+        self.send('/block Test Contact')
+        self.assertNotIn('+15555550123', self.cfg().get('mute', []))
+        self.assertIn('reply yes within 2 min', self.posts[-1][0].get('detail', ''))
+        self.clock.t += 10
+        r = self.send('Yes')
+        self.assertEqual(self.osa(), [], 'the word is never texted')
+        self.assertTrue(r.get('ok'), r)
+        self.assertTrue(self.cfg().get('mute'), 'blocked on a plain yes')
+
+    def test_plain_no_cancels_block(self):
+        self.send('/block Test Contact')
+        self.clock.t += 10
+        self.send('no')
+        self.assertEqual(self.osa(), [])
+        self.assertFalse(self.cfg().get('mute'))
+        self.assertIn('Cancelled', self.posts[-1][0]['detail'])
+        self.clock.t += 5
+        self.send('/block yes')                 # nothing staged any more
+        self.assertFalse(self.cfg().get('mute'))
+
+    def test_late_yes_is_swallowed_not_texted(self):
+        self.send('/block Test Contact')
+        self.clock.t += 300                     # prompt lapsed
+        r = self.send('yes')
+        self.assertEqual(self.osa(), [])
+        self.assertFalse(self.cfg().get('mute'))
+        self.assertIn('Nothing is waiting', self.posts[-1][0]['detail'])
+        self.assertFalse(r.get('needsTarget'))
+
+    def test_ok_with_no_prompt_is_a_normal_reply(self):
+        r = self.send('ok')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][2], 'ok')
+
+    def test_new_contact_prompt_gives_one_notice(self):
+        self.send('Austin: hey')
+        types = [p['type'] for p, _ in self.posts]
+        self.assertEqual(types.count('needs_confirm'), 1)
+        self.assertNotIn('needs_target', types, 'no "Who\u2019s this for?" for the same message')
+
+    def test_no_bodies_in_log(self):
+        self.send('/block Test Contact')
+        self.send('yes')
+        self.assertNotIn('Test Contact', read_log())
+
+
+class ExactSkip(Base):
+    def setUp(self):
+        super().setUp()
+        make_ab(self.tmp, SOLO)
+
+    def test_exact_full_name_one_number_sends_now(self):
+        r = self.send('Austin ROBINSON: on my way')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][2], 'on my way')
+        self.assertEqual(self.osa()[0][3], '+15555550177')
+        self.assertIn('Austin Robinson', [c['name'] for c in self.cfg()['contacts']])
+        self.assertFalse([p for p, _ in self.posts if p['type'] in ('needs_confirm', 'needs_target')])
+        self.assertEqual(r.get('note'), 'new contact, \u2022\u2022\u20220177')
+        log = read_log()
+        for s in ('on my way', 'Robinson', '5550177'):
+            self.assertNotIn(s, log)
+
+    def test_first_name_only_still_confirms(self):
+        r = self.send('Jo: hi')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(self.osa(), [])
+
+    def test_two_cards_same_first_name_confirms(self):
+        r = self.send('Austin: hi')
+        self.assertFalse(r.get('ok'))
+        self.assertEqual(self.osa(), [])
+
+    def test_always_setting_confirms(self):
+        raw = dict(self.raw, confirmNewContacts='always')
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, raw)
+        r = self.send('Austin Robinson: on my way')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(self.osa(), [])
+
+    def test_setting_default_and_sanitized(self):
+        self.assertEqual(self.cfg()['confirmNewContacts'], 'exact-skip')
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, dict(self.raw, confirmNewContacts='bogus'))
+        self.assertEqual(self.cfg()['confirmNewContacts'], 'exact-skip')
+
+
+class Routine(Base):
+    def test_sent_note_renders(self):
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location('rp141', os.path.join(here, '..', '..', 'routine', 'relay_post.py'))
+        rp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rp)
+        out = json.dumps(rp.format_event({'type': 'sent', 'label': 'Austin Robinson', 'note': 'new contact, \u2022\u2022\u20220177',
+                                          'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
+        self.assertIn('Austin Robinson \u2713 (new contact, \u2022\u2022\u20220177)', out)
+        out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
+        self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
 @@@@ FILE tests/py/test_watch.py mode=644 sha256=de87a498931bfa7b6a17dfe6d6900bea43df7afaf18677a19a34d8c42675a47f nl=1
 """Inbound watcher against a temp sqlite db shaped like chat.db."""

@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.0: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.1: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -747,8 +747,10 @@ class Watcher:
 
         def confirm(e, delivered):
             if cfg.get('confirmSends', True) and not cfg['paused'] and cfg['webhookUrl']:
-                self.post(cfg, {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered,
-                                'dryRun': False, 'at': rc.iso_utc(t)})
+                p = {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered, 'dryRun': False, 'at': rc.iso_utc(t)}
+                if e.get('note'):
+                    p['note'] = e['note']             # v1.4.1: "(new contact, •••0177)"
+                self.post(cfg, p)
 
         def fail(e, error=None, reason=None, superseded=False):
             if not cfg['paused'] and cfg['webhookUrl']:

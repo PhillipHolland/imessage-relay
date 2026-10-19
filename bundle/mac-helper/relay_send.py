@@ -1,4 +1,4 @@
-"""iMessage Relay v1.4.0 -- delivery-proof queries and Messages.app sending.
+"""iMessage Relay v1.4.1 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
@@ -34,11 +34,14 @@ DELIVERY_FALLBACK_WINDOW_S = 4.0
 # ---------- delivery proof (watcher only; it holds Full Disk Access) ----------
 # One file per pending send, so a concurrent host append and a watcher resolve never lose each other's
 # record. Records are body-free: handle, send time, text length and label only -- never the body or a hash.
-def add_pending_send(handle, at, text_length, label='', path=None):
-    """Host (no chat.db access) records a send for the watcher to verify. NEVER stores the body."""
+def add_pending_send(handle, at, text_length, label='', path=None, note=''):
+    """Host (no chat.db access) records a send for the watcher to verify. NEVER stores the body.
+    v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0177")."""
     d = path or rc.PENDING_DIR
     rec = {'id': uuid.uuid4().hex, 'handle': rc.normalize_handle(handle), 'at': float(at),
            'textLength': int(text_length), 'label': rc.clean_label(label)}
+    if note:
+        rec['note'] = str(note)[:60]
     rc.write_json_atomic(os.path.join(d, rec['id'] + '.json'), rec, mode=0o600)
     return rec['id']
 

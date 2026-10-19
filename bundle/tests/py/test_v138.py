@@ -255,7 +255,9 @@ class RelayPostTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     rp.format_event(g['payload'])
             else:
-                self.assertEqual(rp.format_event(g['payload']), g['expect'], g['payload']['type'])
+                # v1.4.1: confirmation prompts now say "Reply yes" (a plain yes confirms); nothing else changed
+                want = json.loads(json.dumps(g['expect'], ensure_ascii=False).replace('Say /yes within 2 min.', 'Reply yes within 2 min.'))
+                self.assertEqual(rp.format_event(g['payload']), want, g['payload']['type'])
 
     def test_relay_test_through_process_is_silent(self):
         calls = []

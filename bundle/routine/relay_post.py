@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.0 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.1 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -134,8 +134,11 @@ def format_event(payload):
         # item 6: ONE confirmation, posted by the watcher: \u2713\u2713 when chat.db shows delivered, else \u2713
         # after the ~20s fallback. (Dry runs and delivery-check-off still come from the host.)
         label = _label(payload)
+        note = str(payload.get('note') or '').strip()[:60]     # v1.4.1: "new contact, \u2022\u2022\u20220177"
         if payload.get('dryRun'):
             line = '\u2192 ' + label + ' (dry run, not sent)'
+        elif note:
+            line = '\u2192 ' + label + (' \u2713\u2713' if payload.get('delivered') else ' \u2713') + ' (' + note + ')'
         elif payload.get('delivered'):
             line = '\u2192 ' + label + ' \u2713\u2713 delivered'
         else:
@@ -164,13 +167,15 @@ def format_event(payload):
         if payload.get('reason') == 'new_contact':
             # v1.4.0: someone found in the Mac's Contacts (host-composed, name + last 4 digits, no body).
             detail = str(payload.get('detail') or '').strip()[:400]
-            text = detail or ('\u2753 Text %s from your Contacts? Say /yes within 2 min.' % label)
+            text = detail or ('\u2753 Text %s from your Contacts? Reply yes within 2 min.' % label)
             return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': text, 'body': False}]}
         if payload.get('reason') == 'directive':
             core = ('Send to %s instead of %s?' % (label, alt)) if alt else ('Send to %s?' % label)
         else:
             core = 'Reply to %s?' % label
-        return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': '❓ ' + core + ' Say /yes within 2 min.', 'body': False}]}
+        detail = str(payload.get('detail') or '').strip()[:400]      # v1.4.1: host-composed, body-free
+        text = detail or ('\u2753 ' + core + ' Reply yes within 2 min.')
+        return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': text, 'body': False}]}
     if t == 'needs_target':
         detail = str(payload.get('detail') or 'Who\u2019s this for? Start with a name, like "Alex: \u2026" or "text Alex \u2026".').strip()
         return {'kind': 'needs_target', 'lines': [{'id': base_id, 'text': detail, 'body': False}]}

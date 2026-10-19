@@ -96,17 +96,17 @@ class MultiWordNames(Base):
 
 
 class NewContact(Base):
-    def test_unique_full_name_asks_then_yes_sends(self):
+    def test_unique_full_name_with_two_numbers_asks_then_yes_sends(self):
         r = self.send('Austin Robinson: hey there')
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual(r['reason'], 'new_contact')
         self.assertEqual(r['handle'], '+15555550177')          # the mobile number, not home
         self.assertEqual(self.osa(), [])
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]
-        self.assertIn('Austin isn\u2019t on your relay list yet', ev['detail'])
-        self.assertIn('/add Austin <number>', ev['detail'])
-        self.assertIn('/yes', ev['detail'])
-        self.assertIn('Austin Robinson', ev['detail'])
+        self.assertIn('Austin Robinson has 2 numbers', ev['detail'])   # v1.4.1: choices listed (masked)
+        self.assertIn('\u2022\u2022\u20220177 mobile', ev['detail'])
+        self.assertIn('\u2022\u2022\u20220101 home', ev['detail'])
+        self.assertIn('Reply yes', ev['detail'])
         self.assertNotIn('5550177', ev['detail'])              # masked
         self.assertNotIn('hey there', json.dumps(ev))
         self.clock.t += 30

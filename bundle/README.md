@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.0
+# iMessage Relay v1.4.1
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -20,9 +20,17 @@ Your reply in the relay chat (x.com in Chrome)
   contacts), nothing is sent and the bot asks "Who's this for? Start with a name, like Alex: …".
 - Full names work as the prefix ("Mary Ann Jones: hi"). A name that nobody on the relay list has
   ("Austin Robinson: hey") is never guessed: the Mac looks it up in your Contacts and asks first
-  ("Austin isn't on your relay list yet. Reply /add Austin <number>, or /yes within 2 min to text the
-  Austin Robinson in your Contacts (+1 •••0177)"). `/yes` sends "hey" and saves Austin as a contact.
-  Two matches list the names only. `/add Austin +1 555 555 0177` adds someone directly.
+  ("Austin isn't on your relay list yet. Reply yes within 2 min to text the Austin Robinson in your
+  Contacts (•••0177), or /add Austin <number>."). `yes` sends "hey" and saves Austin as a contact.
+  Two matches list the names only; a card with several numbers lists them masked.
+  v1.4.1: an **exact full name** ("Austin Robinson: hey", any case) that matches exactly one Contacts
+  card with exactly one number or email sends right away, saves the contact and reports
+  "→ Austin Robinson ✓ (new contact, •••0177)". `relayctl set confirmNewContacts always` asks every time
+  (default `exact-skip`). `/add Austin +1 555 555 0177` adds someone directly.
+- v1.4.1: while the relay is waiting for a confirmation (a reply prompt, `/block`, `/add`), a plain
+  `yes` / `y` / `yep` / `ok` / `send` / `do it` confirms and `no` / `cancel` cancels (any case, with
+  punctuation or emoji). Those words are never texted to anyone while a prompt is pending, nor within
+  10 minutes of one ("Nothing is waiting for a yes …"). With nothing pending, "ok" is an ordinary reply.
 - Contacts sharing a first name get distinct labels ("Alex R.", "Alex J."), or set your own
   with `relayctl label`.
 - Only contacts you opt in are relayed, unless you turn on **relay-all**
@@ -39,7 +47,7 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.0)
+## Limits (v1.4.1)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -84,8 +92,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.0 changes the extension slightly: the popup's
-wording for a Contacts confirmation; v1.3.9 changed it too) and press Cmd+R
+reload the extension card in chrome://extensions (v1.4.1 changes the extension: a plain "yes"/"no"
+answers a reply prompt; v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations
