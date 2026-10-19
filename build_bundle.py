@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.4, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.5, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=909c5240a0d96838cb20d9d1f2bfee64e66c05aced41df49460a7eae9c103bb6 nl=1
-# iMessage Relay v1.4.4
+@@@@ FILE README.md mode=644 sha256=fa5962bc7bb7a98083a5d106ed77abd65d492ab9c0852dfd791261bd39171c6e nl=1
+# iMessage Relay v1.4.5
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -81,12 +81,17 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.4)
+## Limits (v1.4.5)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
   effort); the name prefix always works.
-- Replies go to 1:1 chats only: group texts are relayed (relay-all) but can't be replied to yet.
+- A reply goes to a group only when it starts with the group's exact name (`family: …`) or quotes a
+  group message, and only after you answer yes to "Reply to the … group?" (relay-all only). A bare
+  reply never goes to a group.
+- 🗑️ on a relayed text asks "Block …?"; yes (or 👍, or `/block yes`) mutes that sender here only
+  (Messages is not changed). Texts from numbers not in Contacts, or flagged by Messages, show
+  "⚠️ Unknown · " first (`relayctl set spamMode off` to stop); nothing is hidden.
   No attachments are sent (incoming ones arrive as "[attachment]").
 
 ## Files
@@ -126,8 +131,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.4 changes the extension: native Reply quotes;
-v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
+reload the extension card in chrome://extensions (v1.4.5 changes the extension: 🗑️ to block;
+v1.4.4, v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations
@@ -178,9 +183,9 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing","detail","at"}` (no message body)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=dac1298706b248b1fa5a7e41ccb5e39d80d2eb852803dbd78ee5181d57994f17 nl=1
+@@@@ FILE install.sh mode=755 sha256=f9c6fb032754e5fa7ab51ca30b66bde29ac2435734fe5510d67f0d67ff8f5d02 nl=1
 #!/bin/bash
-# iMessage Relay v1.4.4 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
+# iMessage Relay v1.4.5 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
 # roster.json, and the existing "iMessage Relay Watcher" app (never rebuilt or re-signed, so
 # its Full Disk Access grant survives), and keeps the LaunchAgent pointing at that app.
@@ -609,7 +614,7 @@ cat <<NEXT
 Log (counts only, never message text): $LOGS/imessage-relay.log
 NEXT
 @@@@ END
-@@@@ FILE run_tests.sh mode=755 sha256=08b17b4bbfd30ff1d67a3575f28bea8aa509385a8f9e563ad06198b9100ac319 nl=1
+@@@@ FILE run_tests.sh mode=755 sha256=6867bc5d853c9aea879c9d71c173463205583110f00f9fc184c1ca9ed235ea7b nl=1
 #!/bin/bash
 # Runs every test. Needs python3 (3.9+); the JS tests also need node and jsdom
 # (NODE_PATH pointing at a node_modules with jsdom, or `npm i jsdom` here).
@@ -629,7 +634,7 @@ if command -v node >/dev/null 2>&1 && ! node -e "require('jsdom')" >/dev/null 2>
   _gr="$(npm root -g 2>/dev/null)"; [[ -n "$_gr" ]] && export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gr"
 fi
 if command -v node >/dev/null 2>&1 && node -e "require('jsdom')" >/dev/null 2>&1; then
-  for t in detect frames owner native guess yes reaction quote probe xreply e2etest chips smoke-chrome; do
+  for t in detect frames owner native guess yes reaction quote probe xreply trash e2etest chips smoke-chrome; do
     echo "== JS: $t =="
     node "tests/js/$t.test.js" 2>&1 | grep -E 'passed|FAIL|PASS chrome' ; [[ ${PIPESTATUS[0]} -eq 0 ]] || fail=1
   done
@@ -725,9 +730,9 @@ Also, by hand if you like:
   - System Settings > Privacy & Security > Automation -> turn off Messages for Google Chrome
 DONE
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=a79795659731b88a49909abe70fba4850a9f9e634c7431bf2d5bb98d4f16a855 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=512d6ebdca208da339c9eb0dd3d6343ecc980e8f354160137a0ebaf3f095dc76 nl=1
 /*
- * iMessage Relay v1.4.4: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.5: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -1155,12 +1160,19 @@ async function handleItem(item) {
 // prompt, the 2-minute window and the owner identity). A pending reply prompt is answered here (the text
 // is held here); a /block or /add prompt is answered by the host. A reaction is never sent as a message.
 async function handleReaction(r) {
-  const word = r && (r.word === 'yes' || r.word === 'no') ? r.word : '';
+  const word = r && (r.word === 'yes' || r.word === 'no' || r.word === 'block') ? r.word : '';
   if (!word) return;
   const cfg = await getConfig(false);
   if (!cfg.ok || !cfg.relayConversationId || String(r.conversationId || '') !== cfg.relayConversationId || cfg.paused) return;
   const key = String(r.key || '').slice(0, 300);
   if (await isDuplicate(key)) return;
+  if (word === 'block') {
+    // v1.4.5: a wastebasket on a relayed message -> the Mac asks "Block <label>?" (nothing is muted yet)
+    const quotedText = String(r.quotedText || '').slice(0, 500);
+    if (!quotedText) return;
+    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, quotedText, conversationId: cfg.relayConversationId }); } catch (e) { /* host down */ }
+    return;
+  }
   const item = { key, conversationId: cfg.relayConversationId, ts: String(r.ts || new Date().toISOString()), text: '' };
   const g = await getPendingGuess();
   if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
@@ -1266,7 +1278,7 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=f2390fe43d986afc94fa2496132ef83c8a38443af0b079ec13dfd188800047fa nl=1
+@@@@ FILE extension/content.js mode=644 sha256=d39f794f008fd064ef53b2e9167b695e187ac495c21393c78038e65642ec3e85 nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -1880,7 +1892,7 @@ chrome.runtime.onStartup.addListener(boot);
     // within 2 minutes of it, only once, and only with the owner's identity confirmed. The extension
     // reads the prompt's own text only to recognise it (prompts carry no message bodies).
     const PROMPT_RE = /reply yes within 2 min/i;
-    const UP_RE = /\u{1F44D}/u, DOWN_RE = /\u{1F44E}/u;
+    const UP_RE = /\u{1F44D}/u, DOWN_RE = /\u{1F44E}/u, TRASH_RE = /\u{1F5D1}/u;   // v1.4.5: wastebasket
     const PICT_RE = /\p{Extended_Pictographic}/gu;
     const PROMPT_WINDOW_MS = 120000;
     const promptMarks = new Map();   // uuid -> { at, up, down, fired }
@@ -1888,11 +1900,12 @@ chrome.runtime.onStartup.addListener(boot);
       const textEl = bodyEl(entry);
       const quoteEl = findQuote(entry);
       const kinds = new Set();
-      let up = false, down = false;
+      let up = false, down = false, trash = false;
       const look = s => {
         if (!s) return;
         if (UP_RE.test(s)) up = true;
         if (DOWN_RE.test(s)) down = true;
+        if (TRASH_RE.test(s)) trash = true;
         const m = s.match(PICT_RE); if (m) m.forEach(k => kinds.add(k));
       };
       walkElements(entry, el => {
@@ -1901,14 +1914,39 @@ chrome.runtime.onStartup.addListener(boot);
         for (let n = el.firstChild; n; n = n.nextSibling) if (n.nodeType === 3) look(n.nodeValue);
         look(el.getAttribute('alt')); look(el.getAttribute('aria-label'));
       });
-      if (kinds.size >= 4) return { up: false, down: false };    // an emoji picker / hover bar, not a reaction
-      return { up, down };
+      if (kinds.size >= 4) return { up: false, down: false, trash: false };    // an emoji picker / hover bar, not a reaction
+      return { up, down, trash };
     }
     function isPrompt(entry) {
       const tEl = bodyEl(entry);
       if (!tEl) return false;
       const t = String(tEl.textContent || '');
       return PROMPT_RE.test(t) && t.length < 600;
+    }
+    // v1.4.5: a wastebasket reaction the owner adds to a RELAYED message (an inbound bubble that is not
+    // a prompt) asks to block that sender. Like the prompt reactions: only one that appears after the
+    // bubble was first seen (never one already there at load), once per bubble, owner identity confirmed.
+    // The bubble's own text goes to the Mac in memory only (the Mac reads its "Label:" to find the
+    // sender, exactly like a quote); it is never logged or stored.
+    const trashMarks = new Map();   // uuid -> { trash, fired }
+    function scanTrash(e, u, conv) {
+      const st = reactionState(e);
+      const mk = trashMarks.get(u);
+      if (!mk) {
+        if (trashMarks.size > 2000) trashMarks.clear();
+        trashMarks.set(u, { trash: st.trash, fired: false });
+        return;
+      }
+      if (mk.fired || !st.trash || mk.trash) { mk.trash = mk.trash || st.trash; return; }
+      mk.trash = true;
+      if (!ownerCheck()) return;
+      const a = analyze(e);
+      if (a.direction !== 'inbound' || !a.text) return;   // only a relayed (inbound) message, never mine or unclear
+      mk.fired = true;
+      try {
+        onReaction({ conversationId: conv, key: 'trash:' + u, word: 'block', quotedText: a.text.slice(0, 500),
+                     ts: new Date(now()).toISOString() });
+      } catch (err) { info('reaction emit failed', err); }
     }
     function scanReactions(roots) {
       const conv = conversationId();
@@ -1923,7 +1961,8 @@ chrome.runtime.onStartup.addListener(boot);
       }
       for (const e of entries) {
         const u = uuidOf(e);
-        if (!u || !isPrompt(e)) continue;
+        if (u && !isPrompt(e)) { scanTrash(e, u, conv); continue; }
+        if (!u) continue;
         if (!ownerCheck()) return;
         const st = reactionState(e);
         const mk = promptMarks.get(u);
@@ -2443,11 +2482,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=af19dc0e000bca396831a1204c58badfaf4c804222fb451fd4af9a8284db1ed8 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=b6cf38665fe8e2b84b07a4a58519f5bebcc607745e910abd1934cc3da29a1e2c nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open chat page only; never posts, types, or calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -2656,10 +2695,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=90df1a1dc1a75c2550768c8f85718420547f243d8c60ebb6faac14a5540c3d7f nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=95dae4957670af026b5896716a248f7522e6f8034533563bf6c7f15d37cc8d79 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.4.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.5.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -3271,6 +3310,59 @@ def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S, fuzzy=None):
     return None
 
 
+GROUP_CONFIRM_WINDOW_S = 150.0     # the 2-minute prompt plus a little slack for the extension round trip
+GROUP_GUID_WAIT_S = 4.0
+
+
+def group_guid_lookup(key, sleeper, now, wait_s=GROUP_GUID_WAIT_S):
+    """v1.4.5: ask the watcher (it can read chat.db) for the Messages chat id of a group key. Metadata only."""
+    jobs = os.path.join(rc.APP_DIR, 'jobs')
+    jid = 'groupguid' + uuid.uuid4().hex[:10]
+    job_p, res_p = os.path.join(jobs, jid + '.job.json'), os.path.join(jobs, jid + '.result.json')
+    rc.write_json_atomic(job_p, {'id': jid, 'type': 'group_guid', 'key': str(key)[:130], 'createdAt': now()})
+    deadline = now() + wait_s
+    while True:
+        res = rc.read_json(res_p)
+        if isinstance(res, dict):
+            try:
+                os.unlink(res_p)
+            except OSError:
+                pass
+            g = str(res.get('guid') or '') if res.get('ok') else ''
+            return g if re.match(r'^[A-Za-z0-9;:+@._-]{3,160}$', g) else None
+        if now() >= deadline:
+            break
+        sleeper(0.25)
+    for p in (job_p, res_p):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    return None
+
+
+def _store_pending_group(handle, guid, label, at):
+    def fn():
+        state = load_state()
+        state['pendingGroupSend'] = {'handle': handle, 'guid': guid, 'label': label, 'at': float(at)}
+        rc.write_json_atomic(STATE_PATH, state)
+    _with_host_lock(fn)
+
+
+def _take_pending_group(handle, now_t):
+    """The group prompt the owner is answering: same group, within the window. Consumed once."""
+    def fn():
+        state = load_state()
+        p = state.get('pendingGroupSend')
+        if not (isinstance(p, dict) and p.get('handle') == handle
+                and 0 <= now_t - float(p.get('at') or 0) <= GROUP_CONFIRM_WINDOW_S):
+            return None
+        state.pop('pendingGroupSend', None)
+        rc.write_json_atomic(STATE_PATH, state)
+        return p
+    return _with_host_lock(fn)
+
+
 def _store_pending_new(handle, name, at, prefix='', existing=False):
     def fn():
         state = load_state()
@@ -3462,17 +3554,53 @@ def handle_bare_confirm(word, quoted, cfg, now, poster):
     return dict(base, ok=True, skipped=detail)
 
 
+def handle_trash_reaction(msg, cfg, now, poster):
+    """v1.4.5: the owner put a wastebasket on a relayed message. Find its sender from the bubble's
+    "Label:" (like a quote; a group line "Family \u00b7 Sam: \u2026" means Sam, never the whole group) and ask
+    "Block <label>?". Nothing is muted until yes / /block yes / a thumbs-up on the prompt. Relaying only."""
+    base = {'dryRun': cfg['dryRun']}
+    quoted = msg.get('quotedText') if isinstance(msg.get('quotedText'), str) else ''
+    quoted = quoted[:500]
+    d = rc.build_directory(cfg, rc.load_roster())
+    by = {e['handle']: e for e in d}
+    tgt = None
+    h, st = rc.parse_quote(quoted, cfg, d)
+    if st == 'match' and by[h]['kind'] == 'group':
+        # the sender inside a group line: "Family \u00b7 Sam: hi" -> look at what follows the group name
+        rest = re.sub(r'\s+', ' ', quoted).strip()
+        i = rest.find('\u00b7')
+        h2, st2 = rc.parse_quote(rest[i + 1:] if i >= 0 else '', cfg, [e for e in d if e['kind'] != 'group'])
+        h, st = (h2, st2) if st2 == 'match' else (None, 'none')
+    if st == 'match':
+        tgt = by.get(h)
+    if not tgt:
+        detail = "Couldn\u2019t tell whose message that was. To block someone, say \"/block <name>\"."
+        rc.log_event('needs_target', reason='trash-unresolved', action='block')
+        notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'trash-unresolved', 'at': rc.iso_utc(now())})
+        return dict(base, ok=False, needsTarget=True, error=detail)
+    shown = rc.guess_label(tgt)
+    _store_pending_block(tgt['handle'], tgt['label'], now())
+    _note_prompt(now())
+    detail = ('\U0001f5d1\ufe0f Block %s? Their texts stop relaying here (Messages is not changed). '
+              'Reply yes within 2 min (no to cancel).' % shown)
+    rc.log_event('needs_confirm', reason='trash-block')
+    notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'confirm-block', 'at': rc.iso_utc(now())})
+    return dict(base, ok=False, needsConfirm=True, label=tgt['label'])
+
+
 def handle_reaction(msg, cfg, now, poster):
     """v1.4.2: the owner put a thumbs-up (confirm) or thumbs-down (cancel) on a pending prompt in the relay
     chat. The extension only sends this for a reaction it saw appear on the newest "Reply yes" prompt within
     2 minutes of it; a pending reply prompt is answered in the extension itself. Here: /block and /add.
     Nothing pending -> ignored silently (a reaction is never a message and never texted)."""
-    word = 'yes' if msg.get('word') == 'yes' else 'no' if msg.get('word') == 'no' else None
+    word = msg.get('word') if msg.get('word') in ('yes', 'no', 'block') else None
     conv = str(msg.get('conversationId') or '').strip()
     if not word or (cfg.get('relayConversationId') and conv != cfg['relayConversationId']):
         return {'ok': False, 'error': 'not a relay-chat reaction'}
     if cfg['paused']:
         return {'ok': False, 'error': 'paused'}
+    if word == 'block':
+        return handle_trash_reaction(msg, cfg, now, poster)
     t = now()
     state = load_state()
     if not (_fresh(state, 'pendingBlock', t, CONFIRM_WINDOW_S) or _fresh(state, 'pendingAdd', t, ADD_WINDOW_S)):
@@ -3544,7 +3672,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                      confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe))
     confirmed = bool(msg.get('confirmed'))
     hint = msg.get('handle')
-    hint_norm = rc.normalize_handle(hint, cfg['defaultCountryCode']) if hint else None
+    if hint and str(hint).startswith('group:'):
+        hint_norm = str(hint)[:130]          # v1.4.5: a group key is kept as is
+    else:
+        hint_norm = rc.normalize_handle(hint, cfg['defaultCountryCode']) if hint else None
     new_contact = None
     if confirmed:
         # C1: a "/yes" confirmation must go to the EXACT handle the owner confirmed, never a re-guess.
@@ -3561,7 +3692,14 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             new_contact = pend_new
             tgt = tgt or {'kind': 'new', 'label': rc.clean_label(pend_new['name']) or rc.format_handle(hint_norm),
                           'name': pend_new['name'], 'handle': hint_norm, 'lastInboundAt': None}
-        if not tgt or tgt.get('kind') == 'group':
+        group_ok = None
+        if tgt and tgt.get('kind') == 'group':
+            # v1.4.5: a group send needs the group prompt the host itself issued (same group, 2 min) and relay-all
+            pend_g = _take_pending_group(hint_norm, now()) if cfg['relayAll'] else None
+            if not pend_g:
+                return refuse('confirmed group send without a pending group prompt', handle=hint_norm)
+            group_ok = dict(tgt, guid=pend_g['guid'])
+        if not tgt or (tgt.get('kind') == 'group' and not group_ok):
             return refuse('confirmed handle is not a current recipient', handle=hint_norm)
         if not route.get('needsTarget') and route['contact']['handle'] == hint_norm:
             contact, body, by = route['contact'], route['body'], route['by']   # same target: use its stripped body
@@ -3573,6 +3711,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                 new_contact = None                                              # a typo of someone on the list
         else:
             contact, body, by = tgt, text, 'confirmed'                         # target drifted: send the full reply
+        if group_ok:
+            if route.get('needsTarget') or route['contact']['handle'] != hint_norm:
+                return refuse('confirmed group send no longer names that group', handle=hint_norm)
+            contact = group_ok
         handle = contact['handle']
     else:
         direct = None
@@ -3616,6 +3758,22 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             return refuse('the routed recipient does not match the handle the extension reported', handle=handle)
         if not body.strip():
             return refuse('empty text after the name prefix', handle=handle)
+        if contact.get('kind') == 'group':
+            # v1.4.5: a reply to a group (exact name or a quote of its message) is ALWAYS confirmed first.
+            guid = group_guid_lookup(handle, sleeper, now)
+            if not guid:
+                detail = "Can't reach the %s group right now (the Mac helper didn't answer). Nothing was sent." % contact['label']
+                rc.log_event('group_unavailable', routedBy=by, textLength=len(body))
+                notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'group-unavailable', 'at': rc.iso_utc(now())})
+                return dict(base, ok=False, needsTarget=True, error=detail, reason='group-unavailable')
+            _store_pending_group(handle, guid, contact['label'], now())
+            detail = '\u2753 Reply to the %s group? Reply yes within 2 min.' % contact['label']
+            rc.log_event('needs_confirm', routedBy=by, reason='group', textLength=len(body))
+            _note_prompt(now())
+            notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'reason': 'group',
+                                 'detail': detail, 'at': rc.iso_utc(now())})
+            return dict(base, ok=False, needsConfirm=True, guess=True, label=contact['label'], handle=handle,
+                        reason='group', contact=contact['label'], routedBy=by)
         # W1: a directive aimed at someone other than the current conversation (or a dict-word bare form)
         # is held for a /yes confirmation. Label only -- the stripped body is never shown.
         if route.get('confirm'):
@@ -3678,8 +3836,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         window.append(t)
         state.update(recent=recent, sends=window)
         ok, err = True, ''
+        is_group = contact.get('kind') == 'group'
         if not dry:
-            ok, err = rc.send_imessage(outgoing, handle, runner=runner, sleeper=sleeper)
+            if is_group:        # v1.4.5: to the group chat itself, by its Messages chat id
+                ok, err = rc.send_imessage(outgoing, contact['guid'], runner=runner, sleeper=sleeper, target='chat')
+            else:
+                ok, err = rc.send_imessage(outgoing, handle, runner=runner, sleeper=sleeper)
             if not ok:
                 if err != 'timeout':        # a clear failure: allow an immediate manual retry
                     recent.pop(fp, None)
@@ -3687,7 +3849,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                 # a timeout is ambiguous (it may actually have sent): keep the fingerprint, no double-send
             elif cfg.get('deliveryCheck', True):
                 rc.add_pending_send(handle, t, len(outgoing), label=contact['label'],   # record inside the lock
-                                    note=('new contact, ' + _short_mask(handle)) if new_contact else '')
+                                    note=('new contact, ' + _short_mask(handle)) if new_contact else '',
+                                    chat_guid=contact['guid'] if is_group else '')
         rc.write_json_atomic(STATE_PATH, state)
     if new_contact and ok and not dry:
         try:
@@ -3831,10 +3994,10 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=7a4120326d4b841cb3e6bb1ce3b9f26094281c40fc971286dccb5140aa8ee3e7 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=949a9fab688569da37faf8fbe1823f7bd41da62a69be47c591a6560cee419759 nl=1
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.4: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.5: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -3904,6 +4067,7 @@ OLD_MESSAGE_S = 86400       # never relay a message first seen more than 24h aft
 EMPTY_GRACE_S = 45          # an empty-body row is left uncommitted this long (attributedBody may still be landing)
 REBASELINE_GAP = 5000       # a jump larger than this (chat.db rebuilt / long outage) rebaselines with one status
 DIGEST_CHUNK = 10          # digest posts are chunked to at most 10 lines (item 10)
+BATCH_MAX = 10             # v1.4.5: up to 10 waiting texts share one webhook (relay_post caps at 20)
 SEND_CONFIRM_FALLBACK_S = 20  # item 6: if delivery is still unconfirmed after ~20s, post a plain ✓ sent
 REOPEN_EVERY_S = 300
 NOT_RUNNING_LOG_EVERY_S = 300
@@ -4237,7 +4401,8 @@ class Watcher:
                 col('is_audio_message'), col('date_edited'), col('date_retracted'), BATCH))
         body_q = 'SELECT text, %s FROM message WHERE ROWID = ?' % ('attributedBody' if 'attributedBody' in msg_cols else 'NULL')
         ctx = {'cc': cfg['defaultCountryCode'], 'mute': set(cfg['mute']), 'roster': rc.load_roster(),
-               'roster_changed': False, 'body_q': body_q, 'chat_cols': chat_cols, 'now': self.now()}
+               'roster_changed': False, 'body_q': body_q, 'chat_cols': chat_cols, 'now': self.now(),
+               'spam_col': 'is_spam' in msg_cols}
         cursor = self.cursor
         out, capped, stop = [], False, False
         for _ in range(40):
@@ -4355,12 +4520,62 @@ class Watcher:
              'receivedAt': rc.iso_utc(received), 'route': h}
         if reaction is not None:
             m['reaction'] = True
+        if not chat['group'] and cfg.get('spamMode', 'tag') == 'tag' and reaction is None:
+            # v1.4.5 spamMode tag (1:1 only): not in Contacts (and not a relay contact), or flagged by
+            # Messages (chat.is_filtered / message.is_spam). Flags only; the text is never hidden.
+            if (not contact and not name) or self.flagged(con, chat_id, rowid, ctx):
+                m['unknown'] = True
+                counts['taggedUnknown'] = counts.get('taggedUnknown', 0) + 1
         if chat['group']:
             glabel, ch = rc.roster_label(cfg, ctx['roster'], chat['key'], chat['name'], group=True)
             ctx['roster_changed'] |= ch
             m.update(group={'label': glabel, 'name': chat['name']}, route=chat['key'])
             counts['groupMessages'] += 1
         return ('relay', m)
+
+    def flagged(self, con, chat_id, rowid, ctx):
+        """Messages' own junk / unknown-sender flags for a 1:1 row (read-only, no text)."""
+        try:
+            if 'is_filtered' in ctx['chat_cols'] and chat_id is not None:
+                r = con.execute('SELECT is_filtered FROM chat WHERE ROWID = ?', (chat_id,)).fetchone()
+                if r and r[0]:
+                    return True
+            if ctx.get('spam_col'):
+                r = con.execute('SELECT is_spam FROM message WHERE ROWID = ?', (rowid,)).fetchone()
+                if r and r[0]:
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def group_guid(self, key):
+        """v1.4.5 (outbound only): the Messages chat id ("iMessage;+;chat...") for a group key
+        "group:<chat_identifier or guid>", so a reply can be sent to that chat. Metadata only; the
+        newest chat with that identifier wins (iMessage and SMS copies of one group can coexist)."""
+        if not key.startswith('group:') or len(key) <= len('group:'):
+            return {'ok': False, 'error': 'not a group key'}
+        ident = key[len('group:'):]
+        try:
+            con = rc.open_chat_db(self.db_path)
+        except Exception as e:
+            return {'ok': False, 'error': 'chat.db unavailable: ' + str(e)[:120]}
+        try:
+            rows = con.execute(
+                'SELECT c.guid, c.chat_identifier, (SELECT MAX(m.date) FROM chat_message_join j JOIN message m '
+                'ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID) FROM chat c WHERE c.chat_identifier = ? OR c.guid = ?',
+                (ident, ident)).fetchall()
+        except Exception as e:
+            return {'ok': False, 'error': 'query failed: ' + str(e)[:120]}
+        finally:
+            con.close()
+        best = None
+        for guid, ci, last in rows:
+            k = re.sub(r'[^A-Za-z0-9;:+@._-]', '', str(ci or guid or ''))[:120]
+            if k != ident or not guid:
+                continue
+            if best is None or (last or 0) > (best[1] or 0):
+                best = (str(guid), last)
+        return {'ok': True, 'guid': best[0]} if best else {'ok': False, 'error': 'no such group chat'}
 
     def chat_info(self, con, chat_id, chat_cols):
         """{group, key, name} for a chat ROWID (cached). Group = chat.style 43 or more than one
@@ -4405,6 +4620,8 @@ class Watcher:
             p['group'] = dict(m['group'])
         if m.get('reaction'):
             p['reaction'] = True            # item 5: formats as "Alex ❤️ your message" (no colon)
+        if m.get('unknown'):
+            p['unknown'] = True             # v1.4.5 spamMode tag: posted as "⚠️ Unknown · <label>: <text>"
         return p
 
     # Backpressure replaces the old drop-oldest cap: nothing queued is ever discarded. When the queue
@@ -4447,6 +4664,22 @@ class Watcher:
                 for m in chunk:
                     self._bookkeep(m, t, counts)
         while not failed and self.retry and posts < MAX_POSTS_PER_TICK:
+            if len(self.retry) >= 2 and cfg.get('batchWebhooks', True):
+                # v1.4.5 speed: several texts waiting -> ONE webhook (one routine run on the box), still
+                # one X message per text there. Same retry rules: nothing is dropped, a 2xx is never re-sent.
+                chunk = self.retry[:BATCH_MAX]
+                payload = {'type': 'batch', 'count': len(chunk), 'messages': [self.public(m) for m in chunk],
+                           'untrusted': True}
+                if not self.post(cfg, payload):
+                    failed = True
+                    break
+                self.retry = self.retry[len(chunk):]
+                posts += 1
+                counts['forwarded'] += len(chunk)
+                counts['batched'] += len(chunk)
+                for m in chunk:
+                    self._bookkeep(m, t, counts)
+                continue
             m = self.retry[0]
             if not self.post(cfg, dict(type='message', untrusted=True, **self.public(m))):
                 failed = True
@@ -4471,7 +4704,7 @@ class Watcher:
     # ----- one cycle -----
     def tick(self):
         cfg = self.load_config()
-        counts = dict.fromkeys(('scanned', 'notAllowlisted', 'group', 'groupMessages', 'own', 'muted', 'shortCode', 'noHandle',
+        counts = dict.fromkeys(('taggedUnknown', 'batched', 'scanned', 'notAllowlisted', 'group', 'groupMessages', 'own', 'muted', 'shortCode', 'noHandle',
                                 'reactionsOrEvents', 'empty', 'deferredEmpty', 'tooOld', 'rowErrors', 'rosterWriteErrors',
                                 'new', 'held', 'forwarded', 'digested', 'webhookFailures', 'droppedPaused',
                                 'backpressure', 'rateLimited', 'rebaselined', 'dbBusy'), 0)
@@ -4609,7 +4842,8 @@ class Watcher:
             # owner sent from another device just before never counts), excluding rows already matched.
             status, error, rowid = rc.check_delivery_once(
                 e['handle'], float(e['at']), db_path=self.db_path,
-                exclude_rowids=tick_claimed, text_length=e.get('textLength'))
+                exclude_rowids=tick_claimed, text_length=e.get('textLength'),
+                chat_guid=e.get('chatGuid') or None)        # v1.4.5: a group send is proven in its chat
             if rowid is not None:
                 tick_claimed.add(rowid)            # same-tick collision guard (even for a still-pending match)
             if status == 'delivered':
@@ -4697,6 +4931,8 @@ class Watcher:
 
     def run_job(self, job, cfg):
         typ = job.get('type')
+        if typ == 'group_guid':
+            return self.group_guid(str(job.get('key') or ''))
         if typ == 'confirm_delivery':                 # poll check_delivery_once (blocking helper removed in v1.3)
             handle, since = job.get('handle', ''), float(job.get('since') or 0)
             attempts = max(1, int(job.get('attempts') or 10))
@@ -4830,9 +5066,9 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=ab8931969f9504ca6480edb78a5512f853a5403ef90aba700478776bad36d7ff nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=f905a3fa8ea70a761345a28bcdbbb9624b410d33eed0dcfea8e34501c3e6292c nl=1
 """
-iMessage Relay v1.4.4: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.5: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -4856,7 +5092,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.4'
+VERSION = '1.4.5'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -4905,6 +5141,7 @@ DEFAULT_CONFIG = {
     'rosterDays': 30,
     'mute': [],
     'skipShortCodes': True,
+    'batchWebhooks': True,         # v1.4.5: texts waiting together share one webhook (one routine run)
     'footer': '',
     'deliveryCheck': True,
     'maxSendsPerMinute': 6,
@@ -4918,6 +5155,7 @@ DEFAULT_CONFIG = {
     'autoReopenMessages': False,
     'pollSeconds': 10,
     'defaultCountryCode': '1',
+    'spamMode': 'tag',             # v1.4.5: tag (prefix "\u26a0\ufe0f Unknown \u00b7 ") | off. Never hides a text.
     'confirmNewContacts': 'exact-skip',   # v1.4.1: exact-skip (an exact full name, one card, one number: send) | always
 }
 
@@ -5094,8 +5332,11 @@ def sanitize_config(user):
     cfg['redactCodes'] = truthy(cfg.get('redactCodes'), True)
     cfg['relayAll'] = truthy(cfg.get('relayAll'), False)
     cfg['skipShortCodes'] = truthy(cfg.get('skipShortCodes'), True)
+    cfg['batchWebhooks'] = truthy(cfg.get('batchWebhooks'), True)
     cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
+    sm = str(cfg.get('spamMode') or 'tag').strip().lower()
+    cfg['spamMode'] = sm if sm in ('tag', 'off') else 'tag'
     mute = []
     for m in cfg.get('mute') if isinstance(cfg.get('mute'), list) else []:
         if not isinstance(m, str) or not m.strip():
@@ -5307,6 +5548,7 @@ def contact_keys(entries):
     instead of being ignored. A name that equals a label is not added (the label decides)."""
     keys = {e['label'].lower(): {e['handle']} for e in entries if e.get('label')}
     labels = set(keys)
+    group_labels = {e['label'].lower() for e in entries if e.get('label') and e.get('kind') == 'group'}
     for e in entries:
         kind = e.get('kind', 'contact')
         if kind == 'contact':
@@ -5318,6 +5560,10 @@ def contact_keys(entries):
         for k in cand:
             if k and k not in labels:
                 keys.setdefault(k, set()).add(e['handle'])
+            elif k and k in group_labels:
+                # v1.4.5: a person's name that is also a group's name is ambiguous ("Who's this for?"),
+                # never a silent pick of the group or the person.
+                keys[k].add(e['handle'])
     return keys
 
 
@@ -5730,9 +5976,18 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
 
     def deliver(e, body, by):
         if e['kind'] == 'group':
-            return need("group replies aren't supported yet",
-                        "Group replies aren't supported yet. To text one person, start with their name, like %s: \u2026"
-                        % example_label(cfg, d))
+            # v1.4.5: a group is reached ONLY by its exact name or a quote of its message (never a bare
+            # reply), only under relay-all (the same opt-in that relays it), and the host ALWAYS asks first.
+            if by not in ('prefix', 'directive', 'quote'):
+                return need('a bare reply never goes to a group')
+            if not cfg['relayAll']:
+                return need('group replies need relay-all',
+                            "Can't send to the %s group: group replies need relay-all on." % e['label'])
+            at = e['lastInboundAt']
+            if at is None or now - at > cfg['rosterDays'] * 86400:
+                return need('%s has not texted within rosterDays' % e['label'],
+                            "Can't send to the %s group: it hasn't texted you in the last %d days." % (e['label'], cfg['rosterDays']))
+            return {'contact': e, 'body': body, 'by': by, 'group': True}
         if e['kind'] == 'roster':
             if not cfg['relayAll']:
                 return need('%s is not a contact (relayAll is off)' % e['label'],
@@ -6068,8 +6323,8 @@ def __getattr__(name):
         return getattr(relay_echo, name)
     raise AttributeError("module 'relay_common' has no attribute %r" % name)
 @@@@ END
-@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=c8278abffc5c5c4c4ce1e42fc49f72a0570188e08c8f0c6a50286e23934ca691 nl=1
-"""iMessage Relay v1.4.4 -- look a name up in the Mac's Contacts (for a reply to someone new).
+@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=c1acf3df206c2050df59825db58acaf622774c3f568d972a42c45f1b1ef30841 nl=1
+"""iMessage Relay v1.4.5 -- look a name up in the Mac's Contacts (for a reply to someone new).
 
 When the owner starts a reply with a name that is on no relay list ("Jordan Rivera: hey"), the host
 asks the watcher (it holds Full Disk Access, which covers the Contacts database) to look that name up.
@@ -6196,8 +6451,8 @@ def lookup(name, cfg, globs=None, people=None, fuzzy=False):
             break
     return {'ok': True, 'matches': out}
 @@@@ END
-@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=ce1e0c9281207c697836f8450148374cb9b5787a8f8a0d0ce970af02b8af353e nl=1
-"""iMessage Relay v1.4.4 -- conversational addressing (directive parsing).
+@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=f227be48e2f6f620b001febba5719e57d2bf869ff4233ff8c38d8f667a676b48 nl=1
+"""iMessage Relay v1.4.5 -- conversational addressing (directive parsing).
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.parse_directive, rc.DIRECTIVE_DICT_WORDS, ...); relay_common re-exports these
 names lazily. Do not import relay_directive before relay_common.
@@ -6321,8 +6576,8 @@ def parse_directive(text, cfg, directory=None):
                 return h, text, 'unknown_handle', 'handle', ''
     return None, text, 'none', '', ''
 @@@@ END
-@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=19841a0aa3a18f7ffcab4c800bd82be6a01e1e35fe460ef32c19ca371a7a03df nl=1
-"""iMessage Relay v1.4.4 -- echo guard + bot-output detection.
+@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=23ebe2f93ca4c3fb3ba9f02cd775a6f96d5ea46c6a109c63efa68d660ba966e3 nl=1
+"""iMessage Relay v1.4.5 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
 these names lazily. Do not import relay_echo before relay_common."""
@@ -6443,8 +6698,8 @@ def is_echoed_inbound(text, prefix_stripped=None, at=None, path=None, handle='')
             return True
     return False
 @@@@ END
-@@@@ FILE mac-helper/relay_send.py mode=644 sha256=0d0d1ccb5df654bd6b4f12d868708a17a9a248ae1ae2fb2faad05413ac5524bb nl=1
-"""iMessage Relay v1.4.4 -- delivery-proof queries and Messages.app sending.
+@@@@ FILE mac-helper/relay_send.py mode=644 sha256=fe11b3b974dcc675229e07ba9bedcd51f6df3452a9da6e4eabe5b667e848f19b nl=1
+"""iMessage Relay v1.4.5 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
@@ -6469,6 +6724,17 @@ WHERE m.is_from_me = 1 AND m.date >= ? AND h.id = ?
 ORDER BY m.date ASC, m.ROWID ASC
 """
 
+# v1.4.0: outgoing messages in ONE group chat, found by its Messages chat GUID (the id the reply was
+# sent to). Same columns as DELIVERY_SQL; delivery flags and lengths only, never text.
+DELIVERY_SQL_GROUP = """
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, ''))
+FROM message m
+JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+JOIN chat c ON c.ROWID = cmj.chat_id
+WHERE m.is_from_me = 1 AND m.date >= ? AND c.guid = ?
+ORDER BY m.date ASC, m.ROWID ASC
+"""
+
 
 # When a pending send's text length does NOT match any outgoing row (e.g. an attributedBody-only row,
 # where LENGTH(text)=0), we only trust a row that landed within this many seconds of the send. Past it,
@@ -6480,14 +6746,18 @@ DELIVERY_FALLBACK_WINDOW_S = 4.0
 # ---------- delivery proof (watcher only; it holds Full Disk Access) ----------
 # One file per pending send, so a concurrent host append and a watcher resolve never lose each other's
 # record. Records are body-free: handle, send time, text length and label only -- never the body or a hash.
-def add_pending_send(handle, at, text_length, label='', path=None, note=''):
+def add_pending_send(handle, at, text_length, label='', path=None, note='', chat_guid=''):
     """Host (no chat.db access) records a send for the watcher to verify. NEVER stores the body.
-    v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0188")."""
+    v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0188").
+    v1.4.2: `chat_guid` routes the check to a group chat (handle is then its group:<id> key)."""
     d = path or rc.PENDING_DIR
-    rec = {'id': uuid.uuid4().hex, 'handle': rc.normalize_handle(handle), 'at': float(at),
+    h = handle if str(handle).startswith('group:') else rc.normalize_handle(handle)
+    rec = {'id': uuid.uuid4().hex, 'handle': h, 'at': float(at),
            'textLength': int(text_length), 'label': rc.clean_label(label)}
     if note:
         rec['note'] = str(note)[:60]
+    if chat_guid:
+        rec['chatGuid'] = str(chat_guid)
     rc.write_json_atomic(os.path.join(d, rec['id'] + '.json'), rec, mode=0o600)
     return rec['id']
 
@@ -6536,18 +6806,22 @@ def remove_pending(entry, path=None):
         pass
 
 
-def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), text_length=None):
+def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), text_length=None, chat_guid=None):
     """One non-blocking delivery check for the watcher's tick. Reads only delivery flags, never text.
     Matches the earliest outgoing message in the 1:1 chat with `handle` after `since_unix`, skipping
     ROWIDs already claimed this tick and preferring an exact text-length match on ties. Returns
     (status, error, rowid): status is 'delivered', 'failed', 'pending' (sent, not yet confirmed /
-    not found yet) or 'unavailable' (no chat.db / query failed)."""
+    not found yet) or 'unavailable' (no chat.db / query failed).
+    v1.4.1: chat_guid set = a group send, matched in that chat (by its Messages GUID)."""
     try:
         con = rc.open_chat_db(db_path)
     except rc.ChatDbUnavailable:
         return 'unavailable', None, None
     try:
-        rows = con.execute(DELIVERY_SQL, (rc.unix_to_apple_ns(since_unix), rc.normalize_handle(handle))).fetchall()
+        if chat_guid:
+            rows = con.execute(DELIVERY_SQL_GROUP, (rc.unix_to_apple_ns(since_unix), str(chat_guid))).fetchall()
+        else:
+            rows = con.execute(DELIVERY_SQL, (rc.unix_to_apple_ns(since_unix), rc.normalize_handle(handle))).fetchall()
     except sqlite3.Error:
         return 'unavailable', None, None
     finally:
@@ -6609,18 +6883,24 @@ def error_message(code):
     return OSASCRIPT_ERRORS.get(code, OSASCRIPT_ERRORS['send_failed'])
 
 
-def build_osascript_cmd(text, handle, service='auto', script_path=None):
+def build_osascript_cmd(text, handle, service='auto', script_path=None, target='participant'):
     """argv list (no shell). Text, handle and service are separate argv items, never spliced into
-    source. service: 'iMessage', 'SMS', or 'auto' (iMessage, then SMS via Text Message Forwarding)."""
-    return [rc.OSASCRIPT, script_path or rc.SCRIPT_PATH, text, handle, service]
+    source. service: 'iMessage', 'SMS', or 'auto' (iMessage, then SMS via Text Message Forwarding).
+    v1.4.1: target 'chat' sends to the group chat whose Messages GUID is `handle` (an extra argv item,
+    only added when used)."""
+    cmd = [rc.OSASCRIPT, script_path or rc.SCRIPT_PATH, text, handle, service]
+    if target == 'chat':
+        cmd.append('chat')
+    return cmd
 
 
-def send_imessage(text, handle, runner=subprocess.run, sleeper=time.sleep, timeout=30, service='auto'):
+def send_imessage(text, handle, runner=subprocess.run, sleeper=time.sleep, timeout=30, service='auto',
+                  target='participant'):
     """(ok, errcode). errcode is a fixed token from OSASCRIPT_ERRORS (never raw AppleScript text).
     Retries exactly once, and ONLY when a completed osascript actually reported -1712 on stderr
     (Messages busy / first-run Automation prompt). A local process timeout means osascript itself
     hung, so it is NOT retried (re-running would just hang again)."""
-    cmd = build_osascript_cmd(text, handle, service)
+    cmd = build_osascript_cmd(text, handle, service, target=target)
     code = 'send_failed'
     for attempt in (1, 2):
         try:
@@ -6659,9 +6939,9 @@ def open_messages_hidden(runner=subprocess.run):
     except Exception:
         return False
 @@@@ END
-@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=5c79f7f1047c2b091bc1f3fb2575131e4fb67fb1fdaa9388b6f84da136f35d07 nl=1
+@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=77002ec82710f9b14606c0dbb3fa1b130debfc61b6dec49e1bfc8c4ed722f212 nl=1
 """
-iMessage Relay v1.4.4: guided-setup helpers shared by relayctl and the watcher.
+iMessage Relay v1.4.5: guided-setup helpers shared by relayctl and the watcher.
 
   detect_owner_handles(con, cc)   the owner's OWN iMessage/SMS addresses, read from chat.db rows the
                                   owner sent (message.account / destination_caller_id). Handles only;
@@ -6813,9 +7093,9 @@ def apply_setup(values, token=None):
     rc.with_host_lock(_do)
     return out
 @@@@ END
-@@@@ FILE mac-helper/relay_test.py mode=644 sha256=c23f72303784e2e95195fe9352af878d7134fda4d07bdd9e2f092d97d6d7cf43 nl=1
+@@@@ FILE mac-helper/relay_test.py mode=644 sha256=f4168a711ce8a4a4523d84ebaa797890b7e0a2e238bc4dcabde5b05b28a24c9f nl=1
 """
-iMessage Relay v1.4.4: the /test end-to-end check (runs inside the native host).
+iMessage Relay v1.4.5: the /test end-to-end check (runs inside the native host).
 
 The owner types "/test" (or "/test send") in the relay chat. The extension intercepts it before any
 reply routing and asks the host for {type:"test"}. The host then checks, each with its own timeout:
@@ -6994,7 +7274,7 @@ def record_routine(test_id, seen, now):
     rc.log_event('test_routine', testId=rec['testId'], seen=bool(seen))
     return True
 @@@@ END
-@@@@ FILE mac-helper/relayctl.py mode=755 sha256=e6fc53fa4a71e2b64890500cbd272dbb3a3b6cd39c8e7561b328a5b2b76f2e31 nl=1
+@@@@ FILE mac-helper/relayctl.py mode=755 sha256=80f58f4f67a50929721b851a1bbc09d67499de2f5f8bb8faffbd7ee3c4e0b9ea nl=1
 #!/usr/bin/python3
 """
 relayctl: the one command the bot (or you) uses to operate iMessage Relay on the Mac.
@@ -7015,6 +7295,8 @@ Every command prints one JSON object. Message bodies are never printed or stored
                                           pollSeconds, defaultCountryCode, replyWindowMinutes,
                                           ambiguousSeconds, confirmSends, rosterDays, skipShortCodes,
                                           confirmNewContacts exact-skip|always (v1.4.1)
+                                          spamMode tag|off (v1.4.5: "⚠️ Unknown · " on texts not in Contacts)
+                                          batchWebhooks on|off (v1.4.5: texts waiting together share one webhook)
   relayctl set-webhook --url URL --token-stdin   set webhookUrl + webhookToken together; the key is
                                           read from stdin so it never lands in argv or shell history
   relayctl contacts                       list opted-in contacts with their labels
@@ -7058,6 +7340,8 @@ SETTABLE = {
     'defaultCountryCode': str, 'relayConversationId': str, 'replyWindowMinutes': int, 'ambiguousSeconds': int,
     'confirmSends': 'bool', 'rosterDays': int, 'skipShortCodes': 'bool', 'redactCodes': 'bool',
     'confirmNewContacts': ('exact-skip', 'always'),   # v1.4.1
+    'spamMode': ('tag', 'off'),                       # v1.4.5
+    'batchWebhooks': 'bool',                          # v1.4.5
 }
 
 
@@ -7715,18 +7999,26 @@ def main(argv=None):
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/send_imessage.applescript mode=644 sha256=622a2360e5d4b7ee23350636536eeda3eedad396a78d751c607ccbfba3f56275 nl=1
--- iMessage Relay: sends ONE message to ONE participant (1:1). Text, handle and service arrive as
--- argv, so nothing from the message is ever interpolated into script source.
--- Usage: osascript send_imessage.applescript "<text>" "<handle>" ["iMessage"|"SMS"|"auto"]
+@@@@ FILE mac-helper/send_imessage.applescript mode=644 sha256=18901504322c7aacb1a3d60d65ce9d005c4e210a00d39e601c5a1dad2deddb3e nl=1
+-- iMessage Relay: sends ONE message to ONE participant (1:1) or to ONE group chat. Text, handle (or
+-- chat GUID) and service arrive as argv, so nothing from the message is ever interpolated into script source.
+-- Usage: osascript send_imessage.applescript "<text>" "<handle or chat GUID>" ["iMessage"|"SMS"|"auto"] ["chat"]
 -- service "auto" (default) tries iMessage first, then SMS (needs Text Message Forwarding).
+-- v1.4.1: a 4th argument "chat" sends to the group chat whose GUID is given ("iMessage;+;chat123..."),
+-- the same chat the group's messages came from (the service argument is then ignored).
 -- Works with Messages quit (it launches in the background, ~3 s) or hidden (~1 s).
 on run argv
-	if (count of argv) < 2 then error "expected: text handle [service]"
+	if (count of argv) < 2 then error "expected: text handle [service] [chat]"
 	set theText to item 1 of argv
 	set theHandle to item 2 of argv
 	set theService to "auto"
 	if (count of argv) is greater than or equal to 3 then set theService to item 3 of argv
+	if (count of argv) is greater than or equal to 4 and item 4 of argv is "chat" then
+		tell application "Messages"
+			send theText to chat id theHandle
+		end tell
+		return
+	end if
 	tell application "Messages"
 		if theService is "iMessage" then
 			send theText to participant theHandle of (1st account whose service type = iMessage)
@@ -7884,9 +8176,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=e35ee2051e4475adce025ad6f26553c62ed1e4b98e7643c9192c3e4d57d09376 nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=826a39582a8257d29d508576add1b1bda2efd0f2952b30ac70ef87cfd71337cb nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.4 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.5 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -7900,8 +8192,12 @@ What it does, all in one process:
      needs_target, blocked, unblocked, status, catching_up, resynced, wrong_account, refused, guess_expired,
      and v1.3.8's relay_test: the /test report, one X message, one short line per step).
   3. Encrypt each line for the relay conversation with xchat_lite's session-encrypt, which unwraps the
-     conversation key from the conversation_key_events the routine fetched on every run (no key cache),
-     passing the text to xchat_lite on STDIN — never on argv, never to disk.
+     conversation key from conversation_key_events, passing the text to xchat_lite on STDIN — never on
+     argv, never to disk. v1.4.5: the key events and the public signing keys (key material only, never
+     message events or bodies) are cached in ~/.imessage-relay-routine/xchat_keys.json (mode 600, 6 h), so
+     the routine fetches nothing from X on most runs. With no usable cache the helper answers
+     {"action":"fetch","need":[...]} and the routine fetches those and runs it again. A `batch` event
+     (several texts from one watcher tick) becomes one X message per text in a single run.
   4. Print a JSON plan on stdout: the pre-encrypted send(s) the routine then hands to the X plugin's
      `send_chat_message` (plus `add_conversation_keys` first, for an empty thread).
 
@@ -7950,6 +8246,7 @@ STDOUT (one JSON object):
   the owner; every status/confirmation line is silent (should_notify:false) and threads under the
   owner's reply when reply_to is set (item 1).
   {"action":"skip","reason":"duplicate id …"}
+  {"action":"fetch","need":["conversation_key_events","signing_keys"],"reason":"…"}   # v1.4.5: fetch, write again, rerun
   {"action":"error","reason":"…"}                          # body-free; the routine posts one failure line
 """
 import argparse
@@ -7971,6 +8268,14 @@ def _label(p, default='someone'):
     return str(p.get('label') or p.get('contactName') or default).strip() or default
 
 
+UNKNOWN_TAG = '\u26a0\ufe0f Unknown \u00b7 '
+BATCH_MAX = 20
+KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
+KEY_CACHE_TTL_S = 6 * 3600          # after 6 h the routine fetches keys again (a rotated key heals by then)
+KEY_CACHE_MAX_BYTES = 512 * 1024
+NEED_KEYS = ['conversation_key_events', 'signing_keys']
+
+
 def _message_line(m):
     """`<label>: <text>` or `<group.label> · <label>: <text>`. Carries the (untrusted) body. A tapback
     line (item 5) joins with a space, not a colon: "Alex \u2764\ufe0f your message"."""
@@ -7979,6 +8284,8 @@ def _message_line(m):
     g = m.get('group') or {}
     gl = str(g.get('label') or g.get('name') or '').strip()
     head = (gl + GROUP_SEP if gl else '') + label
+    if m.get('unknown') and not gl:
+        head = UNKNOWN_TAG + head       # v1.4.5 spamMode tag: not in Contacts / flagged by Messages
     sep = ' ' if m.get('reaction') else ': '
     return head + sep + text
 
@@ -7993,6 +8300,14 @@ def format_event(payload):
     base_id = str(payload.get('id') or '')
     if t == 'message':
         return {'kind': 'message', 'lines': [{'id': base_id, 'text': _message_line(payload), 'body': True}]}
+    if t == 'batch':
+        # v1.4.5 speed: several texts the watcher found in one tick, one webhook / one routine run.
+        # Still one X message per text (each pings), each deduped on its own id.
+        msgs = (payload.get('messages') or [])[:BATCH_MAX]
+        if not msgs:
+            raise ValueError('empty batch')
+        return {'kind': 'batch', 'lines': [{'id': str(m.get('id') or (base_id + '#' + str(i))), 'text': _message_line(m),
+                                            'body': True} for i, m in enumerate(msgs)]}
     if t == 'digest':
         # item 7: a header line, then ONE X message per person (their texts grouped under one label).
         msgs = payload.get('messages') or []
@@ -8003,6 +8318,8 @@ def format_event(payload):
             g = m.get('group') or {}
             gl = str(g.get('label') or g.get('name') or '').strip()
             head = (gl + GROUP_SEP if gl else '') + label
+            if m.get('unknown') and not gl:
+                head = UNKNOWN_TAG + head
             if head not in index:
                 index[head] = len(groups)
                 groups.append([head, [], []])
@@ -8194,6 +8511,59 @@ class Dedupe:
             self._d = d
 
 
+# ---------- key cache (v1.4.5 speed; key material only, never events or bodies) ----------
+class KeyCache:
+    """The relay conversation's `conversation_key_events` (wrapped conversation keys) and the senders'
+    public `signing_keys`, saved after a run that fetched them so later runs can skip both fetches.
+    Message events are never stored. Mode 600, atomic writes, one conversation, TTL KEY_CACHE_TTL_S."""
+
+    def __init__(self, path=None, ttl=KEY_CACHE_TTL_S, now=time.time):
+        self.path = os.path.expanduser(path or KEY_CACHE_PATH)
+        self.ttl = ttl
+        self.now = now
+
+    def load(self, conv):
+        try:
+            if os.path.getsize(self.path) > KEY_CACHE_MAX_BYTES:
+                return None
+            with open(self.path) as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(d, dict) or d.get('conversation_id') != conv:
+            return None
+        if not (0 <= self.now() - float(d.get('savedAt') or 0) <= self.ttl):
+            return None
+        cke, sk = d.get('conversation_key_events'), d.get('signing_keys')
+        if not cke or not sk or not isinstance(cke, list) or not isinstance(sk, list):
+            return None
+        return {'conversation_key_events': cke, 'signing_keys': sk}
+
+    def save(self, conv, cke, sk):
+        d = {'v': 1, 'conversation_id': conv, 'savedAt': self.now(), 'conversation_key_events': cke, 'signing_keys': sk}
+        data = json.dumps(d)
+        if len(data) > KEY_CACHE_MAX_BYTES:
+            return False
+        folder = os.path.dirname(self.path)
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix='.keys-')
+        try:
+            with os.fdopen(fd, 'w') as fh:
+                fh.write(data)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        return True
+
+    def clear(self):
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
+
+
 # ---------- xchat_lite location + encryption ----------
 def locate_helper(helper):
     """Return (python, script) for xchat_lite, honoring explicit paths then the skill's clone layout."""
@@ -8304,14 +8674,24 @@ def process(req, runner=None):
     if not conv:
         return {'action': 'error', 'reason': 'no relay conversation_id'}
 
-    xchat = req.get('xchat')
-    # No X context supplied: we cannot encrypt. Return the plan unencrypted so the routine can report
-    # the setup gap. We NEVER send text any other way.
-    if not xchat:
-        return {'action': 'error', 'reason': 'no xchat context (fetch conversation events + keys first)',
-                'posted_kind': ev['kind'], 'encrypted': False}
+    xchat = dict(req.get('xchat') or {})
+    # v1.4.5 speed: the keys come from the request (then cached) or from the key cache. With neither,
+    # ask the routine to fetch them ({"action":"fetch"}) and run again; nothing was committed yet.
+    cache = None if req.get('key_cache') is False else KeyCache(
+        req.get('key_cache_path') or os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', 'xchat_keys.json'))
+    supplied = bool(xchat.get('conversation_key_events') and xchat.get('signing_keys'))
+    from_cache = False
+    if not supplied and not xchat.get('prepare'):
+        cached = cache.load(conv) if cache else None
+        if not cached:
+            return {'action': 'fetch', 'need': list(NEED_KEYS), 'posted_kind': ev['kind'],
+                    'reason': 'no cached keys: fetch conversation_key_events + signing_keys and run again'}
+        xchat.update(cached)
+        from_cache = True
 
     reply_to = payload.get('reply_to')          # item 1: X event id of the owner's reply (optional)
+    if not xchat.get('events'):
+        reply_to = None                         # v1.4.5: threading needs the fetched events; post unthreaded
     sends = []
     try:
         for ln in lines:
@@ -8322,7 +8702,16 @@ def process(req, runner=None):
             sends.append(encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner,
                                       reply_to=rt, should_notify=notify))
     except Exception as e:                                  # body-free error for the routine
+        if from_cache:
+            cache.clear()                                   # stale or bad cache: fetch fresh keys once
+            return {'action': 'fetch', 'need': list(NEED_KEYS), 'posted_kind': ev['kind'],
+                    'reason': 'cached keys did not work: fetch conversation_key_events + signing_keys and run again'}
         return {'action': 'error', 'reason': str(e)[:200], 'posted_kind': ev['kind'], 'encrypted': False}
+    if supplied and cache:
+        try:
+            cache.save(conv, xchat['conversation_key_events'], xchat['signing_keys'])
+        except OSError:
+            pass                                            # cache is only a speed-up
 
     # The sends are prepared and encrypted; remember their ids now (concurrency-safe). The routine
     # then calls send_chat_message. For strict "remember only after the send landed", set
@@ -8393,9 +8782,15 @@ def main(argv=None):
     ap.add_argument('--payload-file', dest='payload_file', help='read the raw Mac webhook event (the '
                     'message body) from this file and use it as the request payload; the file is deleted '
                     'right after it is read, so the --in request can be assembled with no body (item B)')
+    ap.add_argument('--forget-keys', dest='forget_keys', action='store_true',
+                    help='delete the cached conversation keys (the next run fetches them again)')
     ap.add_argument('ids', nargs='*', help='message ids to record as sent (used with --ack)')
     args = ap.parse_args(argv)
     # main ALWAYS prints exactly one JSON object and never raises (item 10).
+    if args.forget_keys:
+        KeyCache().clear()
+        print(json.dumps({'action': 'forgot_keys'}))
+        return 0
     try:
         if args.ack and args.ids:
             req = {'ids': args.ids}
@@ -10019,7 +10414,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=293b284197f3cad157a50134c5f67549933871a0cb588d002e6054981d35a7a6 nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=0917e4636da65617456fab7c151d163420dbb943336d97925c34de59121d13b8 nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -10074,7 +10469,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.4');
+  assert.strictEqual(m.version, '1.4.5');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -10104,6 +10499,164 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
   console.log('PASS chrome wiring smoke: sent=', JSON.stringify(sends), 'badge(paused)=', badge.text, 'events=', store.events.map(e => e.status).join(','));
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.message); process.exit(1); });
+@@@@ END
+@@@@ FILE tests/js/trash.test.js mode=644 sha256=54e2865dbb809a13e26d0f352d1778b80a686efc989e3c0e35732c94ca896da3 nl=1
+/* v1.4.5: a wastebasket reaction on a relayed message asks the Mac "Block <sender>?" (content.js + background.js).
+ *   NODE_PATH=/path/to/node_modules node tests/js/trash.test.js
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+const { JSDOM } = require('jsdom');
+const { CONFIG, createRelayDetector } = require('../../extension/content.js');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+
+function setup(html, url, opts = {}) {
+  const dom = new JSDOM(html || fixture, { url: url || 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
+  const { window } = dom;
+  window.Element.prototype.getBoundingClientRect = function () {
+    const v = this.getAttribute('data-fake-rect');
+    if (!v) return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    const [l, t, w, h] = v.split(',').map(Number);
+    return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
+  };
+  const state = Object.assign({ paused: false, conversationFilter: '' }, opts.state);
+  const logs = [];
+  const reacts = [];
+  const statuses = [];
+  const seenSet = opts.seenSet || new Set();
+  const det = createRelayDetector({
+    window, document: window.document, config: Object.assign({}, FAST, opts.config), getState: () => state,
+    onEmit: i => logs.push(i), onStatus: s => statuses.push(s), log: () => {}, onReaction: r => reacts.push(r),
+    now: opts.now, ownerCheck: opts.ownerCheck,
+    seen: { has: u => seenSet.has(u), add: u => seenSet.add(u) },
+  });
+  det.start();
+  return { window, doc: window.document, det, logs, statuses, state, dom, seenSet, reacts };
+}
+
+// uuid helpers
+const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
+function msg(doc, n, dir, build, opts = {}) {
+  const e = doc.createElement('div');
+  e.setAttribute('data-testid', 'message-' + uuid(n));
+  e.style.display = 'flex';
+  e.style.justifyContent = dir === 'out' ? 'flex-end' : 'flex-start';
+  const left = dir === 'out' ? 780 : 420;
+  const b = doc.createElement('div');
+  b.setAttribute('data-fake-rect', `${left},0,200,40`);
+  if (dir === 'in') b.innerHTML = '<a href="/SenderBot"><img alt="SenderBot"></a>';
+  const span = doc.createElement('span');
+  span.setAttribute('data-testid', 'message-text-' + uuid(n));
+  if (typeof build === 'function') build(span, doc); else span.textContent = build;
+  b.appendChild(span);
+  if (opts.time) { const t = doc.createElement('time'); t.setAttribute('datetime', opts.time); t.textContent = 't'; b.appendChild(t); }
+  e.appendChild(b);
+  return e;
+}
+const panel = doc => doc.querySelector('[data-testid="dm-conversation-panel"]');
+const fixture = '<html><body><div data-testid="dm-conversation-panel"></div></body></html>';
+const PROMPT = '\u2753 Reply to Sam? Reply yes within 2 min.';
+function react(doc, entry, emoji) {
+  const pill = doc.createElement('div');
+  pill.setAttribute('data-testid', 'reactions');
+  const s = doc.createElement('span'); s.textContent = emoji; pill.appendChild(s);
+  entry.appendChild(pill);
+  return pill;
+}
+const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
+
+(async () => {
+  const TRASH = '\u{1F5D1}\uFE0F';
+  await test('a new wastebasket on a relayed message emits one block event with that message', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const m = msg(doc, 10, 'in', 'Sam: buy now');
+    panel(doc).appendChild(m);
+    await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+    react(doc, m, TRASH);
+    await sleep(60);
+    assert.deepStrictEqual(reacts.map(r => [r.word, r.quotedText, r.conversationId]), [['block', 'Sam: buy now', '111-222']]);
+    react(doc, m, TRASH);
+    await sleep(60);
+    assert.strictEqual(reacts.length, 1, 'only once');
+  });
+  await test('a wastebasket already there does nothing', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const m = msg(doc, 11, 'in', 'Sam: old');
+    react(doc, m, TRASH);
+    panel(doc).appendChild(m);
+    await sleep(60);
+    react(doc, m, '\u{1F602}');
+    await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+  });
+  await test('my own message, a prompt, other emoji, or a non-owner never block', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const out = msg(doc, 12, 'out', 'Sam: hi'); panel(doc).appendChild(out);
+    const p = msg(doc, 13, 'in', PROMPT, { time: nowIso(1000) }); panel(doc).appendChild(p);
+    const m = msg(doc, 14, 'in', 'Sam: hey'); panel(doc).appendChild(m);
+    await sleep(60);
+    react(doc, out, TRASH); react(doc, p, TRASH); react(doc, m, '\u2764\uFE0F');
+    await sleep(60);
+    assert.deepStrictEqual(reacts.map(r => r.quotedText), []);
+    const s2 = setup(null, null, { ownerCheck: () => false });
+    await sleep(200);
+    const m2 = msg(s2.doc, 15, 'in', 'Sam: hey'); panel(s2.doc).appendChild(m2); await sleep(60);
+    react(s2.doc, m2, TRASH); await sleep(60);
+    assert.strictEqual(s2.reacts.length, 0);
+  });
+  await test('paused: nothing', async () => {
+    const { doc, reacts } = setup(null, null, { state: { paused: true } });
+    await sleep(200);
+    const m = msg(doc, 16, 'in', 'Sam: hey'); panel(doc).appendChild(m); await sleep(60);
+    react(doc, m, TRASH); await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+  });
+
+  // background.js: forwards {word:'block', quotedText} to the Mac, nothing else
+  await test('background forwards block with the quoted text only', async () => {
+    const vm = require('vm');
+    const EXT = path.join(__dirname, '../../extension');
+    const MANIFEST = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
+    const bag = {}, sess = {}, listeners = [], host = [];
+    const mk = b => ({ async get(k) { const ks = k == null ? Object.keys(b) : (typeof k === 'string' ? [k] : k); const o = {}; ks.forEach(x => { if (x in b) o[x] = JSON.parse(JSON.stringify(b[x])); }); return o; },
+                       async set(o) { Object.assign(b, o); }, async remove(k) { delete b[k]; } });
+    const chrome = {
+      runtime: { id: 'ext', getManifest: () => MANIFEST, onMessage: { addListener: f => listeners.push(f) }, onInstalled: { addListener() {} }, onStartup: { addListener() {} },
+        sendNativeMessage: async (h, m) => { host.push(m); return m.type === 'get_config' ? { ok: true, paused: false, dryRun: true, relayConversationId: '111-222', contacts: [{ name: 'Sam', handle: '15555550150' }] } : { ok: true }; } },
+      storage: { local: mk(bag), session: mk(sess), onChanged: { addListener() {} } },
+      tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} }, query: async () => [] },
+      alarms: { create() {}, clear() {}, onAlarm: { addListener() {} } },
+      action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
+    };
+    vm.runInNewContext(fs.readFileSync(path.join(EXT, 'background.js'), 'utf8'),
+      { chrome, console: { log() {}, warn() {} }, setTimeout, clearTimeout, crypto: require('crypto').webcrypto, Uint8Array });
+    const fire = item => new Promise(r => { listeners.forEach(f => f({ type: 'relay-reaction', item }, { id: 'ext', tab: { id: 1 } }, () => {})); setTimeout(r, 80); });
+    await fire({ word: 'block', quotedText: 'Sam: buy now', conversationId: '111-222', key: 'trash:a' });
+    await fire({ word: 'block', quotedText: 'Sam: buy now', conversationId: '111-222', key: 'trash:a' });   // duplicate
+    await fire({ word: 'block', quotedText: 'Sam: buy now', conversationId: '999-000', key: 'trash:b' });   // other chat
+    await fire({ word: 'block', quotedText: '', conversationId: '111-222', key: 'trash:c' });
+    const r = host.filter(m => m.type === 'reaction');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(r)), [{ type: 'reaction', word: 'block', quotedText: 'Sam: buy now', conversationId: '111-222' }]);
+    assert.ok(!host.some(m => m.type === 'send'), 'never a send');
+    assert.ok(!JSON.stringify(bag).includes('buy now'), 'not stored');
+  });
+
+  console.log(`${passed} passed, ${failed} failed (v1.4.5 wastebasket)`);
+  process.exit(failed ? 1 : 0);
+})();
 @@@@ END
 @@@@ FILE tests/js/xreply.test.js mode=644 sha256=73a035526010540da315c2137104c007cc58fcd8cdf05628f500e10dd1c4cebe nl=1
 /* v1.4.4: X Chat's real native Reply markup, rebuilt from a v1.4.3 quote_probe fingerprint. Run:
@@ -10351,7 +10904,7 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/py/helpers.py mode=644 sha256=7e30a4d7699ee67d640ac74942f1c375e498560b6798baa4f0534fc324ca5bfe nl=1
+@@@@ FILE tests/py/helpers.py mode=644 sha256=040f32a1fa0c5eebd399220f9e96bc56bc4041d6abf62768fbbe0bbcd35a5c0e nl=1
 """Shared test helpers: fresh module state per test, fakes, and a temp chat.db shaped like the real one."""
 import importlib
 import os
@@ -10394,7 +10947,10 @@ def fresh(tmp):
 
 
 def tmpdir():
-    return tempfile.mkdtemp(prefix='imr-test-')
+    d = tempfile.mkdtemp(prefix='imr-test-')
+    import atexit, shutil
+    atexit.register(shutil.rmtree, d, True)      # v1.4.5: don't leave thousands of dirs in /tmp
+    return d
 
 
 def read_log():
@@ -10718,7 +11274,7 @@ class RosterTolerance(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_host.py mode=644 sha256=8f4a09534a7d6efa10cfd4b09f5dbd57dc8c068d9e661e2e022c0c39b7a709c1 nl=1
+@@@@ FILE tests/py/test_host.py mode=644 sha256=65348c60abbc696fc741c5f5956dc47e151e478beb82f91fa91d8f63baa09333 nl=1
 """Native host: framing, get_config, send gating (paused / relay chat / routing / normalization /
 rate limit), confirmations and "who is this for?" webhooks, dry run, -1712 retry, self-test, and
 an end-to-end run of the real script."""
@@ -10782,7 +11338,7 @@ class GetConfig(Base):
         r = self.h.handle_request({'type': 'get_config'}, cfg=self.cfg(ownerXHandle='OwnerAcct', senderXHandle='SenderBot',
                                                                         ownerXUserId='99887766', webhookToken='tok'), now=self.clock.now)
         self.assertEqual(r['ok'], True)
-        self.assertEqual(r['version'], '1.4.4')
+        self.assertEqual(r['version'], '1.4.5')
         self.assertEqual((r['paused'], r['dryRun']), (False, True))
         self.assertEqual(r['contacts'], [{'name': 'Test Contact', 'label': 'Test', 'handle': '+15555550123'}])
         self.assertEqual(r['relayConversationId'], CONV)
@@ -11006,7 +11562,7 @@ class RelayAllSends(Base):
     def test_old_roster_never_texted_and_group_are_refused(self):
         r = FakeRunner([(0, '')] * 3)
         for text, why in (('Old Friend: hi', 'rosterDays'), ('(555) 555-0170: hi', 'never texted'),
-                          ('Family: hi all', "group replies aren't supported yet")):
+                          ('Family: hi all', 'group-unavailable')):    # v1.4.5: a group asks first (watcher down here)
             resp = self.req(text=text, runner=r, dryRun=False)
             self.assertTrue(resp.get('needsTarget'), resp)
             self.assertIn(why, resp['reason'])
@@ -11551,7 +12107,7 @@ class InstallDetectsExistingAndBrief(unittest.TestCase):
         self.assertIn('/test', p2.stdout)
         self.assertNotIn('== Next steps ==', p2.stdout)
 @@@@ END
-@@@@ FILE tests/py/test_regressions.py mode=644 sha256=17e22c5d79b97367de8a3b69a1fbdc7410861ba61304d2995235eb351b1cdfaf nl=1
+@@@@ FILE tests/py/test_regressions.py mode=644 sha256=6a31e94dc9bc8a0e4b5aba3829cee81162ee38024b9586aa5adbde05c3b59302 nl=1
 """Regression tests for the v1.3.2 audit fixes. Each test pins behavior that the adversarial probes
 showed was wrong in v1.2.1 (echo-back, unresolvable-quote fallthrough, lost inbound on scan errors,
 silent queue drops, group/ordered delivery matching, timeout double-send) and the new block/mute flow."""
@@ -11689,7 +12245,8 @@ class _WatchBase(unittest.TestCase):
         self.now = time.time()
         self.cfg = {'contacts': [{'name': 'Alex A', 'handle': A}, {'name': 'Bob B', 'handle': B}],
                     'relayConversationId': CONV, 'webhookUrl': 'https://example.invalid/hook',
-                    'relayAll': True, 'quietHours': None, 'dryRun': False, 'ownerHandle': OWNER}
+                    'relayAll': True, 'quietHours': None, 'dryRun': False, 'ownerHandle': OWNER,
+                    'batchWebhooks': False}   # per-text posts in these checks; batching: test_v145
         self.w = self.m.watch.Watcher(poster=self.poster, runner=FakeRunner(), now=lambda: self.now,
                                       config_loader=lambda: self.m.rc.sanitize_config(self.cfg), sleeper=lambda s: None)
 
@@ -11856,7 +12413,7 @@ class BlockMute(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_relay_post.py mode=644 sha256=2f411cccf329bd6a3bca4cb3a91e9c95ff774203f1dc0e82852df00ef4bcce2a nl=1
+@@@@ FILE tests/py/test_relay_post.py mode=644 sha256=4dc04d0d4d355d1dc9fdd326e897d1c0488eebccb65db24b1be7e2a7ffa97a74 nl=1
 """Tests for the routine helper relay_post.py (bot-side): formatting per event type, id dedupe
 (ids only, no bodies on disk), and that message text is passed to xchat_lite on STDIN, never argv."""
 import json
@@ -12031,7 +12588,7 @@ class Process(unittest.TestCase):
     def test_send_then_duplicate_is_skipped_and_no_body_on_disk(self):
         calls = []
         req = {'payload': {'type': 'message', 'id': 'g1', 'label': 'Alex', 'text': 'dinner at 7?'},
-               'conversation_id': 'AAA-BBB', 'xchat': {'events': [], 'conversation_key_events': []}, 'dedupe_path': self.dedupe}
+               'conversation_id': 'AAA-BBB', 'xchat': {'events': [], 'conversation_key_events': ['K'], 'signing_keys': [{'user_id': 'U'}]}, 'dedupe_path': self.dedupe}
         r = rp.process(req, runner=self.ok_runner(calls))
         self.assertEqual(r['action'], 'send')
         self.assertEqual(len(r['sends']), 1)
@@ -12041,10 +12598,11 @@ class Process(unittest.TestCase):
         r2 = rp.process(req, runner=self.ok_runner([]))
         self.assertEqual(r2['action'], 'skip')
 
-    def test_error_when_no_xchat_context(self):
+    def test_no_keys_and_no_cache_asks_to_fetch(self):
+        # v1.4.5: was an error; now the routine fetches the keys and runs again (nothing committed)
         r = rp.process({'payload': {'type': 'message', 'id': 'g', 'label': 'A', 'text': 'x'}, 'conversation_id': 'C', 'dedupe_path': self.dedupe})
-        self.assertEqual(r['action'], 'error')
-        self.assertFalse(r.get('encrypted', False))
+        self.assertEqual((r['action'], r['need']), ('fetch', ['conversation_key_events', 'signing_keys']))
+        self.assertFalse(os.path.exists(self.dedupe))
 
     def test_unknown_type_is_a_clean_error(self):
         with self.assertRaises(ValueError):
@@ -12054,9 +12612,125 @@ class Process(unittest.TestCase):
         def boom(argv, input=b''):
             return FakeProc('', returncode=1, stderr=b'kaboom')
         r = rp.process({'payload': {'type': 'message', 'id': 'g', 'label': 'A', 'text': 'secret'},
-                        'conversation_id': 'C', 'xchat': {'events': []}, 'dedupe_path': self.dedupe}, runner=boom)
+                        'conversation_id': 'C', 'xchat': {'conversation_key_events': ['K'], 'signing_keys': ['S']}, 'dedupe_path': self.dedupe}, runner=boom)
         self.assertEqual(r['action'], 'error')
         self.assertNotIn('secret', json.dumps(r))
+
+
+class SpeedV145(unittest.TestCase):
+    """v1.4.5: key cache (key material only), fetch fallback, batch events."""
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.dedupe = os.path.join(self.d, 'seen.json')
+        self.keys = os.path.join(self.d, 'xchat_keys.json')
+        self.calls = []
+
+    def runner(self, ok=True):
+        def run(argv, input=b''):
+            self.calls.append(json.loads(input.decode()))
+            if not ok:
+                return FakeProc('', returncode=1)
+            return FakeProc(json.dumps({'message_id': 'm%d' % len(self.calls), 'encoded_message_create_event': 'E',
+                                        'encoded_message_event_signature': 'S'}))
+        return run
+
+    def req(self, pid, xchat=None, **pay):
+        p = dict({'type': 'message', 'id': pid, 'label': 'Alex', 'text': 'body-' + pid}, **pay)
+        r = {'payload': p, 'conversation_id': 'AAA-BBB', 'dedupe_path': self.dedupe}
+        if xchat is not None:
+            r['xchat'] = xchat
+        return r
+
+    FULL = {'events': ['EVENT-WITH-BODY'], 'conversation_key_events': ['KEYEV'], 'signing_keys': [{'user_id': 'U'}]}
+
+    def test_fetched_keys_are_cached_without_events_then_reused(self):
+        r = rp.process(self.req('a', dict(self.FULL)), runner=self.runner())
+        self.assertEqual(r['action'], 'send')
+        with open(self.keys) as fh:
+            raw = fh.read()
+        self.assertNotIn('EVENT-WITH-BODY', raw)
+        self.assertNotIn('body-a', raw)
+        self.assertEqual(oct(os.stat(self.keys).st_mode & 0o777), '0o600')
+        r2 = rp.process(self.req('b'), runner=self.runner())          # no fetch at all
+        self.assertEqual(r2['action'], 'send')
+        self.assertEqual((self.calls[-1]['conversation_key_events'], self.calls[-1]['signing_keys']), (['KEYEV'], [{'user_id': 'U'}]))
+        self.assertEqual(self.calls[-1]['events'], [])
+
+    def test_cache_is_per_conversation_and_expires(self):
+        rp.process(self.req('a', dict(self.FULL)), runner=self.runner())
+        other = self.req('b'); other['conversation_id'] = 'CCC-DDD'
+        self.assertEqual(rp.process(other, runner=self.runner())['action'], 'fetch')
+        with open(self.keys) as fh:
+            d = json.load(fh)
+        d['savedAt'] -= rp.KEY_CACHE_TTL_S + 5
+        with open(self.keys, 'w') as fh:
+            json.dump(d, fh)
+        self.assertEqual(rp.process(self.req('c'), runner=self.runner())['action'], 'fetch')
+
+    def test_cached_keys_that_fail_are_dropped_and_fetch_is_asked(self):
+        rp.process(self.req('a', dict(self.FULL)), runner=self.runner())
+        r = rp.process(self.req('b'), runner=self.runner(ok=False))
+        self.assertEqual(r['action'], 'fetch')
+        self.assertFalse(os.path.exists(self.keys))
+        with open(self.dedupe) as fh:
+            self.assertNotIn('b', json.load(fh))                       # not remembered: the rerun posts it
+
+    def test_supplied_keys_always_win_and_refresh_the_cache(self):
+        rp.process(self.req('a', dict(self.FULL)), runner=self.runner())
+        new = dict(self.FULL, conversation_key_events=['KEYEV2'])
+        rp.process(self.req('b', new), runner=self.runner())
+        self.assertEqual(self.calls[-1]['conversation_key_events'], ['KEYEV2'])
+        with open(self.keys) as fh:
+            self.assertEqual(json.load(fh)['conversation_key_events'], ['KEYEV2'])
+
+    def test_key_cache_can_be_disabled_and_forgotten(self):
+        r = self.req('a', dict(self.FULL)); r['key_cache'] = False
+        rp.process(r, runner=self.runner())
+        self.assertFalse(os.path.exists(self.keys))
+        cache = rp.KeyCache(self.keys)
+        cache.save('AAA-BBB', ['K'], ['S'])
+        cache.clear()
+        self.assertIsNone(cache.load('AAA-BBB'))
+
+    def test_batch_is_one_run_with_one_line_per_text_each_deduped(self):
+        msgs = [{'id': 'm1', 'label': 'Alex', 'text': 'one'},
+                {'id': 'm2', 'label': 'Sam', 'text': 'two', 'group': {'label': 'Family'}},
+                {'id': 'm3', 'label': '(555) 555-0166', 'text': 'three', 'unknown': True}]
+        r = rp.process({'payload': {'type': 'batch', 'id': 'b1', 'count': 3, 'messages': msgs}, 'conversation_id': 'AAA-BBB',
+                        'xchat': dict(self.FULL), 'dedupe_path': self.dedupe, 'defer_commit': True}, runner=self.runner())
+        self.assertEqual(r['action'], 'send')
+        self.assertEqual([c['text'] for c in self.calls],
+                         ['Alex: one', 'Family \u00b7 Sam: two', '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: three'])
+        self.assertTrue(all(s['should_notify'] for s in r['sends']))
+        self.assertEqual(r['ack_ids'], ['m1', 'm2', 'm3'])
+        rp.ack({'dedupe_path': self.dedupe, 'ids': ['m1']})
+        r2 = rp.process({'payload': {'type': 'batch', 'id': 'b2', 'messages': msgs}, 'conversation_id': 'AAA-BBB',
+                         'dedupe_path': self.dedupe}, runner=self.runner())
+        self.assertEqual(r2['ack_ids'], ['m2', 'm3'])
+
+    def test_reply_to_threads_only_when_events_were_fetched(self):
+        rp.process(self.req('a', dict(self.FULL), type='sent', reply_to='EV1'), runner=self.runner())
+        self.assertEqual(self.calls[-1].get('reply_to'), 'EV1')
+        rp.process(self.req('b', type='sent', reply_to='EV2'), runner=self.runner())      # cached keys, no events
+        self.assertNotIn('reply_to', self.calls[-1])
+
+    def test_empty_batch_is_an_error(self):
+        with self.assertRaises(ValueError):
+            rp.format_event({'type': 'batch', 'messages': []})
+
+    def test_forget_keys_cli(self):
+        import io, contextlib
+        saved = rp.KEY_CACHE_PATH
+        rp.KEY_CACHE_PATH = self.keys                # never the real cache in $HOME
+        try:
+            rp.KeyCache().save('AAA-BBB', ['K'], ['S'])
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(rp.main(['--forget-keys']), 0)
+        finally:
+            rp.KEY_CACHE_PATH = saved
+        self.assertEqual(json.loads(buf.getvalue())['action'], 'forgot_keys')
+        self.assertFalse(os.path.exists(self.keys))
 
 
 if __name__ == '__main__':
@@ -12348,7 +13022,7 @@ class SelfTestAndJobs(Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_routing.py mode=644 sha256=4b6ddfc98c48d0f98006d88a3b8ee6640e88ba45c701e6b6660cf2c5f2920245 nl=1
+@@@@ FILE tests/py/test_routing.py mode=644 sha256=5fa95920e77437362b11e5854602e7a0b8b4cc857166d62030c3a77b7fdaea20 nl=1
 """Reply routing in ONE relay chat: labels (shared first names), "<name>:" prefix parsing,
 quote > prefix > most recent contact, reply window, ambiguity, and handle normalization."""
 import unittest
@@ -12582,10 +13256,9 @@ class Roster(Base):
         self.assertTrue(r['needsTarget'])
 
     def test_group_replies_are_refused_by_prefix_and_quote(self):
-        for r in (self.route('Family: hi all'), self.route('hi all', quoted='Family · Pat: dinner?')):
-            self.assertTrue(r['needsTarget'])
-            self.assertEqual(r['reason'], "group replies aren't supported yet")
-            self.assertIn("Group replies aren't supported yet", r['error'])
+        # v1.4.5: the exact group name or a quote of a group line names the group (the host always asks first)
+        for r, by in ((self.route('Family: hi all'), 'prefix'), (self.route('hi all', quoted='Family · Pat: dinner?'), 'quote')):
+            self.assertEqual((r['contact']['handle'], r['by'], r.get('group')), ('group:chat0001', by, True), r)
         # a bare reply never routes to a group (v1.4.2: recent is contacts + roster people, never groups)
         r = self.route('ok')
         self.assertFalse(str(r.get('contact', {}).get('handle', '')).startswith('group:'), r)
@@ -12668,7 +13341,7 @@ class Decode(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v132.py mode=644 sha256=a383c4593ba09165e9b83188893704590208913951cbbf15481abeaac79adf5f nl=1
+@@@@ FILE tests/py/test_v132.py mode=644 sha256=4f65b18679e9ea6ef5844f35656b4478baa7eb849f792fe35eddc3e325e5b920 nl=1
 """v1.3.2 NO-SHIP remediation: one regression test per fixed item. Each test is written to pass on
 1.3.2 and fail on 1.3.1 (run this same file against a 1.3.1 checkout to confirm). JS-only items (owner
 gate #1, frame inbox-nav #7) have their regression tests under tests/js/."""
@@ -12721,12 +13394,13 @@ class RelayPostStatus(unittest.TestCase):
         d = tempfile.mkdtemp()
         req = os.path.join(d, 'req.json')
         with open(req, 'w') as fh:
-            json.dump({'payload': {'type': 'wrong_account'}, 'conversation_id': CONV}, fh)
+            json.dump({'payload': {'type': 'wrong_account'}, 'conversation_id': CONV,
+                       'dedupe_path': os.path.join(d, 'seen.json')}, fh)   # never the real routine store/key cache
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             code = rp.main(['--in', req])
         out = json.loads(buf.getvalue())            # must be exactly one JSON object
-        self.assertIn(out['action'], ('error', 'send'))
+        self.assertIn(out['action'], ('error', 'send', 'fetch'))
         self.assertIsInstance(code, int)
 
     def test_main_on_garbage_in_file_still_prints_json(self):
@@ -13347,7 +14021,7 @@ class XdgExpansion(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v134.py mode=644 sha256=7a702f61143d6809d7abc4cc563024f6365592b3d3ccafb800cc14f498e4e051 nl=1
+@@@@ FILE tests/py/test_v134.py mode=644 sha256=c6af7f9e45389e2f65cfa8be26de629a90c7d777ff1bbb9b6d289b10228c54df nl=1
 """Regression tests: one+ per shipped change. The v1.3.4 items (A, B) pass on 1.3.4 and fail on the
 frozen 1.3.3 checkout; the v1.3.5 items (C1/W1/W4 + nits, classes suffixed W1/W4/Nits/W) pass on 1.3.5
 and fail on a 1.3.4 checkout (run this same file against that tree to confirm). Items:
@@ -13668,7 +14342,7 @@ class NotifyAndReplyTo(unittest.TestCase):
         self.dedupe = os.path.join(self.tmp, 'seen.json')
 
     def _xchat(self):
-        return {'events': [], 'conversation_key_events': [], 'signing_keys': []}
+        return {'events': [], 'conversation_key_events': ['K'], 'signing_keys': ['S']}
 
     def test_relayed_message_notifies_and_does_not_thread(self):
         seen = []
@@ -13688,8 +14362,8 @@ class NotifyAndReplyTo(unittest.TestCase):
 
     def test_confirmation_threads_under_owner_reply_when_reply_to_given(self):
         seen = []
-        r = rp.process({'payload': {'type': 'sent', 'id': 's2', 'label': 'Sam', 'reply_to': 'EVT-99'},
-                        'conversation_id': 'C', 'xchat': self._xchat(), 'dedupe_path': self.dedupe},
+        r = rp.process({'payload': {'type': 'sent', 'id': 's2', 'label': 'Sam', 'reply_to': 'EVT-99'},   # v1.4.5: needs events
+                        'conversation_id': 'C', 'xchat': dict(self._xchat(), events=['E']), 'dedupe_path': self.dedupe},
                        runner=_enc_runner(seen))
         self.assertEqual(r['sends'][0]['reply_to'], 'EVT-99')
         self.assertEqual(seen[-1].get('reply_to'), 'EVT-99', 'reply_to reaches xchat_lite on stdin')
@@ -13787,7 +14461,7 @@ class _WatchBase(unittest.TestCase):
         self.db.add(self.ALLOWED, text='old history')
         self.cfg = {'contacts': [{'name': 'Robin Smith', 'handle': self.ALLOWED}], 'relayConversationId': CONV,
                     'webhookUrl': 'https://x.invalid/h', 'webhookToken': 't', 'ownerHandle': self.OWNER,
-                    'quietHours': None}
+                    'quietHours': None, 'batchWebhooks': False}
         self.now = NOW
         self.posts = []
         self.w = self.m.watch.Watcher(
@@ -14058,7 +14732,7 @@ class TapbackLastSenderW(_WatchBase):
         self.assertEqual(after.get(self.ALLOWED), before_at.get(self.ALLOWED),
                          'a tapback must not advance the last-inbound time')
 @@@@ END
-@@@@ FILE tests/py/test_v138.py mode=644 sha256=1ba411524c384c66b4f62080041b31f29bc79e4ed3877db9a53436d1ac01c9b1 nl=1
+@@@@ FILE tests/py/test_v138.py mode=644 sha256=d3681b898414257ca8415231fd3a23bf246a6daf15f40d6575fb70417565c65e nl=1
 """v1.3.8: the /test end-to-end check (host, watcher probe, relay_post rendering, never texts a
 contact, every step time-boxed) and the guided setup helpers (owner-handle detection from chat.db,
 relayctl setup / test-result, relay-all pending until the owner's handles are known)."""
@@ -14332,7 +15006,7 @@ class RelayPostTest(unittest.TestCase):
             calls.append(json.loads(input.decode()))
             return P()
         d = tmpdir()
-        r = rp.process({'payload': self.payload([]), 'conversation_id': 'AAA-BBB', 'xchat': {'events': []},
+        r = rp.process({'payload': self.payload([]), 'conversation_id': 'AAA-BBB', 'xchat': {'events': [], 'conversation_key_events': ['K'], 'signing_keys': ['S']},
                         'dedupe_path': os.path.join(d, 's.json')}, runner=runner)
         self.assertEqual(r['action'], 'send')
         self.assertIs(r['sends'][0]['should_notify'], False)
@@ -15546,7 +16220,349 @@ class Safety(Base):
         self.assertEqual(self.osa(), [])
         self.assertFalse(r.get('ok'), r)
 @@@@ END
-@@@@ FILE tests/py/test_watch.py mode=644 sha256=69d496cdbfc99ee6f2e1c861e1a566e39e6c061c0800ee8563d0c2f21e325715 nl=1
+@@@@ FILE tests/py/test_v145.py mode=644 sha256=498062e1abc35901241070b25250e3660b5fbb53af3c0b807afeb463658c7e09 nl=1
+"""v1.4.5: replies to a group (exact group name or a quote of its message, always confirmed, relay-all
+only, delivery proven in the group chat), the wastebasket-to-block flow, and the spamMode tag."""
+import json
+import os
+import sqlite3
+import unittest
+
+from helpers import ChatDb, FakeRunner, read_log
+from test_v140 import CONV
+from test_v143_handles import Base
+import test_watch
+
+
+def read_pending(d):
+    out = []
+    for f in sorted(os.listdir(d)):
+        with open(os.path.join(d, f)) as fh:
+            out.append(json.load(fh))
+    return out
+
+SAM = '+15555550150'
+GROUP = 'group:chat0001'
+GUID = 'iMessage;+;chat0001'
+
+
+class Groups(Base):
+    def setUp(self):
+        super().setUp()
+        self.raw['relayAll'] = True
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
+        self.db = ChatDb(os.path.join(self.tmp, 'chat.db'))
+        self.db.add(SAM, text='x', group='fam', display_name='Family', members=[SAM, '+15555550151'])
+        self.clock.t += 600
+        self.m.rc.record_inbound(SAM, self.clock.t - 400, label='Sam')
+        self.m.rc.record_inbound(GROUP, self.clock.t - 300, label='Family')
+
+    def kinds(self, t):
+        return [p for p, _ in self.posts if p['type'] == t]
+
+    def confirm(self, text, **kw):
+        r = self.send(text, **kw)
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual((r['handle'], r['reason']), (GROUP, 'group'))
+        self.assertEqual(self.osa(), [])
+        self.assertEqual(self.kinds('needs_confirm')[-1]['detail'], '\u2753 Reply to the Family group? Reply yes within 2 min.')
+        return r
+
+    def test_exact_name_any_case_asks_then_yes_sends_to_the_chat(self):
+        self.confirm('family: cute pup')
+        self.clock.t += 5
+        r = self.send('family: cute pup', confirmed=True, handle=GROUP)
+        self.assertTrue(r['ok'], r)
+        call = self.osa()[0]
+        self.assertEqual(call[2:4], ['cute pup', GUID])
+        self.assertEqual(call[-1], 'chat')
+        pend = read_pending(self.m.rc.PENDING_DIR)
+        self.assertEqual([(p['handle'], p['chatGuid']) for p in pend], [(GROUP, GUID)])
+        for s in ('cute pup',):
+            self.assertNotIn(s, read_log())
+
+    def test_native_quote_of_a_group_line_asks(self):
+        self.confirm('aww', quotedText='iMessage Family \u00b7 Sam: look at this pup')
+
+    def test_bare_reply_after_group_message_asks_whos_this_for(self):
+        r = self.send('sounds good')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.assertEqual(self.osa(), [])
+        self.assertIn("Who's this for?", self.kinds('needs_target')[-1]['detail'])
+
+    def test_confirmed_without_a_prompt_is_refused(self):
+        r = self.send('family: cute pup', confirmed=True, handle=GROUP)
+        self.assertFalse(r.get('ok'), r)
+        self.assertEqual(self.osa(), [])
+
+    def test_prompt_is_used_once(self):
+        self.confirm('family: one')
+        self.clock.t += 5
+        self.assertTrue(self.send('family: one', confirmed=True, handle=GROUP)['ok'])
+        self.clock.t += 5
+        r = self.send('family: two', confirmed=True, handle=GROUP)
+        self.assertFalse(r.get('ok'), r)
+        self.assertEqual(len(self.osa()), 0)   # osa() shows the last runner only: the second never ran
+
+    def test_prompt_expires(self):
+        self.confirm('family: cute pup')
+        self.clock.t += 200
+        r = self.send('family: cute pup', confirmed=True, handle=GROUP)
+        self.assertFalse(r.get('ok'), r)
+        self.assertEqual(self.osa(), [])
+
+    def test_needs_relay_all(self):
+        self.raw['relayAll'] = False
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
+        r = self.send('family: cute pup')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.assertEqual(self.osa(), [])
+
+    def test_name_shared_by_a_person_and_a_group_asks(self):
+        self.m.rc.record_inbound('+15555550152', self.clock.t - 200, label='Family Smith')   # first name "Family"
+        r = self.send('family: cute pup')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.assertEqual(self.osa(), [])
+
+    def test_watcher_down_sends_nothing(self):
+        self.watcher_up = False
+        r = self.send('family: cute pup')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.assertEqual(r['reason'], 'group-unavailable')
+        self.assertEqual(self.osa(), [])
+
+    def test_dry_run_never_calls_messages(self):
+        self.raw['dryRun'] = True
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
+        self.confirm('family: cute pup')
+        self.clock.t += 5
+        r = self.send('family: cute pup', confirmed=True, handle=GROUP)
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa(), [])
+
+    def test_group_delivery_is_proven_in_that_chat(self):
+        self.confirm('family: cute pup')
+        self.clock.t += 5
+        self.send('family: cute pup', confirmed=True, handle=GROUP)
+        sent_at = self.clock.t
+        self.db.add(SAM, text='cute pup', from_me=1, delivered=1, group='fam', when=sent_at + 1)
+        rs = self.m.rc
+        e = read_pending(rs.PENDING_DIR)[0]
+        st, _err, rowid = rs.check_delivery_once(e['handle'], e['at'], db_path=self.db.path,
+                                                 text_length=e['textLength'], chat_guid=e['chatGuid'])
+        self.assertEqual(st, 'delivered')
+        # a 1:1 message to Sam at the same time is NOT proof for the group
+        st2, _e2, _r2 = rs.check_delivery_once(e['handle'], e['at'] + 100, db_path=self.db.path,
+                                               text_length=e['textLength'], chat_guid=e['chatGuid'])
+        self.assertEqual(st2, 'pending')
+
+
+class Trash(Base):
+    def setUp(self):
+        super().setUp()
+        self.raw['relayAll'] = True
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
+        self.clock.t += 600
+        self.m.rc.record_inbound(SAM, self.clock.t - 100, label='Sam')
+        self.m.rc.record_inbound(GROUP, self.clock.t - 50, label='Family')
+        self.m.rc.record_inbound('+15555550166', self.clock.t - 40, label='(555) 555-0166')
+
+    def trash(self, quoted, conv=CONV):
+        return self.m.host.handle_request({'type': 'reaction', 'word': 'block', 'quotedText': quoted, 'conversationId': conv},
+                                          cfg=self.cfg(), runner=FakeRunner(), sleeper=self.sleeper,
+                                          now=self.clock.now, poster=self.poster)
+
+    def prompt(self):
+        return [p for p, _ in self.posts if p.get('reason') == 'confirm-block'][-1]['detail']
+
+    def muted(self):
+        return self.cfg()['mute']
+
+    def test_trash_asks_then_yes_mutes(self):
+        r = self.trash('iMessage Sam: buy now')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertIn('Block Sam?', self.prompt())
+        self.assertIn('Reply yes within 2 min', self.prompt())
+        self.assertNotIn(SAM, self.muted())
+        self.clock.t += 5
+        self.send('yes')
+        self.assertIn(SAM, self.muted())
+        self.assertEqual(self.osa(), [])
+        self.assertNotIn('buy now', read_log())
+
+    def test_slash_block_yes_and_thumbs_up_confirm(self):
+        self.trash('Sam: buy now')
+        self.clock.t += 5
+        self.send('/block yes')
+        self.assertIn(SAM, self.muted())
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, dict(self.raw, mute=[]))
+        self.trash('Sam: buy now')
+        self.clock.t += 5
+        self.m.host.handle_request({'type': 'reaction', 'word': 'yes', 'conversationId': CONV}, cfg=self.cfg(),
+                                   runner=FakeRunner(), sleeper=self.sleeper, now=self.clock.now, poster=self.poster)
+        self.assertIn(SAM, self.muted())
+
+    def test_no_or_thumbs_down_cancels_and_window_expires(self):
+        self.trash('Sam: buy now')
+        self.clock.t += 5
+        self.send('no')
+        self.assertNotIn(SAM, self.muted())
+        self.trash('Sam: buy now')
+        self.clock.t += 200
+        self.send('yes')
+        self.assertNotIn(SAM, self.muted())
+        self.assertEqual(self.osa(), [])
+
+    def test_group_line_blocks_the_sender_not_the_group(self):
+        self.trash('Family \u00b7 Sam: buy now')
+        self.assertIn('Block Sam?', self.prompt())
+        self.clock.t += 5
+        self.send('yes')
+        self.assertIn(SAM, self.muted())
+        self.assertNotIn(GROUP, self.muted())
+
+    def test_unknown_number_prompt_is_masked(self):
+        self.trash('(555) 555-0166: vote now')
+        self.assertIn('+1 \u2022\u2022\u20220166 (\u26a0\ufe0f not in Contacts)', self.prompt())
+        self.assertNotIn('555-0166', self.prompt())
+
+    def test_unplaceable_bubble_mutes_nobody(self):
+        r = self.trash('just some text')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.clock.t += 5
+        self.send('yes')
+        self.assertEqual(self.muted(), [])
+
+    def test_other_conversation_ignored(self):
+        r = self.trash('Sam: buy now', conv='9999-0000')
+        self.assertFalse(r.get('ok'))
+        self.assertFalse([p for p, _ in self.posts if p.get('reason') == 'confirm-block'])
+
+
+class Spam(test_watch.Base):
+    def setUp(self):
+        super().setUp()
+        self.cfg['relayAll'] = True
+        con = sqlite3.connect(self.db.path)
+        con.execute('ALTER TABLE chat ADD COLUMN is_filtered INTEGER DEFAULT 0')
+        con.execute('ALTER TABLE message ADD COLUMN is_spam INTEGER DEFAULT 0')
+        con.commit()
+        con.close()
+        self.w = self.new_watcher()
+        self.w.tick()
+
+    def msgs(self):
+        return [p for _, p, _ in self.poster.calls if p['type'] == 'message']
+
+    def test_not_in_contacts_is_tagged_contacts_are_not(self):
+        self.db.add('+15555550166', text='vote for me')
+        self.db.add(test_watch.ALLOWED, text='hi from a contact')
+        self.w.tick()
+        tags = {p['handle']: bool(p.get('unknown')) for p in self.msgs()}
+        self.assertEqual(tags, {'+15555550166': True, test_watch.ALLOWED: False})
+        self.assertTrue(all(p['text'] for p in self.msgs()), 'never hidden')
+
+    def test_flagged_by_messages_is_tagged(self):
+        self.db.add(test_watch.ALLOWED, text='hi')
+        con = sqlite3.connect(self.db.path)
+        con.execute('UPDATE chat SET is_filtered = 2')
+        con.commit()
+        con.close()
+        self.w.tick()
+        self.assertTrue(self.msgs()[-1].get('unknown'))
+
+    def test_off(self):
+        self.cfg['spamMode'] = 'off'
+        self.db.add('+15555550166', text='vote for me')
+        self.w.tick()
+        self.assertFalse(self.msgs()[-1].get('unknown'))
+
+    def test_group_messages_unchanged(self):
+        self.db.add('+15555550166', text='hi all', group='fam', display_name='Family', members=['+15555550166', SAM])
+        self.w.tick()
+        p = self.msgs()[-1]
+        self.assertTrue(p.get('group'))
+        self.assertNotIn('unknown', p)
+
+    def test_routine_renders_the_tag(self):
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location('relay_post', os.path.join(here, '..', '..', 'routine', 'relay_post.py'))
+        rp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rp)
+        out = rp.format_event({'type': 'message', 'id': 'a', 'label': '(555) 555-0166', 'text': 'vote', 'unknown': True})
+        self.assertEqual(out['lines'][0]['text'], '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: vote')
+        out = rp.format_event({'type': 'message', 'id': 'b', 'label': 'Sam', 'text': 'hi'})
+        self.assertEqual(out['lines'][0]['text'], 'Sam: hi')
+
+
+class Batching(test_watch.Base):
+    """v1.4.5 speed: texts waiting together go out as ONE webhook (one routine run on the box)."""
+    def setUp(self):
+        super().setUp()
+        self.cfg.pop('batchWebhooks', None)          # the default: on
+        self.cfg['relayAll'] = True
+        self.w = self.new_watcher()
+        self.w.tick()
+
+    def test_two_texts_in_one_tick_are_one_batch_webhook(self):
+        self.db.add(test_watch.ALLOWED, text='one')
+        self.db.add(SAM, text='two', group='fam', display_name='Family', members=[SAM, test_watch.OTHER])
+        c = self.w.tick()
+        self.assertEqual(self.poster.types(), ['batch'])
+        p = self.poster.calls[0][1]
+        self.assertEqual([m['text'] for m in p['messages']], ['one', 'two'])
+        self.assertEqual(p['count'], 2)
+        self.assertTrue(p['untrusted'] and p['id'])
+        self.assertEqual(p['messages'][1]['group']['label'], 'Family')      # inbound groups exactly as before
+        self.assertEqual(len({m['id'] for m in p['messages']}), 2)
+
+    def test_a_single_text_is_still_a_plain_message(self):
+        self.db.add(test_watch.ALLOWED, text='solo')
+        self.w.tick()
+        self.assertEqual(self.poster.types(), ['message'])
+
+    def test_failed_batch_is_retried_whole_and_never_duplicated(self):
+        self.poster.ok = False
+        self.db.add(test_watch.ALLOWED, text='one')
+        self.db.add(test_watch.ALLOWED, text='two')
+        self.w.tick()
+        self.poster.ok = True
+        self.poster.calls.clear()
+        self.now += 400
+        self.w.tick()
+        self.w.tick()
+        texts = [m['text'] for _, p, _ in self.poster.calls for m in (p.get('messages') or [p]) if p['type'] in ('batch', 'message')]
+        self.assertEqual(texts, ['one', 'two'])
+
+    def test_off_switch(self):
+        self.cfg['batchWebhooks'] = False
+        self.db.add(test_watch.ALLOWED, text='one')
+        self.db.add(test_watch.ALLOWED, text='two')
+        self.w.tick()
+        self.assertEqual(self.poster.types(), ['message', 'message'])
+
+    def test_batch_formats_in_the_routine_helper(self):
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location('relay_post', os.path.join(here, '..', '..', 'routine', 'relay_post.py'))
+        rp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rp)
+        self.db.add(test_watch.ALLOWED, text='one')
+        self.db.add('+15555550166', text='two')
+        self.w.tick()
+        out = rp.format_event(self.poster.calls[0][1])
+        self.assertEqual([ln['text'] for ln in out['lines']],
+                         ['Test: one', '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: two'])
+
+
+del test_watch.Base   # not a test case of this module
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
+@@@@ FILE tests/py/test_watch.py mode=644 sha256=6cefc0ae2cb0b622f7816559d35ecac0125d11ce97bc46395b82050c1c5052e8 nl=1
 """Inbound watcher against a temp sqlite db shaped like chat.db."""
 import json
 import os
@@ -15583,7 +16599,7 @@ class Base(unittest.TestCase):
         self.db.add(ALLOWED, text='old history before install')       # must never be forwarded
         self.cfg = {'contacts': [{'name': 'Test Contact', 'handle': '15555550123'}], 'relayConversationId': '1111-2222',
                     'webhookUrl': 'https://example.invalid/hook', 'webhookToken': 'tok', 'ownerHandle': OWNER,
-                    'quietHours': None}
+                    'quietHours': None, 'batchWebhooks': False}   # one post per text here; batching: test_v145
         self.now = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()   # fixed base so tests are deterministic (no wall clock)
         self.poster = Poster()
         self.runner = FakeRunner()

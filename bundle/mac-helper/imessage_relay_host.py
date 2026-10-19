@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.4.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.5.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -612,6 +612,59 @@ def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S, fuzzy=None):
     return None
 
 
+GROUP_CONFIRM_WINDOW_S = 150.0     # the 2-minute prompt plus a little slack for the extension round trip
+GROUP_GUID_WAIT_S = 4.0
+
+
+def group_guid_lookup(key, sleeper, now, wait_s=GROUP_GUID_WAIT_S):
+    """v1.4.5: ask the watcher (it can read chat.db) for the Messages chat id of a group key. Metadata only."""
+    jobs = os.path.join(rc.APP_DIR, 'jobs')
+    jid = 'groupguid' + uuid.uuid4().hex[:10]
+    job_p, res_p = os.path.join(jobs, jid + '.job.json'), os.path.join(jobs, jid + '.result.json')
+    rc.write_json_atomic(job_p, {'id': jid, 'type': 'group_guid', 'key': str(key)[:130], 'createdAt': now()})
+    deadline = now() + wait_s
+    while True:
+        res = rc.read_json(res_p)
+        if isinstance(res, dict):
+            try:
+                os.unlink(res_p)
+            except OSError:
+                pass
+            g = str(res.get('guid') or '') if res.get('ok') else ''
+            return g if re.match(r'^[A-Za-z0-9;:+@._-]{3,160}$', g) else None
+        if now() >= deadline:
+            break
+        sleeper(0.25)
+    for p in (job_p, res_p):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    return None
+
+
+def _store_pending_group(handle, guid, label, at):
+    def fn():
+        state = load_state()
+        state['pendingGroupSend'] = {'handle': handle, 'guid': guid, 'label': label, 'at': float(at)}
+        rc.write_json_atomic(STATE_PATH, state)
+    _with_host_lock(fn)
+
+
+def _take_pending_group(handle, now_t):
+    """The group prompt the owner is answering: same group, within the window. Consumed once."""
+    def fn():
+        state = load_state()
+        p = state.get('pendingGroupSend')
+        if not (isinstance(p, dict) and p.get('handle') == handle
+                and 0 <= now_t - float(p.get('at') or 0) <= GROUP_CONFIRM_WINDOW_S):
+            return None
+        state.pop('pendingGroupSend', None)
+        rc.write_json_atomic(STATE_PATH, state)
+        return p
+    return _with_host_lock(fn)
+
+
 def _store_pending_new(handle, name, at, prefix='', existing=False):
     def fn():
         state = load_state()
@@ -803,17 +856,53 @@ def handle_bare_confirm(word, quoted, cfg, now, poster):
     return dict(base, ok=True, skipped=detail)
 
 
+def handle_trash_reaction(msg, cfg, now, poster):
+    """v1.4.5: the owner put a wastebasket on a relayed message. Find its sender from the bubble's
+    "Label:" (like a quote; a group line "Family \u00b7 Sam: \u2026" means Sam, never the whole group) and ask
+    "Block <label>?". Nothing is muted until yes / /block yes / a thumbs-up on the prompt. Relaying only."""
+    base = {'dryRun': cfg['dryRun']}
+    quoted = msg.get('quotedText') if isinstance(msg.get('quotedText'), str) else ''
+    quoted = quoted[:500]
+    d = rc.build_directory(cfg, rc.load_roster())
+    by = {e['handle']: e for e in d}
+    tgt = None
+    h, st = rc.parse_quote(quoted, cfg, d)
+    if st == 'match' and by[h]['kind'] == 'group':
+        # the sender inside a group line: "Family \u00b7 Sam: hi" -> look at what follows the group name
+        rest = re.sub(r'\s+', ' ', quoted).strip()
+        i = rest.find('\u00b7')
+        h2, st2 = rc.parse_quote(rest[i + 1:] if i >= 0 else '', cfg, [e for e in d if e['kind'] != 'group'])
+        h, st = (h2, st2) if st2 == 'match' else (None, 'none')
+    if st == 'match':
+        tgt = by.get(h)
+    if not tgt:
+        detail = "Couldn\u2019t tell whose message that was. To block someone, say \"/block <name>\"."
+        rc.log_event('needs_target', reason='trash-unresolved', action='block')
+        notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'trash-unresolved', 'at': rc.iso_utc(now())})
+        return dict(base, ok=False, needsTarget=True, error=detail)
+    shown = rc.guess_label(tgt)
+    _store_pending_block(tgt['handle'], tgt['label'], now())
+    _note_prompt(now())
+    detail = ('\U0001f5d1\ufe0f Block %s? Their texts stop relaying here (Messages is not changed). '
+              'Reply yes within 2 min (no to cancel).' % shown)
+    rc.log_event('needs_confirm', reason='trash-block')
+    notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'confirm-block', 'at': rc.iso_utc(now())})
+    return dict(base, ok=False, needsConfirm=True, label=tgt['label'])
+
+
 def handle_reaction(msg, cfg, now, poster):
     """v1.4.2: the owner put a thumbs-up (confirm) or thumbs-down (cancel) on a pending prompt in the relay
     chat. The extension only sends this for a reaction it saw appear on the newest "Reply yes" prompt within
     2 minutes of it; a pending reply prompt is answered in the extension itself. Here: /block and /add.
     Nothing pending -> ignored silently (a reaction is never a message and never texted)."""
-    word = 'yes' if msg.get('word') == 'yes' else 'no' if msg.get('word') == 'no' else None
+    word = msg.get('word') if msg.get('word') in ('yes', 'no', 'block') else None
     conv = str(msg.get('conversationId') or '').strip()
     if not word or (cfg.get('relayConversationId') and conv != cfg['relayConversationId']):
         return {'ok': False, 'error': 'not a relay-chat reaction'}
     if cfg['paused']:
         return {'ok': False, 'error': 'paused'}
+    if word == 'block':
+        return handle_trash_reaction(msg, cfg, now, poster)
     t = now()
     state = load_state()
     if not (_fresh(state, 'pendingBlock', t, CONFIRM_WINDOW_S) or _fresh(state, 'pendingAdd', t, ADD_WINDOW_S)):
@@ -885,7 +974,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                      confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe))
     confirmed = bool(msg.get('confirmed'))
     hint = msg.get('handle')
-    hint_norm = rc.normalize_handle(hint, cfg['defaultCountryCode']) if hint else None
+    if hint and str(hint).startswith('group:'):
+        hint_norm = str(hint)[:130]          # v1.4.5: a group key is kept as is
+    else:
+        hint_norm = rc.normalize_handle(hint, cfg['defaultCountryCode']) if hint else None
     new_contact = None
     if confirmed:
         # C1: a "/yes" confirmation must go to the EXACT handle the owner confirmed, never a re-guess.
@@ -902,7 +994,14 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             new_contact = pend_new
             tgt = tgt or {'kind': 'new', 'label': rc.clean_label(pend_new['name']) or rc.format_handle(hint_norm),
                           'name': pend_new['name'], 'handle': hint_norm, 'lastInboundAt': None}
-        if not tgt or tgt.get('kind') == 'group':
+        group_ok = None
+        if tgt and tgt.get('kind') == 'group':
+            # v1.4.5: a group send needs the group prompt the host itself issued (same group, 2 min) and relay-all
+            pend_g = _take_pending_group(hint_norm, now()) if cfg['relayAll'] else None
+            if not pend_g:
+                return refuse('confirmed group send without a pending group prompt', handle=hint_norm)
+            group_ok = dict(tgt, guid=pend_g['guid'])
+        if not tgt or (tgt.get('kind') == 'group' and not group_ok):
             return refuse('confirmed handle is not a current recipient', handle=hint_norm)
         if not route.get('needsTarget') and route['contact']['handle'] == hint_norm:
             contact, body, by = route['contact'], route['body'], route['by']   # same target: use its stripped body
@@ -914,6 +1013,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                 new_contact = None                                              # a typo of someone on the list
         else:
             contact, body, by = tgt, text, 'confirmed'                         # target drifted: send the full reply
+        if group_ok:
+            if route.get('needsTarget') or route['contact']['handle'] != hint_norm:
+                return refuse('confirmed group send no longer names that group', handle=hint_norm)
+            contact = group_ok
         handle = contact['handle']
     else:
         direct = None
@@ -957,6 +1060,22 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             return refuse('the routed recipient does not match the handle the extension reported', handle=handle)
         if not body.strip():
             return refuse('empty text after the name prefix', handle=handle)
+        if contact.get('kind') == 'group':
+            # v1.4.5: a reply to a group (exact name or a quote of its message) is ALWAYS confirmed first.
+            guid = group_guid_lookup(handle, sleeper, now)
+            if not guid:
+                detail = "Can't reach the %s group right now (the Mac helper didn't answer). Nothing was sent." % contact['label']
+                rc.log_event('group_unavailable', routedBy=by, textLength=len(body))
+                notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'group-unavailable', 'at': rc.iso_utc(now())})
+                return dict(base, ok=False, needsTarget=True, error=detail, reason='group-unavailable')
+            _store_pending_group(handle, guid, contact['label'], now())
+            detail = '\u2753 Reply to the %s group? Reply yes within 2 min.' % contact['label']
+            rc.log_event('needs_confirm', routedBy=by, reason='group', textLength=len(body))
+            _note_prompt(now())
+            notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'reason': 'group',
+                                 'detail': detail, 'at': rc.iso_utc(now())})
+            return dict(base, ok=False, needsConfirm=True, guess=True, label=contact['label'], handle=handle,
+                        reason='group', contact=contact['label'], routedBy=by)
         # W1: a directive aimed at someone other than the current conversation (or a dict-word bare form)
         # is held for a /yes confirmation. Label only -- the stripped body is never shown.
         if route.get('confirm'):
@@ -1019,8 +1138,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         window.append(t)
         state.update(recent=recent, sends=window)
         ok, err = True, ''
+        is_group = contact.get('kind') == 'group'
         if not dry:
-            ok, err = rc.send_imessage(outgoing, handle, runner=runner, sleeper=sleeper)
+            if is_group:        # v1.4.5: to the group chat itself, by its Messages chat id
+                ok, err = rc.send_imessage(outgoing, contact['guid'], runner=runner, sleeper=sleeper, target='chat')
+            else:
+                ok, err = rc.send_imessage(outgoing, handle, runner=runner, sleeper=sleeper)
             if not ok:
                 if err != 'timeout':        # a clear failure: allow an immediate manual retry
                     recent.pop(fp, None)
@@ -1028,7 +1151,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                 # a timeout is ambiguous (it may actually have sent): keep the fingerprint, no double-send
             elif cfg.get('deliveryCheck', True):
                 rc.add_pending_send(handle, t, len(outgoing), label=contact['label'],   # record inside the lock
-                                    note=('new contact, ' + _short_mask(handle)) if new_contact else '')
+                                    note=('new contact, ' + _short_mask(handle)) if new_contact else '',
+                                    chat_guid=contact['guid'] if is_group else '')
         rc.write_json_atomic(STATE_PATH, state)
     if new_contact and ok and not dry:
         try:

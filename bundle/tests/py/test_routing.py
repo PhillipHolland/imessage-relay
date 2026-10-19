@@ -231,10 +231,9 @@ class Roster(Base):
         self.assertTrue(r['needsTarget'])
 
     def test_group_replies_are_refused_by_prefix_and_quote(self):
-        for r in (self.route('Family: hi all'), self.route('hi all', quoted='Family · Pat: dinner?')):
-            self.assertTrue(r['needsTarget'])
-            self.assertEqual(r['reason'], "group replies aren't supported yet")
-            self.assertIn("Group replies aren't supported yet", r['error'])
+        # v1.4.5: the exact group name or a quote of a group line names the group (the host always asks first)
+        for r, by in ((self.route('Family: hi all'), 'prefix'), (self.route('hi all', quoted='Family · Pat: dinner?'), 'quote')):
+            self.assertEqual((r['contact']['handle'], r['by'], r.get('group')), ('group:chat0001', by, True), r)
         # a bare reply never routes to a group (v1.4.2: recent is contacts + roster people, never groups)
         r = self.route('ok')
         self.assertFalse(str(r.get('contact', {}).get('handle', '')).startswith('group:'), r)

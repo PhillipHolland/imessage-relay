@@ -50,12 +50,13 @@ class RelayPostStatus(unittest.TestCase):
         d = tempfile.mkdtemp()
         req = os.path.join(d, 'req.json')
         with open(req, 'w') as fh:
-            json.dump({'payload': {'type': 'wrong_account'}, 'conversation_id': CONV}, fh)
+            json.dump({'payload': {'type': 'wrong_account'}, 'conversation_id': CONV,
+                       'dedupe_path': os.path.join(d, 'seen.json')}, fh)   # never the real routine store/key cache
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             code = rp.main(['--in', req])
         out = json.loads(buf.getvalue())            # must be exactly one JSON object
-        self.assertIn(out['action'], ('error', 'send'))
+        self.assertIn(out['action'], ('error', 'send', 'fetch'))
         self.assertIsInstance(code, int)
 
     def test_main_on_garbage_in_file_still_prints_json(self):

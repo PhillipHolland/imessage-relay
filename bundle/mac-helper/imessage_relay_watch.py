@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.4: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.5: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -70,6 +70,7 @@ OLD_MESSAGE_S = 86400       # never relay a message first seen more than 24h aft
 EMPTY_GRACE_S = 45          # an empty-body row is left uncommitted this long (attributedBody may still be landing)
 REBASELINE_GAP = 5000       # a jump larger than this (chat.db rebuilt / long outage) rebaselines with one status
 DIGEST_CHUNK = 10          # digest posts are chunked to at most 10 lines (item 10)
+BATCH_MAX = 10             # v1.4.5: up to 10 waiting texts share one webhook (relay_post caps at 20)
 SEND_CONFIRM_FALLBACK_S = 20  # item 6: if delivery is still unconfirmed after ~20s, post a plain ✓ sent
 REOPEN_EVERY_S = 300
 NOT_RUNNING_LOG_EVERY_S = 300
@@ -403,7 +404,8 @@ class Watcher:
                 col('is_audio_message'), col('date_edited'), col('date_retracted'), BATCH))
         body_q = 'SELECT text, %s FROM message WHERE ROWID = ?' % ('attributedBody' if 'attributedBody' in msg_cols else 'NULL')
         ctx = {'cc': cfg['defaultCountryCode'], 'mute': set(cfg['mute']), 'roster': rc.load_roster(),
-               'roster_changed': False, 'body_q': body_q, 'chat_cols': chat_cols, 'now': self.now()}
+               'roster_changed': False, 'body_q': body_q, 'chat_cols': chat_cols, 'now': self.now(),
+               'spam_col': 'is_spam' in msg_cols}
         cursor = self.cursor
         out, capped, stop = [], False, False
         for _ in range(40):
@@ -521,12 +523,62 @@ class Watcher:
              'receivedAt': rc.iso_utc(received), 'route': h}
         if reaction is not None:
             m['reaction'] = True
+        if not chat['group'] and cfg.get('spamMode', 'tag') == 'tag' and reaction is None:
+            # v1.4.5 spamMode tag (1:1 only): not in Contacts (and not a relay contact), or flagged by
+            # Messages (chat.is_filtered / message.is_spam). Flags only; the text is never hidden.
+            if (not contact and not name) or self.flagged(con, chat_id, rowid, ctx):
+                m['unknown'] = True
+                counts['taggedUnknown'] = counts.get('taggedUnknown', 0) + 1
         if chat['group']:
             glabel, ch = rc.roster_label(cfg, ctx['roster'], chat['key'], chat['name'], group=True)
             ctx['roster_changed'] |= ch
             m.update(group={'label': glabel, 'name': chat['name']}, route=chat['key'])
             counts['groupMessages'] += 1
         return ('relay', m)
+
+    def flagged(self, con, chat_id, rowid, ctx):
+        """Messages' own junk / unknown-sender flags for a 1:1 row (read-only, no text)."""
+        try:
+            if 'is_filtered' in ctx['chat_cols'] and chat_id is not None:
+                r = con.execute('SELECT is_filtered FROM chat WHERE ROWID = ?', (chat_id,)).fetchone()
+                if r and r[0]:
+                    return True
+            if ctx.get('spam_col'):
+                r = con.execute('SELECT is_spam FROM message WHERE ROWID = ?', (rowid,)).fetchone()
+                if r and r[0]:
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def group_guid(self, key):
+        """v1.4.5 (outbound only): the Messages chat id ("iMessage;+;chat...") for a group key
+        "group:<chat_identifier or guid>", so a reply can be sent to that chat. Metadata only; the
+        newest chat with that identifier wins (iMessage and SMS copies of one group can coexist)."""
+        if not key.startswith('group:') or len(key) <= len('group:'):
+            return {'ok': False, 'error': 'not a group key'}
+        ident = key[len('group:'):]
+        try:
+            con = rc.open_chat_db(self.db_path)
+        except Exception as e:
+            return {'ok': False, 'error': 'chat.db unavailable: ' + str(e)[:120]}
+        try:
+            rows = con.execute(
+                'SELECT c.guid, c.chat_identifier, (SELECT MAX(m.date) FROM chat_message_join j JOIN message m '
+                'ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID) FROM chat c WHERE c.chat_identifier = ? OR c.guid = ?',
+                (ident, ident)).fetchall()
+        except Exception as e:
+            return {'ok': False, 'error': 'query failed: ' + str(e)[:120]}
+        finally:
+            con.close()
+        best = None
+        for guid, ci, last in rows:
+            k = re.sub(r'[^A-Za-z0-9;:+@._-]', '', str(ci or guid or ''))[:120]
+            if k != ident or not guid:
+                continue
+            if best is None or (last or 0) > (best[1] or 0):
+                best = (str(guid), last)
+        return {'ok': True, 'guid': best[0]} if best else {'ok': False, 'error': 'no such group chat'}
 
     def chat_info(self, con, chat_id, chat_cols):
         """{group, key, name} for a chat ROWID (cached). Group = chat.style 43 or more than one
@@ -571,6 +623,8 @@ class Watcher:
             p['group'] = dict(m['group'])
         if m.get('reaction'):
             p['reaction'] = True            # item 5: formats as "Alex ❤️ your message" (no colon)
+        if m.get('unknown'):
+            p['unknown'] = True             # v1.4.5 spamMode tag: posted as "⚠️ Unknown · <label>: <text>"
         return p
 
     # Backpressure replaces the old drop-oldest cap: nothing queued is ever discarded. When the queue
@@ -613,6 +667,22 @@ class Watcher:
                 for m in chunk:
                     self._bookkeep(m, t, counts)
         while not failed and self.retry and posts < MAX_POSTS_PER_TICK:
+            if len(self.retry) >= 2 and cfg.get('batchWebhooks', True):
+                # v1.4.5 speed: several texts waiting -> ONE webhook (one routine run on the box), still
+                # one X message per text there. Same retry rules: nothing is dropped, a 2xx is never re-sent.
+                chunk = self.retry[:BATCH_MAX]
+                payload = {'type': 'batch', 'count': len(chunk), 'messages': [self.public(m) for m in chunk],
+                           'untrusted': True}
+                if not self.post(cfg, payload):
+                    failed = True
+                    break
+                self.retry = self.retry[len(chunk):]
+                posts += 1
+                counts['forwarded'] += len(chunk)
+                counts['batched'] += len(chunk)
+                for m in chunk:
+                    self._bookkeep(m, t, counts)
+                continue
             m = self.retry[0]
             if not self.post(cfg, dict(type='message', untrusted=True, **self.public(m))):
                 failed = True
@@ -637,7 +707,7 @@ class Watcher:
     # ----- one cycle -----
     def tick(self):
         cfg = self.load_config()
-        counts = dict.fromkeys(('scanned', 'notAllowlisted', 'group', 'groupMessages', 'own', 'muted', 'shortCode', 'noHandle',
+        counts = dict.fromkeys(('taggedUnknown', 'batched', 'scanned', 'notAllowlisted', 'group', 'groupMessages', 'own', 'muted', 'shortCode', 'noHandle',
                                 'reactionsOrEvents', 'empty', 'deferredEmpty', 'tooOld', 'rowErrors', 'rosterWriteErrors',
                                 'new', 'held', 'forwarded', 'digested', 'webhookFailures', 'droppedPaused',
                                 'backpressure', 'rateLimited', 'rebaselined', 'dbBusy'), 0)
@@ -775,7 +845,8 @@ class Watcher:
             # owner sent from another device just before never counts), excluding rows already matched.
             status, error, rowid = rc.check_delivery_once(
                 e['handle'], float(e['at']), db_path=self.db_path,
-                exclude_rowids=tick_claimed, text_length=e.get('textLength'))
+                exclude_rowids=tick_claimed, text_length=e.get('textLength'),
+                chat_guid=e.get('chatGuid') or None)        # v1.4.5: a group send is proven in its chat
             if rowid is not None:
                 tick_claimed.add(rowid)            # same-tick collision guard (even for a still-pending match)
             if status == 'delivered':
@@ -863,6 +934,8 @@ class Watcher:
 
     def run_job(self, job, cfg):
         typ = job.get('type')
+        if typ == 'group_guid':
+            return self.group_guid(str(job.get('key') or ''))
         if typ == 'confirm_delivery':                 # poll check_delivery_once (blocking helper removed in v1.3)
             handle, since = job.get('handle', ''), float(job.get('since') or 0)
             attempts = max(1, int(job.get('attempts') or 10))

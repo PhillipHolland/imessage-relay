@@ -34,7 +34,7 @@ class Base(unittest.TestCase):
         self.db.add(ALLOWED, text='old history before install')       # must never be forwarded
         self.cfg = {'contacts': [{'name': 'Test Contact', 'handle': '15555550123'}], 'relayConversationId': '1111-2222',
                     'webhookUrl': 'https://example.invalid/hook', 'webhookToken': 'tok', 'ownerHandle': OWNER,
-                    'quietHours': None}
+                    'quietHours': None, 'batchWebhooks': False}   # one post per text here; batching: test_v145
         self.now = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()   # fixed base so tests are deterministic (no wall clock)
         self.poster = Poster()
         self.runner = FakeRunner()

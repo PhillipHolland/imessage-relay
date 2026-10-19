@@ -611,7 +611,7 @@
     // within 2 minutes of it, only once, and only with the owner's identity confirmed. The extension
     // reads the prompt's own text only to recognise it (prompts carry no message bodies).
     const PROMPT_RE = /reply yes within 2 min/i;
-    const UP_RE = /\u{1F44D}/u, DOWN_RE = /\u{1F44E}/u;
+    const UP_RE = /\u{1F44D}/u, DOWN_RE = /\u{1F44E}/u, TRASH_RE = /\u{1F5D1}/u;   // v1.4.5: wastebasket
     const PICT_RE = /\p{Extended_Pictographic}/gu;
     const PROMPT_WINDOW_MS = 120000;
     const promptMarks = new Map();   // uuid -> { at, up, down, fired }
@@ -619,11 +619,12 @@
       const textEl = bodyEl(entry);
       const quoteEl = findQuote(entry);
       const kinds = new Set();
-      let up = false, down = false;
+      let up = false, down = false, trash = false;
       const look = s => {
         if (!s) return;
         if (UP_RE.test(s)) up = true;
         if (DOWN_RE.test(s)) down = true;
+        if (TRASH_RE.test(s)) trash = true;
         const m = s.match(PICT_RE); if (m) m.forEach(k => kinds.add(k));
       };
       walkElements(entry, el => {
@@ -632,14 +633,39 @@
         for (let n = el.firstChild; n; n = n.nextSibling) if (n.nodeType === 3) look(n.nodeValue);
         look(el.getAttribute('alt')); look(el.getAttribute('aria-label'));
       });
-      if (kinds.size >= 4) return { up: false, down: false };    // an emoji picker / hover bar, not a reaction
-      return { up, down };
+      if (kinds.size >= 4) return { up: false, down: false, trash: false };    // an emoji picker / hover bar, not a reaction
+      return { up, down, trash };
     }
     function isPrompt(entry) {
       const tEl = bodyEl(entry);
       if (!tEl) return false;
       const t = String(tEl.textContent || '');
       return PROMPT_RE.test(t) && t.length < 600;
+    }
+    // v1.4.5: a wastebasket reaction the owner adds to a RELAYED message (an inbound bubble that is not
+    // a prompt) asks to block that sender. Like the prompt reactions: only one that appears after the
+    // bubble was first seen (never one already there at load), once per bubble, owner identity confirmed.
+    // The bubble's own text goes to the Mac in memory only (the Mac reads its "Label:" to find the
+    // sender, exactly like a quote); it is never logged or stored.
+    const trashMarks = new Map();   // uuid -> { trash, fired }
+    function scanTrash(e, u, conv) {
+      const st = reactionState(e);
+      const mk = trashMarks.get(u);
+      if (!mk) {
+        if (trashMarks.size > 2000) trashMarks.clear();
+        trashMarks.set(u, { trash: st.trash, fired: false });
+        return;
+      }
+      if (mk.fired || !st.trash || mk.trash) { mk.trash = mk.trash || st.trash; return; }
+      mk.trash = true;
+      if (!ownerCheck()) return;
+      const a = analyze(e);
+      if (a.direction !== 'inbound' || !a.text) return;   // only a relayed (inbound) message, never mine or unclear
+      mk.fired = true;
+      try {
+        onReaction({ conversationId: conv, key: 'trash:' + u, word: 'block', quotedText: a.text.slice(0, 500),
+                     ts: new Date(now()).toISOString() });
+      } catch (err) { info('reaction emit failed', err); }
     }
     function scanReactions(roots) {
       const conv = conversationId();
@@ -654,7 +680,8 @@
       }
       for (const e of entries) {
         const u = uuidOf(e);
-        if (!u || !isPrompt(e)) continue;
+        if (u && !isPrompt(e)) { scanTrash(e, u, conv); continue; }
+        if (!u) continue;
         if (!ownerCheck()) return;
         const st = reactionState(e);
         const mk = promptMarks.get(u);

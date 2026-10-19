@@ -1,4 +1,4 @@
-"""iMessage Relay v1.4.4 -- echo guard + bot-output detection.
+"""iMessage Relay v1.4.5 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
 these names lazily. Do not import relay_echo before relay_common."""

@@ -1,5 +1,5 @@
 /*
- * iMessage Relay v1.4.4: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.5: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -427,12 +427,19 @@ async function handleItem(item) {
 // prompt, the 2-minute window and the owner identity). A pending reply prompt is answered here (the text
 // is held here); a /block or /add prompt is answered by the host. A reaction is never sent as a message.
 async function handleReaction(r) {
-  const word = r && (r.word === 'yes' || r.word === 'no') ? r.word : '';
+  const word = r && (r.word === 'yes' || r.word === 'no' || r.word === 'block') ? r.word : '';
   if (!word) return;
   const cfg = await getConfig(false);
   if (!cfg.ok || !cfg.relayConversationId || String(r.conversationId || '') !== cfg.relayConversationId || cfg.paused) return;
   const key = String(r.key || '').slice(0, 300);
   if (await isDuplicate(key)) return;
+  if (word === 'block') {
+    // v1.4.5: a wastebasket on a relayed message -> the Mac asks "Block <label>?" (nothing is muted yet)
+    const quotedText = String(r.quotedText || '').slice(0, 500);
+    if (!quotedText) return;
+    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, quotedText, conversationId: cfg.relayConversationId }); } catch (e) { /* host down */ }
+    return;
+  }
   const item = { key, conversationId: cfg.relayConversationId, ts: String(r.ts || new Date().toISOString()), text: '' };
   const g = await getPendingGuess();
   if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {

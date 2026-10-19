@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.4.4: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.5: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -23,7 +23,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.4'
+VERSION = '1.4.5'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -72,6 +72,7 @@ DEFAULT_CONFIG = {
     'rosterDays': 30,
     'mute': [],
     'skipShortCodes': True,
+    'batchWebhooks': True,         # v1.4.5: texts waiting together share one webhook (one routine run)
     'footer': '',
     'deliveryCheck': True,
     'maxSendsPerMinute': 6,
@@ -85,6 +86,7 @@ DEFAULT_CONFIG = {
     'autoReopenMessages': False,
     'pollSeconds': 10,
     'defaultCountryCode': '1',
+    'spamMode': 'tag',             # v1.4.5: tag (prefix "\u26a0\ufe0f Unknown \u00b7 ") | off. Never hides a text.
     'confirmNewContacts': 'exact-skip',   # v1.4.1: exact-skip (an exact full name, one card, one number: send) | always
 }
 
@@ -261,8 +263,11 @@ def sanitize_config(user):
     cfg['redactCodes'] = truthy(cfg.get('redactCodes'), True)
     cfg['relayAll'] = truthy(cfg.get('relayAll'), False)
     cfg['skipShortCodes'] = truthy(cfg.get('skipShortCodes'), True)
+    cfg['batchWebhooks'] = truthy(cfg.get('batchWebhooks'), True)
     cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
+    sm = str(cfg.get('spamMode') or 'tag').strip().lower()
+    cfg['spamMode'] = sm if sm in ('tag', 'off') else 'tag'
     mute = []
     for m in cfg.get('mute') if isinstance(cfg.get('mute'), list) else []:
         if not isinstance(m, str) or not m.strip():
@@ -474,6 +479,7 @@ def contact_keys(entries):
     instead of being ignored. A name that equals a label is not added (the label decides)."""
     keys = {e['label'].lower(): {e['handle']} for e in entries if e.get('label')}
     labels = set(keys)
+    group_labels = {e['label'].lower() for e in entries if e.get('label') and e.get('kind') == 'group'}
     for e in entries:
         kind = e.get('kind', 'contact')
         if kind == 'contact':
@@ -485,6 +491,10 @@ def contact_keys(entries):
         for k in cand:
             if k and k not in labels:
                 keys.setdefault(k, set()).add(e['handle'])
+            elif k and k in group_labels:
+                # v1.4.5: a person's name that is also a group's name is ambiguous ("Who's this for?"),
+                # never a silent pick of the group or the person.
+                keys[k].add(e['handle'])
     return keys
 
 
@@ -897,9 +907,18 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
 
     def deliver(e, body, by):
         if e['kind'] == 'group':
-            return need("group replies aren't supported yet",
-                        "Group replies aren't supported yet. To text one person, start with their name, like %s: \u2026"
-                        % example_label(cfg, d))
+            # v1.4.5: a group is reached ONLY by its exact name or a quote of its message (never a bare
+            # reply), only under relay-all (the same opt-in that relays it), and the host ALWAYS asks first.
+            if by not in ('prefix', 'directive', 'quote'):
+                return need('a bare reply never goes to a group')
+            if not cfg['relayAll']:
+                return need('group replies need relay-all',
+                            "Can't send to the %s group: group replies need relay-all on." % e['label'])
+            at = e['lastInboundAt']
+            if at is None or now - at > cfg['rosterDays'] * 86400:
+                return need('%s has not texted within rosterDays' % e['label'],
+                            "Can't send to the %s group: it hasn't texted you in the last %d days." % (e['label'], cfg['rosterDays']))
+            return {'contact': e, 'body': body, 'by': by, 'group': True}
         if e['kind'] == 'roster':
             if not cfg['relayAll']:
                 return need('%s is not a contact (relayAll is off)' % e['label'],

@@ -318,7 +318,7 @@ class NotifyAndReplyTo(unittest.TestCase):
         self.dedupe = os.path.join(self.tmp, 'seen.json')
 
     def _xchat(self):
-        return {'events': [], 'conversation_key_events': [], 'signing_keys': []}
+        return {'events': [], 'conversation_key_events': ['K'], 'signing_keys': ['S']}
 
     def test_relayed_message_notifies_and_does_not_thread(self):
         seen = []
@@ -338,8 +338,8 @@ class NotifyAndReplyTo(unittest.TestCase):
 
     def test_confirmation_threads_under_owner_reply_when_reply_to_given(self):
         seen = []
-        r = rp.process({'payload': {'type': 'sent', 'id': 's2', 'label': 'Sam', 'reply_to': 'EVT-99'},
-                        'conversation_id': 'C', 'xchat': self._xchat(), 'dedupe_path': self.dedupe},
+        r = rp.process({'payload': {'type': 'sent', 'id': 's2', 'label': 'Sam', 'reply_to': 'EVT-99'},   # v1.4.5: needs events
+                        'conversation_id': 'C', 'xchat': dict(self._xchat(), events=['E']), 'dedupe_path': self.dedupe},
                        runner=_enc_runner(seen))
         self.assertEqual(r['sends'][0]['reply_to'], 'EVT-99')
         self.assertEqual(seen[-1].get('reply_to'), 'EVT-99', 'reply_to reaches xchat_lite on stdin')
@@ -437,7 +437,7 @@ class _WatchBase(unittest.TestCase):
         self.db.add(self.ALLOWED, text='old history')
         self.cfg = {'contacts': [{'name': 'Robin Smith', 'handle': self.ALLOWED}], 'relayConversationId': CONV,
                     'webhookUrl': 'https://x.invalid/h', 'webhookToken': 't', 'ownerHandle': self.OWNER,
-                    'quietHours': None}
+                    'quietHours': None, 'batchWebhooks': False}
         self.now = NOW
         self.posts = []
         self.w = self.m.watch.Watcher(

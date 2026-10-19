@@ -1,4 +1,4 @@
-"""iMessage Relay v1.4.4 -- look a name up in the Mac's Contacts (for a reply to someone new).
+"""iMessage Relay v1.4.5 -- look a name up in the Mac's Contacts (for a reply to someone new).
 
 When the owner starts a reply with a name that is on no relay list ("Jordan Rivera: hey"), the host
 asks the watcher (it holds Full Disk Access, which covers the Contacts database) to look that name up.

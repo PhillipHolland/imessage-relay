@@ -1,4 +1,4 @@
-"""iMessage Relay v1.4.4 -- delivery-proof queries and Messages.app sending.
+"""iMessage Relay v1.4.5 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
@@ -23,6 +23,17 @@ WHERE m.is_from_me = 1 AND m.date >= ? AND h.id = ?
 ORDER BY m.date ASC, m.ROWID ASC
 """
 
+# v1.4.0: outgoing messages in ONE group chat, found by its Messages chat GUID (the id the reply was
+# sent to). Same columns as DELIVERY_SQL; delivery flags and lengths only, never text.
+DELIVERY_SQL_GROUP = """
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, ''))
+FROM message m
+JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+JOIN chat c ON c.ROWID = cmj.chat_id
+WHERE m.is_from_me = 1 AND m.date >= ? AND c.guid = ?
+ORDER BY m.date ASC, m.ROWID ASC
+"""
+
 
 # When a pending send's text length does NOT match any outgoing row (e.g. an attributedBody-only row,
 # where LENGTH(text)=0), we only trust a row that landed within this many seconds of the send. Past it,
@@ -34,14 +45,18 @@ DELIVERY_FALLBACK_WINDOW_S = 4.0
 # ---------- delivery proof (watcher only; it holds Full Disk Access) ----------
 # One file per pending send, so a concurrent host append and a watcher resolve never lose each other's
 # record. Records are body-free: handle, send time, text length and label only -- never the body or a hash.
-def add_pending_send(handle, at, text_length, label='', path=None, note=''):
+def add_pending_send(handle, at, text_length, label='', path=None, note='', chat_guid=''):
     """Host (no chat.db access) records a send for the watcher to verify. NEVER stores the body.
-    v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0188")."""
+    v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0188").
+    v1.4.2: `chat_guid` routes the check to a group chat (handle is then its group:<id> key)."""
     d = path or rc.PENDING_DIR
-    rec = {'id': uuid.uuid4().hex, 'handle': rc.normalize_handle(handle), 'at': float(at),
+    h = handle if str(handle).startswith('group:') else rc.normalize_handle(handle)
+    rec = {'id': uuid.uuid4().hex, 'handle': h, 'at': float(at),
            'textLength': int(text_length), 'label': rc.clean_label(label)}
     if note:
         rec['note'] = str(note)[:60]
+    if chat_guid:
+        rec['chatGuid'] = str(chat_guid)
     rc.write_json_atomic(os.path.join(d, rec['id'] + '.json'), rec, mode=0o600)
     return rec['id']
 
@@ -90,18 +105,22 @@ def remove_pending(entry, path=None):
         pass
 
 
-def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), text_length=None):
+def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), text_length=None, chat_guid=None):
     """One non-blocking delivery check for the watcher's tick. Reads only delivery flags, never text.
     Matches the earliest outgoing message in the 1:1 chat with `handle` after `since_unix`, skipping
     ROWIDs already claimed this tick and preferring an exact text-length match on ties. Returns
     (status, error, rowid): status is 'delivered', 'failed', 'pending' (sent, not yet confirmed /
-    not found yet) or 'unavailable' (no chat.db / query failed)."""
+    not found yet) or 'unavailable' (no chat.db / query failed).
+    v1.4.1: chat_guid set = a group send, matched in that chat (by its Messages GUID)."""
     try:
         con = rc.open_chat_db(db_path)
     except rc.ChatDbUnavailable:
         return 'unavailable', None, None
     try:
-        rows = con.execute(DELIVERY_SQL, (rc.unix_to_apple_ns(since_unix), rc.normalize_handle(handle))).fetchall()
+        if chat_guid:
+            rows = con.execute(DELIVERY_SQL_GROUP, (rc.unix_to_apple_ns(since_unix), str(chat_guid))).fetchall()
+        else:
+            rows = con.execute(DELIVERY_SQL, (rc.unix_to_apple_ns(since_unix), rc.normalize_handle(handle))).fetchall()
     except sqlite3.Error:
         return 'unavailable', None, None
     finally:
@@ -163,18 +182,24 @@ def error_message(code):
     return OSASCRIPT_ERRORS.get(code, OSASCRIPT_ERRORS['send_failed'])
 
 
-def build_osascript_cmd(text, handle, service='auto', script_path=None):
+def build_osascript_cmd(text, handle, service='auto', script_path=None, target='participant'):
     """argv list (no shell). Text, handle and service are separate argv items, never spliced into
-    source. service: 'iMessage', 'SMS', or 'auto' (iMessage, then SMS via Text Message Forwarding)."""
-    return [rc.OSASCRIPT, script_path or rc.SCRIPT_PATH, text, handle, service]
+    source. service: 'iMessage', 'SMS', or 'auto' (iMessage, then SMS via Text Message Forwarding).
+    v1.4.1: target 'chat' sends to the group chat whose Messages GUID is `handle` (an extra argv item,
+    only added when used)."""
+    cmd = [rc.OSASCRIPT, script_path or rc.SCRIPT_PATH, text, handle, service]
+    if target == 'chat':
+        cmd.append('chat')
+    return cmd
 
 
-def send_imessage(text, handle, runner=subprocess.run, sleeper=time.sleep, timeout=30, service='auto'):
+def send_imessage(text, handle, runner=subprocess.run, sleeper=time.sleep, timeout=30, service='auto',
+                  target='participant'):
     """(ok, errcode). errcode is a fixed token from OSASCRIPT_ERRORS (never raw AppleScript text).
     Retries exactly once, and ONLY when a completed osascript actually reported -1712 on stderr
     (Messages busy / first-run Automation prompt). A local process timeout means osascript itself
     hung, so it is NOT retried (re-running would just hang again)."""
-    cmd = build_osascript_cmd(text, handle, service)
+    cmd = build_osascript_cmd(text, handle, service, target=target)
     code = 'send_failed'
     for attempt in (1, 2):
         try:

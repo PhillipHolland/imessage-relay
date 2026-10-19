@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.4 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.5 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -13,8 +13,12 @@ What it does, all in one process:
      needs_target, blocked, unblocked, status, catching_up, resynced, wrong_account, refused, guess_expired,
      and v1.3.8's relay_test: the /test report, one X message, one short line per step).
   3. Encrypt each line for the relay conversation with xchat_lite's session-encrypt, which unwraps the
-     conversation key from the conversation_key_events the routine fetched on every run (no key cache),
-     passing the text to xchat_lite on STDIN — never on argv, never to disk.
+     conversation key from conversation_key_events, passing the text to xchat_lite on STDIN — never on
+     argv, never to disk. v1.4.5: the key events and the public signing keys (key material only, never
+     message events or bodies) are cached in ~/.imessage-relay-routine/xchat_keys.json (mode 600, 6 h), so
+     the routine fetches nothing from X on most runs. With no usable cache the helper answers
+     {"action":"fetch","need":[...]} and the routine fetches those and runs it again. A `batch` event
+     (several texts from one watcher tick) becomes one X message per text in a single run.
   4. Print a JSON plan on stdout: the pre-encrypted send(s) the routine then hands to the X plugin's
      `send_chat_message` (plus `add_conversation_keys` first, for an empty thread).
 
@@ -63,6 +67,7 @@ STDOUT (one JSON object):
   the owner; every status/confirmation line is silent (should_notify:false) and threads under the
   owner's reply when reply_to is set (item 1).
   {"action":"skip","reason":"duplicate id …"}
+  {"action":"fetch","need":["conversation_key_events","signing_keys"],"reason":"…"}   # v1.4.5: fetch, write again, rerun
   {"action":"error","reason":"…"}                          # body-free; the routine posts one failure line
 """
 import argparse
@@ -84,6 +89,14 @@ def _label(p, default='someone'):
     return str(p.get('label') or p.get('contactName') or default).strip() or default
 
 
+UNKNOWN_TAG = '\u26a0\ufe0f Unknown \u00b7 '
+BATCH_MAX = 20
+KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
+KEY_CACHE_TTL_S = 6 * 3600          # after 6 h the routine fetches keys again (a rotated key heals by then)
+KEY_CACHE_MAX_BYTES = 512 * 1024
+NEED_KEYS = ['conversation_key_events', 'signing_keys']
+
+
 def _message_line(m):
     """`<label>: <text>` or `<group.label> · <label>: <text>`. Carries the (untrusted) body. A tapback
     line (item 5) joins with a space, not a colon: "Alex \u2764\ufe0f your message"."""
@@ -92,6 +105,8 @@ def _message_line(m):
     g = m.get('group') or {}
     gl = str(g.get('label') or g.get('name') or '').strip()
     head = (gl + GROUP_SEP if gl else '') + label
+    if m.get('unknown') and not gl:
+        head = UNKNOWN_TAG + head       # v1.4.5 spamMode tag: not in Contacts / flagged by Messages
     sep = ' ' if m.get('reaction') else ': '
     return head + sep + text
 
@@ -106,6 +121,14 @@ def format_event(payload):
     base_id = str(payload.get('id') or '')
     if t == 'message':
         return {'kind': 'message', 'lines': [{'id': base_id, 'text': _message_line(payload), 'body': True}]}
+    if t == 'batch':
+        # v1.4.5 speed: several texts the watcher found in one tick, one webhook / one routine run.
+        # Still one X message per text (each pings), each deduped on its own id.
+        msgs = (payload.get('messages') or [])[:BATCH_MAX]
+        if not msgs:
+            raise ValueError('empty batch')
+        return {'kind': 'batch', 'lines': [{'id': str(m.get('id') or (base_id + '#' + str(i))), 'text': _message_line(m),
+                                            'body': True} for i, m in enumerate(msgs)]}
     if t == 'digest':
         # item 7: a header line, then ONE X message per person (their texts grouped under one label).
         msgs = payload.get('messages') or []
@@ -116,6 +139,8 @@ def format_event(payload):
             g = m.get('group') or {}
             gl = str(g.get('label') or g.get('name') or '').strip()
             head = (gl + GROUP_SEP if gl else '') + label
+            if m.get('unknown') and not gl:
+                head = UNKNOWN_TAG + head
             if head not in index:
                 index[head] = len(groups)
                 groups.append([head, [], []])
@@ -307,6 +332,59 @@ class Dedupe:
             self._d = d
 
 
+# ---------- key cache (v1.4.5 speed; key material only, never events or bodies) ----------
+class KeyCache:
+    """The relay conversation's `conversation_key_events` (wrapped conversation keys) and the senders'
+    public `signing_keys`, saved after a run that fetched them so later runs can skip both fetches.
+    Message events are never stored. Mode 600, atomic writes, one conversation, TTL KEY_CACHE_TTL_S."""
+
+    def __init__(self, path=None, ttl=KEY_CACHE_TTL_S, now=time.time):
+        self.path = os.path.expanduser(path or KEY_CACHE_PATH)
+        self.ttl = ttl
+        self.now = now
+
+    def load(self, conv):
+        try:
+            if os.path.getsize(self.path) > KEY_CACHE_MAX_BYTES:
+                return None
+            with open(self.path) as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(d, dict) or d.get('conversation_id') != conv:
+            return None
+        if not (0 <= self.now() - float(d.get('savedAt') or 0) <= self.ttl):
+            return None
+        cke, sk = d.get('conversation_key_events'), d.get('signing_keys')
+        if not cke or not sk or not isinstance(cke, list) or not isinstance(sk, list):
+            return None
+        return {'conversation_key_events': cke, 'signing_keys': sk}
+
+    def save(self, conv, cke, sk):
+        d = {'v': 1, 'conversation_id': conv, 'savedAt': self.now(), 'conversation_key_events': cke, 'signing_keys': sk}
+        data = json.dumps(d)
+        if len(data) > KEY_CACHE_MAX_BYTES:
+            return False
+        folder = os.path.dirname(self.path)
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix='.keys-')
+        try:
+            with os.fdopen(fd, 'w') as fh:
+                fh.write(data)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        return True
+
+    def clear(self):
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
+
+
 # ---------- xchat_lite location + encryption ----------
 def locate_helper(helper):
     """Return (python, script) for xchat_lite, honoring explicit paths then the skill's clone layout."""
@@ -417,14 +495,24 @@ def process(req, runner=None):
     if not conv:
         return {'action': 'error', 'reason': 'no relay conversation_id'}
 
-    xchat = req.get('xchat')
-    # No X context supplied: we cannot encrypt. Return the plan unencrypted so the routine can report
-    # the setup gap. We NEVER send text any other way.
-    if not xchat:
-        return {'action': 'error', 'reason': 'no xchat context (fetch conversation events + keys first)',
-                'posted_kind': ev['kind'], 'encrypted': False}
+    xchat = dict(req.get('xchat') or {})
+    # v1.4.5 speed: the keys come from the request (then cached) or from the key cache. With neither,
+    # ask the routine to fetch them ({"action":"fetch"}) and run again; nothing was committed yet.
+    cache = None if req.get('key_cache') is False else KeyCache(
+        req.get('key_cache_path') or os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', 'xchat_keys.json'))
+    supplied = bool(xchat.get('conversation_key_events') and xchat.get('signing_keys'))
+    from_cache = False
+    if not supplied and not xchat.get('prepare'):
+        cached = cache.load(conv) if cache else None
+        if not cached:
+            return {'action': 'fetch', 'need': list(NEED_KEYS), 'posted_kind': ev['kind'],
+                    'reason': 'no cached keys: fetch conversation_key_events + signing_keys and run again'}
+        xchat.update(cached)
+        from_cache = True
 
     reply_to = payload.get('reply_to')          # item 1: X event id of the owner's reply (optional)
+    if not xchat.get('events'):
+        reply_to = None                         # v1.4.5: threading needs the fetched events; post unthreaded
     sends = []
     try:
         for ln in lines:
@@ -435,7 +523,16 @@ def process(req, runner=None):
             sends.append(encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner,
                                       reply_to=rt, should_notify=notify))
     except Exception as e:                                  # body-free error for the routine
+        if from_cache:
+            cache.clear()                                   # stale or bad cache: fetch fresh keys once
+            return {'action': 'fetch', 'need': list(NEED_KEYS), 'posted_kind': ev['kind'],
+                    'reason': 'cached keys did not work: fetch conversation_key_events + signing_keys and run again'}
         return {'action': 'error', 'reason': str(e)[:200], 'posted_kind': ev['kind'], 'encrypted': False}
+    if supplied and cache:
+        try:
+            cache.save(conv, xchat['conversation_key_events'], xchat['signing_keys'])
+        except OSError:
+            pass                                            # cache is only a speed-up
 
     # The sends are prepared and encrypted; remember their ids now (concurrency-safe). The routine
     # then calls send_chat_message. For strict "remember only after the send landed", set
@@ -506,9 +603,15 @@ def main(argv=None):
     ap.add_argument('--payload-file', dest='payload_file', help='read the raw Mac webhook event (the '
                     'message body) from this file and use it as the request payload; the file is deleted '
                     'right after it is read, so the --in request can be assembled with no body (item B)')
+    ap.add_argument('--forget-keys', dest='forget_keys', action='store_true',
+                    help='delete the cached conversation keys (the next run fetches them again)')
     ap.add_argument('ids', nargs='*', help='message ids to record as sent (used with --ack)')
     args = ap.parse_args(argv)
     # main ALWAYS prints exactly one JSON object and never raises (item 10).
+    if args.forget_keys:
+        KeyCache().clear()
+        print(json.dumps({'action': 'forgot_keys'}))
+        return 0
     try:
         if args.ack and args.ids:
             req = {'ids': args.ids}

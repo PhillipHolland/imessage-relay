@@ -61,7 +61,7 @@ class GetConfig(Base):
         r = self.h.handle_request({'type': 'get_config'}, cfg=self.cfg(ownerXHandle='OwnerAcct', senderXHandle='SenderBot',
                                                                         ownerXUserId='99887766', webhookToken='tok'), now=self.clock.now)
         self.assertEqual(r['ok'], True)
-        self.assertEqual(r['version'], '1.4.4')
+        self.assertEqual(r['version'], '1.4.5')
         self.assertEqual((r['paused'], r['dryRun']), (False, True))
         self.assertEqual(r['contacts'], [{'name': 'Test Contact', 'label': 'Test', 'handle': '+15555550123'}])
         self.assertEqual(r['relayConversationId'], CONV)
@@ -285,7 +285,7 @@ class RelayAllSends(Base):
     def test_old_roster_never_texted_and_group_are_refused(self):
         r = FakeRunner([(0, '')] * 3)
         for text, why in (('Old Friend: hi', 'rosterDays'), ('(555) 555-0170: hi', 'never texted'),
-                          ('Family: hi all', "group replies aren't supported yet")):
+                          ('Family: hi all', 'group-unavailable')):    # v1.4.5: a group asks first (watcher down here)
             resp = self.req(text=text, runner=r, dryRun=False)
             self.assertTrue(resp.get('needsTarget'), resp)
             self.assertIn(why, resp['reason'])

@@ -40,7 +40,10 @@ def fresh(tmp):
 
 
 def tmpdir():
-    return tempfile.mkdtemp(prefix='imr-test-')
+    d = tempfile.mkdtemp(prefix='imr-test-')
+    import atexit, shutil
+    atexit.register(shutil.rmtree, d, True)      # v1.4.5: don't leave thousands of dirs in /tmp
+    return d
 
 
 def read_log():

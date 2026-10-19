@@ -271,7 +271,7 @@ class RelayPostTest(unittest.TestCase):
             calls.append(json.loads(input.decode()))
             return P()
         d = tmpdir()
-        r = rp.process({'payload': self.payload([]), 'conversation_id': 'AAA-BBB', 'xchat': {'events': []},
+        r = rp.process({'payload': self.payload([]), 'conversation_id': 'AAA-BBB', 'xchat': {'events': [], 'conversation_key_events': ['K'], 'signing_keys': ['S']},
                         'dedupe_path': os.path.join(d, 's.json')}, runner=runner)
         self.assertEqual(r['action'], 'send')
         self.assertIs(r['sends'][0]['should_notify'], False)

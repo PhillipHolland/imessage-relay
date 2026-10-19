@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.4
+# iMessage Relay v1.4.5
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -62,12 +62,17 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.4)
+## Limits (v1.4.5)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
   effort); the name prefix always works.
-- Replies go to 1:1 chats only: group texts are relayed (relay-all) but can't be replied to yet.
+- A reply goes to a group only when it starts with the group's exact name (`family: …`) or quotes a
+  group message, and only after you answer yes to "Reply to the … group?" (relay-all only). A bare
+  reply never goes to a group.
+- 🗑️ on a relayed text asks "Block …?"; yes (or 👍, or `/block yes`) mutes that sender here only
+  (Messages is not changed). Texts from numbers not in Contacts, or flagged by Messages, show
+  "⚠️ Unknown · " first (`relayctl set spamMode off` to stop); nothing is hidden.
   No attachments are sent (incoming ones arrive as "[attachment]").
 
 ## Files
@@ -107,8 +112,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.4 changes the extension: native Reply quotes;
-v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
+reload the extension card in chrome://extensions (v1.4.5 changes the extension: 🗑️ to block;
+v1.4.4, v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations

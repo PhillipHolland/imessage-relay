@@ -1,14 +1,22 @@
--- iMessage Relay: sends ONE message to ONE participant (1:1). Text, handle and service arrive as
--- argv, so nothing from the message is ever interpolated into script source.
--- Usage: osascript send_imessage.applescript "<text>" "<handle>" ["iMessage"|"SMS"|"auto"]
+-- iMessage Relay: sends ONE message to ONE participant (1:1) or to ONE group chat. Text, handle (or
+-- chat GUID) and service arrive as argv, so nothing from the message is ever interpolated into script source.
+-- Usage: osascript send_imessage.applescript "<text>" "<handle or chat GUID>" ["iMessage"|"SMS"|"auto"] ["chat"]
 -- service "auto" (default) tries iMessage first, then SMS (needs Text Message Forwarding).
+-- v1.4.1: a 4th argument "chat" sends to the group chat whose GUID is given ("iMessage;+;chat123..."),
+-- the same chat the group's messages came from (the service argument is then ignored).
 -- Works with Messages quit (it launches in the background, ~3 s) or hidden (~1 s).
 on run argv
-	if (count of argv) < 2 then error "expected: text handle [service]"
+	if (count of argv) < 2 then error "expected: text handle [service] [chat]"
 	set theText to item 1 of argv
 	set theHandle to item 2 of argv
 	set theService to "auto"
 	if (count of argv) is greater than or equal to 3 then set theService to item 3 of argv
+	if (count of argv) is greater than or equal to 4 and item 4 of argv is "chat" then
+		tell application "Messages"
+			send theText to chat id theHandle
+		end tell
+		return
+	end if
 	tell application "Messages"
 		if theService is "iMessage" then
 			send theText to participant theHandle of (1st account whose service type = iMessage)

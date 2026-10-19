@@ -135,7 +135,8 @@ class _WatchBase(unittest.TestCase):
         self.now = time.time()
         self.cfg = {'contacts': [{'name': 'Alex A', 'handle': A}, {'name': 'Bob B', 'handle': B}],
                     'relayConversationId': CONV, 'webhookUrl': 'https://example.invalid/hook',
-                    'relayAll': True, 'quietHours': None, 'dryRun': False, 'ownerHandle': OWNER}
+                    'relayAll': True, 'quietHours': None, 'dryRun': False, 'ownerHandle': OWNER,
+                    'batchWebhooks': False}   # per-text posts in these checks; batching: test_v145
         self.w = self.m.watch.Watcher(poster=self.poster, runner=FakeRunner(), now=lambda: self.now,
                                       config_loader=lambda: self.m.rc.sanitize_config(self.cfg), sleeper=lambda s: None)
 
