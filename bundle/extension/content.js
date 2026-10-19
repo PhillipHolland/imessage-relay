@@ -1140,7 +1140,7 @@
     const VOCAB = ['react', 'reaction', 'emoji', 'reply', 'more', 'copy', 'delete', 'edit', 'add', 'search', 'pin',
                    'forward', 'unsend', 'options', 'actions', 'close', 'menu', 'like', 'heart'];
     const EMOJI_NAMES = {
-      '\u2705': ['check mark button', 'white heavy check mark', 'check mark', 'green check mark'],
+      '\u2705': ['check mark button', 'white heavy check mark', 'white check mark', 'check mark', 'green check mark'],
       '\u{1F440}': ['eyes'],
       '\u2753': ['question mark', 'red question mark', 'red question mark ornament', 'black question mark ornament', 'question'],
       '\u2764': ['red heart', 'heart', 'heavy black heart'],
@@ -1152,6 +1152,7 @@
     };
     const SEARCH_WORD = { '\u2705': 'check', '\u{1F440}': 'eyes', '\u2753': 'question', '\u2764': 'heart',
                           '\u{1F44D}': 'thumbs up', '\u{1F44E}': 'thumbs down', '\u{1F602}': 'joy', '\u203C': 'exclamation', '\u26A0': 'warning' };
+    const SEARCH_SEL = 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"],input[placeholder*="moji"],input[aria-label*="moji"]';
     const OPTION_SEL = 'button,[role="button"],[role="menuitem"],[role="menuitemradio"],[role="option"],[role="gridcell"],[role="img"],img[alt]';
     let uiChain = Promise.resolve();
     function uiSerial(fn) { const p = uiChain.then(fn, fn); uiChain = p.catch(() => {}); return p; }
@@ -1218,7 +1219,16 @@
       if (lab && (lab === want || names.includes(lab))) return true;
       if (el.tagName === 'IMG' && ems(el.getAttribute('alt')) === want) return true;
       const own = ems(el.textContent || '');
-      return own === want;
+      if (own === want) return true;
+      const norm = lab.replace(/[:_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (norm && names.includes(norm)) return true;
+      // v1.4.16: X draws picker emoji as twemoji (img src / background-image .../2705.svg)
+      const cp = Array.from(want).map(c => c.codePointAt(0).toString(16)).join('-');
+      const art = String((el.getAttribute('src') || '') + ' ' + (el.getAttribute('style') || ''));
+      if (cp && new RegExp('/' + cp + '\\.(svg|png)', 'i').test(art)) return true;
+      const ims = el.querySelectorAll ? el.querySelectorAll('img') : [], im = ims.length === 1 ? ims[0] : null;
+      return !!(im && im !== el && (ems(im.getAttribute('alt')) === want || new RegExp('/' + cp + '\\.(svg|png)', 'i').test(String(im.getAttribute('src') || ''))) &&
+                !ems(el.textContent || ''));
     }
     function findEmojiOption(entry, emoji, exclude) {
       const list = safeAll(doc, OPTION_SEL);
@@ -1288,34 +1298,37 @@
       const before = reactionCount(entry, want);
       if (before > 0) { if (opt && opt.prompt) watchPrompt(uuid, entry); return out(true, 'already'); }
       hover(entry);
-      const btn = await waitFor(() => findReactButton(entry), 1200);
+      const btn = await waitFor(() => findReactButton(entry), 1200, 40);
       if (!btn) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
       const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));   // e.g. an existing pill
       const preBtns = new Set(safeAll(doc, 'button,[role="button"]'));
+      // v1.4.16: the chat list's own "Search" box exists before the picker opens. v1.4.15 typed "check" into
+      // THAT box (the first search input on the page), never into the picker's, and the full picker only
+      // renders the emoji in view (no ✅ without a search), so every ✅ ended 'no-emoji' after 4 x 1.2 s.
+      // Only a search box that appeared with the picker is used.
+      const preInputs = new Set(safeAll(doc, 'input,textarea'));
       press(btn);
-      let option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
-      const trySearch = async () => {
-        const search = safeAll(doc, 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"]')
-          .find(el => !otherEntry(el, entry) && !/composer/i.test(String(el.getAttribute('data-testid') || '')) && !(el.closest && el.closest('[data-testid*="omposer"]')));
-        if (!search) return null;
-        setNativeValue(search, SEARCH_WORD[want] || '');
-        return waitFor(() => findEmojiOption(entry, want, stale), 1200);
-      };
-      if (!option) option = await trySearch();
-      if (!option) {
-        // v1.4.10: X's hover bar shows only a few quick reactions (no ✅) and no search box. Open the full
-        // picker: a NEW button (appeared with the bar) labelled for more emoji/reactions, never a message action.
-        const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
-          !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
-        if (more) {
-          press(more);
-          option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
-          if (!option) option = await trySearch();
+      let typed = null, expanded = false;
+      const step = () => {
+        const o = findEmojiOption(entry, want, stale);
+        if (o) return o;
+        const search = safeAll(doc, SEARCH_SEL).find(el => !preInputs.has(el) && el !== typed && !otherEntry(el, entry) &&
+          !/composer|inbox|conversation/i.test(String(el.getAttribute('data-testid') || '')) &&
+          !(el.closest && el.closest('[data-testid*="omposer"],[data-testid*="nbox"],nav')));
+        if (search) { typed = search; setNativeValue(search, SEARCH_WORD[want] || ''); return null; }
+        if (!expanded && !typed && realNow() - t0 > 350) {
+          // X's hover bar shows only a few quick reactions (no ✅): open the full picker with a NEW button
+          // (appeared with the bar) labelled for more emoji/reactions, never a message action.
+          const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
+            !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
+          if (more) { expanded = true; press(more); }
         }
-      }
-      if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry) }); }
+        return null;
+      };
+      const option = await waitFor(step, 3000, 40);
+      if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry), searched: !!typed, expanded }); }
       press(option);
-      const ok = await waitFor(() => reactionCount(entry, want) > before, 2500, 80);
+      const ok = await waitFor(() => reactionCount(entry, want) > before, 2500, 40);
       if (!ok) { escape(); return out(false, 'not-placed'); }
       if (opt && opt.prompt) watchPrompt(uuid, entry);
       return out(true, 'placed');

@@ -91,15 +91,15 @@ function boot(opts) {
   await test('undo window: 🗑️ within it cancels; nothing reaches the host', async () => {
     const b = boot({ undo: 1, send: () => { throw new Error('must not send'); }, tab: m => (m.action === 'await-undo' ? { trashed: true } : { ok: true }) });
     await b.reply('Jordan: oops', 200);
-    assert.ok(!b.host.some(m => m.type === 'send'));
+    assert.ok(!b.host.some(m => m.type === 'send' && !m.preflight));   // v1.4.16: only the never-sending preflight
     assert.strictEqual(b.tabMsgs[0].m.ms, 1000);
     assert.ok(b.host.some(m => m.type === 'signal' && m.status === 'undo_cancelled'));
   });
 
   await test('undo window: no 🗑️ -> sent; commands skip the window', async () => {
-    const b = boot({ undo: 2, send: () => ({ ok: true, sent: true }), tab: m => (m.action === 'await-undo' ? { trashed: false } : { ok: true }) });
+    const b = boot({ undo: 2, send: m => (m && m.preflight ? { ok: true, held: true } : { ok: true, sent: true }), tab: m => (m.action === 'await-undo' ? { trashed: false } : { ok: true }) });
     await b.reply('Jordan: fine', 200);
-    assert.strictEqual(b.host.filter(m => m.type === 'send').length, 1);
+    assert.strictEqual(b.host.filter(m => m.type === 'send' && !m.preflight).length, 1);
     const n = b.tabMsgs.length;
     await b.reply('/who', 200);
     assert.strictEqual(b.tabMsgs.length, n, 'no undo wait for a command');

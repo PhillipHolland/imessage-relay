@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.15, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.16, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=9f808b5cfa476164c85ae148f4b7c438bc234477c26efdc4ba9b8f2402b5faa4 nl=1
-# iMessage Relay v1.4.15
+@@@@ FILE README.md mode=644 sha256=e7d6c30165c8a3dc2aa0491536d7db4bde21adabc85f0730c779296873d62ce6 nl=1
+# iMessage Relay v1.4.16
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,12 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.16: the ✅ after a send lands again: v1.4.15 typed the picker search word into X Chat's chat-list
+  Search box (it existed before the picker opened), so the full picker never showed ✅ ('no-emoji'). Only a search
+  box that appears with the picker is used; quick row, full picker and search are tried in one 40 ms poll (no fixed
+  1.2 s waits); twemoji images match by codepoint. Prompts show at once: during the undo window the extension asks
+  the host (preflight, never sends) and a pick / Contacts / "reply to …?" prompt no longer waits out undoSeconds;
+  a reply that would go out still waits the full window and a 🗑️ still cancels it.
 - v1.4.15 (Mac helper only; extension stays 1.4.14): conversational guardrails. Within 10 minutes of any prompt,
   a short reply (up to 4 characters, digits, last 4, emoji only, an email start) is only ever a prompt answer: one
   that matches no choice gets "That isn't one of the choices" and nothing is sent. Text that came from a prompt
@@ -155,7 +161,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.15)
+## Limits (v1.4.16)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -1150,7 +1156,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=68cc4ffa31cb613c99f293f91432de9d82de5ef6fae004607ac15f4cd032c531 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=169dec2f5a8eb1c3b79ace30c59ed65d84c0664436fc51c8979d244a922518ad nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1693,36 +1699,55 @@ async function handleItem(item, src) {
     }
     return;
   }
+  const payload = { type: 'send', text: item.text || '', quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
+  if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
+  if (item.cards) payload.cards = item.cards;
+  let res = null, status, detail, viaPreflight = false;
   const undoMs = Math.max(0, Math.min(10, Number(cfg.undoSeconds) || 0)) * 1000;
   if (undoMs && xUuid && src && !/^\s*(\/|relay:)/i.test(String(item.text || ''))) {
     // v1.4.6 undo window: a 🗑️ on his own message within undoSeconds cancels it before it goes out.
     await addEvent(Object.assign({}, ev, { status: 'waiting', detail: 'undo window' }));
-    const u = await tabUi(src, { action: 'await-undo', uuid: xUuid, ms: undoMs });
-    if (u && u.trashed) {
-      await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
-      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
-      return;
+    const undoP = tabUi(src, { action: 'await-undo', uuid: xUuid, ms: undoMs });
+    if (!(Number(item.mediaCount) > 0)) {
+      // v1.4.16: during the undo window, ask the host (preflight: it never sends) whether this reply needs a
+      // prompt (pick / Contacts / "reply to …?"). A prompt then shows at once instead of after undoSeconds;
+      // nothing is texted until he answers it. Only a reply the host would send waits out the window.
+      let pre = null;
+      try { pre = await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({}, payload, { preflight: true })); } catch (e) { pre = null; }
+      if (pre && !pre.held) {
+        res = pre; viaPreflight = true;
+        undoP.then(async u => {             // 🗑️ during the window still cancels the held reply behind a prompt
+          if (!(u && u.trashed)) return;
+          const g = await getPendingGuess();
+          if (g && g.xUuid === xUuid) await clearPendingGuess();
+          await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
+        }).catch(() => {});
+      } else if (pre && pre.held) delete payload.quoteProbe;     // logged once, by the preflight
     }
-    await updateEvent(item.key, { status: 'sending' });
+    if (!viaPreflight) {
+      const u = await undoP;
+      if (u && u.trashed) {
+        await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
+        try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
+        return;
+      }
+      await updateEvent(item.key, { status: 'sending' });
+    }
   } else {
     await addEvent(Object.assign(ev, { status: 'sending' }));
   }
-  const payload = { type: 'send', text: item.text || '', quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
-  if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
-  if (Number(item.mediaCount) > 0) {
+  if (!viaPreflight && Number(item.mediaCount) > 0) {
     if (cfg.relayAttachments !== false && xUuid && src) {
       const up = await uploadMedia(xUuid, item.mediaCount, src);
       if (up.atts.length) payload.attachments = up.atts;
       if (up.skipped) payload.attachmentsSkipped = up.skipped;
     } else payload.attachmentsSkipped = Math.min(10, Number(item.mediaCount));
   }
-  if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
-  if (item.cards) payload.cards = item.cards;
-  console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
+  if (!viaPreflight) console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
                                                       attachments: (payload.attachments || []).length });
-  let res, status, detail;
   try {
-    res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
+    if (!viaPreflight) res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
     if (!res) { status = 'error'; detail = 'no response'; }
     else if (res.needsConfirm && res.handle) {  // item 3 / W1: hold the text in session; confirm with /yes
       await setPendingGuess({ text: item.text, label: String(res.label || ''), handle: String(res.handle || ''),
@@ -1889,7 +1914,7 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=f5933b11767f61b78e57e6a109cb948e227ae6a80124ae9000c98166464330d3 nl=1
+@@@@ FILE extension/content.js mode=644 sha256=e1f5d33d84205089a02de8063413769c8dca564e07661830344f776122a138fc nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -3032,7 +3057,7 @@ chrome.runtime.onStartup.addListener(boot);
     const VOCAB = ['react', 'reaction', 'emoji', 'reply', 'more', 'copy', 'delete', 'edit', 'add', 'search', 'pin',
                    'forward', 'unsend', 'options', 'actions', 'close', 'menu', 'like', 'heart'];
     const EMOJI_NAMES = {
-      '\u2705': ['check mark button', 'white heavy check mark', 'check mark', 'green check mark'],
+      '\u2705': ['check mark button', 'white heavy check mark', 'white check mark', 'check mark', 'green check mark'],
       '\u{1F440}': ['eyes'],
       '\u2753': ['question mark', 'red question mark', 'red question mark ornament', 'black question mark ornament', 'question'],
       '\u2764': ['red heart', 'heart', 'heavy black heart'],
@@ -3044,6 +3069,7 @@ chrome.runtime.onStartup.addListener(boot);
     };
     const SEARCH_WORD = { '\u2705': 'check', '\u{1F440}': 'eyes', '\u2753': 'question', '\u2764': 'heart',
                           '\u{1F44D}': 'thumbs up', '\u{1F44E}': 'thumbs down', '\u{1F602}': 'joy', '\u203C': 'exclamation', '\u26A0': 'warning' };
+    const SEARCH_SEL = 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"],input[placeholder*="moji"],input[aria-label*="moji"]';
     const OPTION_SEL = 'button,[role="button"],[role="menuitem"],[role="menuitemradio"],[role="option"],[role="gridcell"],[role="img"],img[alt]';
     let uiChain = Promise.resolve();
     function uiSerial(fn) { const p = uiChain.then(fn, fn); uiChain = p.catch(() => {}); return p; }
@@ -3110,7 +3136,16 @@ chrome.runtime.onStartup.addListener(boot);
       if (lab && (lab === want || names.includes(lab))) return true;
       if (el.tagName === 'IMG' && ems(el.getAttribute('alt')) === want) return true;
       const own = ems(el.textContent || '');
-      return own === want;
+      if (own === want) return true;
+      const norm = lab.replace(/[:_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (norm && names.includes(norm)) return true;
+      // v1.4.16: X draws picker emoji as twemoji (img src / background-image .../2705.svg)
+      const cp = Array.from(want).map(c => c.codePointAt(0).toString(16)).join('-');
+      const art = String((el.getAttribute('src') || '') + ' ' + (el.getAttribute('style') || ''));
+      if (cp && new RegExp('/' + cp + '\\.(svg|png)', 'i').test(art)) return true;
+      const ims = el.querySelectorAll ? el.querySelectorAll('img') : [], im = ims.length === 1 ? ims[0] : null;
+      return !!(im && im !== el && (ems(im.getAttribute('alt')) === want || new RegExp('/' + cp + '\\.(svg|png)', 'i').test(String(im.getAttribute('src') || ''))) &&
+                !ems(el.textContent || ''));
     }
     function findEmojiOption(entry, emoji, exclude) {
       const list = safeAll(doc, OPTION_SEL);
@@ -3180,34 +3215,37 @@ chrome.runtime.onStartup.addListener(boot);
       const before = reactionCount(entry, want);
       if (before > 0) { if (opt && opt.prompt) watchPrompt(uuid, entry); return out(true, 'already'); }
       hover(entry);
-      const btn = await waitFor(() => findReactButton(entry), 1200);
+      const btn = await waitFor(() => findReactButton(entry), 1200, 40);
       if (!btn) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
       const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));   // e.g. an existing pill
       const preBtns = new Set(safeAll(doc, 'button,[role="button"]'));
+      // v1.4.16: the chat list's own "Search" box exists before the picker opens. v1.4.15 typed "check" into
+      // THAT box (the first search input on the page), never into the picker's, and the full picker only
+      // renders the emoji in view (no ✅ without a search), so every ✅ ended 'no-emoji' after 4 x 1.2 s.
+      // Only a search box that appeared with the picker is used.
+      const preInputs = new Set(safeAll(doc, 'input,textarea'));
       press(btn);
-      let option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
-      const trySearch = async () => {
-        const search = safeAll(doc, 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"]')
-          .find(el => !otherEntry(el, entry) && !/composer/i.test(String(el.getAttribute('data-testid') || '')) && !(el.closest && el.closest('[data-testid*="omposer"]')));
-        if (!search) return null;
-        setNativeValue(search, SEARCH_WORD[want] || '');
-        return waitFor(() => findEmojiOption(entry, want, stale), 1200);
-      };
-      if (!option) option = await trySearch();
-      if (!option) {
-        // v1.4.10: X's hover bar shows only a few quick reactions (no ✅) and no search box. Open the full
-        // picker: a NEW button (appeared with the bar) labelled for more emoji/reactions, never a message action.
-        const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
-          !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
-        if (more) {
-          press(more);
-          option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
-          if (!option) option = await trySearch();
+      let typed = null, expanded = false;
+      const step = () => {
+        const o = findEmojiOption(entry, want, stale);
+        if (o) return o;
+        const search = safeAll(doc, SEARCH_SEL).find(el => !preInputs.has(el) && el !== typed && !otherEntry(el, entry) &&
+          !/composer|inbox|conversation/i.test(String(el.getAttribute('data-testid') || '')) &&
+          !(el.closest && el.closest('[data-testid*="omposer"],[data-testid*="nbox"],nav')));
+        if (search) { typed = search; setNativeValue(search, SEARCH_WORD[want] || ''); return null; }
+        if (!expanded && !typed && realNow() - t0 > 350) {
+          // X's hover bar shows only a few quick reactions (no ✅): open the full picker with a NEW button
+          // (appeared with the bar) labelled for more emoji/reactions, never a message action.
+          const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
+            !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
+          if (more) { expanded = true; press(more); }
         }
-      }
-      if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry) }); }
+        return null;
+      };
+      const option = await waitFor(step, 3000, 40);
+      if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry), searched: !!typed, expanded }); }
       press(option);
-      const ok = await waitFor(() => reactionCount(entry, want) > before, 2500, 80);
+      const ok = await waitFor(() => reactionCount(entry, want) > before, 2500, 40);
       if (!ok) { escape(); return out(false, 'not-placed'); }
       if (opt && opt.prompt) watchPrompt(uuid, entry);
       return out(true, 'placed');
@@ -3599,11 +3637,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=fe4ea9e467b00be7fd55db2a4776626910ae8876d0fc4121c492ed5828388308 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=26e22b5e8d228157600b5f9a90cb43b92c3bd5a4cd0db2754aee7c0833adb163 nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.14",
+  "version": "1.4.16",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -3815,10 +3853,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=a94d9f4231a64755540cf94c91ec17a5c9345e4c72be0de64a8abeeb8e9b9bb4 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=3c60d847d14a1f1f2487a22077a9cbb1401b5576076df75da342ebc83812e449 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.15.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.16.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -5160,6 +5198,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if handle in rc.owner_handle_set(cfg):
         return refuse('refusing to relay to the owner handle', textLength=len(body))
     who = {'contact': contact['label'], 'routedBy': by}
+    if msg.get('preflight') is True:
+        # v1.4.16: the extension asks during the undo window. Every check and prompt above has run (a prompt is
+        # already shown); a reply that would go out is only reported as held and is sent by the real request
+        # after the window. Nothing is sent, deduped, rate-counted or discarded here.
+        rc.log_event('preflight_held', routedBy=by, textLength=len(body))
+        return dict(base, ok=True, held=True, **who)
 
     os.makedirs(rc.APP_DIR, exist_ok=True)
     with open(LOCK_PATH, 'a') as lock:
@@ -6952,7 +6996,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=b04ae1fc1a0e04a9f79732e1cbb866291c66e0e9065f74dcc927b57a005e15c7 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=ea414f8f88891632628eb40763aed58148d82a0b319c81fbbb478b19cd63bb6a nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -6978,8 +7022,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.15'
-EXTENSION_VERSION = '1.4.14'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
+VERSION = '1.4.16'
+EXTENSION_VERSION = '1.4.16'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -12351,7 +12395,7 @@ if __name__ == '__main__':
   ["", ""]
 ]
 @@@@ END
-@@@@ FILE tests/js/bgui.test.js mode=644 sha256=af8c47b608dc4426d5bf9120a281e7cff4a6033f84f29cde17b9ef3da31b303b nl=1
+@@@@ FILE tests/js/bgui.test.js mode=644 sha256=5f3f2bfa8956bd05b01c76e885ebb48bd428f067009cbb694e63cbe8f8dfd3ff nl=1
 /* v1.4.6: background.js UI flow — ✅ on a sent reply is acked to the host, ❓ / 🤖 prompt acks, the relay's
  * own 🤖 text is never sent, the undo window cancels a send, queued reactions are polled. Fictional names. */
 'use strict';
@@ -12445,15 +12489,15 @@ function boot(opts) {
   await test('undo window: 🗑️ within it cancels; nothing reaches the host', async () => {
     const b = boot({ undo: 1, send: () => { throw new Error('must not send'); }, tab: m => (m.action === 'await-undo' ? { trashed: true } : { ok: true }) });
     await b.reply('Jordan: oops', 200);
-    assert.ok(!b.host.some(m => m.type === 'send'));
+    assert.ok(!b.host.some(m => m.type === 'send' && !m.preflight));   // v1.4.16: only the never-sending preflight
     assert.strictEqual(b.tabMsgs[0].m.ms, 1000);
     assert.ok(b.host.some(m => m.type === 'signal' && m.status === 'undo_cancelled'));
   });
 
   await test('undo window: no 🗑️ -> sent; commands skip the window', async () => {
-    const b = boot({ undo: 2, send: () => ({ ok: true, sent: true }), tab: m => (m.action === 'await-undo' ? { trashed: false } : { ok: true }) });
+    const b = boot({ undo: 2, send: m => (m && m.preflight ? { ok: true, held: true } : { ok: true, sent: true }), tab: m => (m.action === 'await-undo' ? { trashed: false } : { ok: true }) });
     await b.reply('Jordan: fine', 200);
-    assert.strictEqual(b.host.filter(m => m.type === 'send').length, 1);
+    assert.strictEqual(b.host.filter(m => m.type === 'send' && !m.preflight).length, 1);
     const n = b.tabMsgs.length;
     await b.reply('/who', 200);
     assert.strictEqual(b.tabMsgs.length, n, 'no undo wait for a command');
@@ -22391,7 +22435,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=983691a50a6636b44c2f9a1e6c7dea28f0c8e2c1a22a42b33bec45bde8f1b033 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=865585b0395eb70013c70a2fa7b2b91dc2cc5b6ea6be5a7be96baec8cd2dcddf nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -22584,7 +22628,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.15')
+        self.assertEqual(m.rc.VERSION, '1.4.16')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

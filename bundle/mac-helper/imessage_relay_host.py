@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.15.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.16.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -1342,6 +1342,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if handle in rc.owner_handle_set(cfg):
         return refuse('refusing to relay to the owner handle', textLength=len(body))
     who = {'contact': contact['label'], 'routedBy': by}
+    if msg.get('preflight') is True:
+        # v1.4.16: the extension asks during the undo window. Every check and prompt above has run (a prompt is
+        # already shown); a reply that would go out is only reported as held and is sent by the real request
+        # after the window. Nothing is sent, deduped, rate-counted or discarded here.
+        rc.log_event('preflight_held', routedBy=by, textLength=len(body))
+        return dict(base, ok=True, held=True, **who)
 
     os.makedirs(rc.APP_DIR, exist_ok=True)
     with open(LOCK_PATH, 'a') as lock:

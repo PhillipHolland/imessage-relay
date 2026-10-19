@@ -540,36 +540,55 @@ async function handleItem(item, src) {
     }
     return;
   }
+  const payload = { type: 'send', text: item.text || '', quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
+  if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
+  if (item.cards) payload.cards = item.cards;
+  let res = null, status, detail, viaPreflight = false;
   const undoMs = Math.max(0, Math.min(10, Number(cfg.undoSeconds) || 0)) * 1000;
   if (undoMs && xUuid && src && !/^\s*(\/|relay:)/i.test(String(item.text || ''))) {
     // v1.4.6 undo window: a 🗑️ on his own message within undoSeconds cancels it before it goes out.
     await addEvent(Object.assign({}, ev, { status: 'waiting', detail: 'undo window' }));
-    const u = await tabUi(src, { action: 'await-undo', uuid: xUuid, ms: undoMs });
-    if (u && u.trashed) {
-      await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
-      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
-      return;
+    const undoP = tabUi(src, { action: 'await-undo', uuid: xUuid, ms: undoMs });
+    if (!(Number(item.mediaCount) > 0)) {
+      // v1.4.16: during the undo window, ask the host (preflight: it never sends) whether this reply needs a
+      // prompt (pick / Contacts / "reply to …?"). A prompt then shows at once instead of after undoSeconds;
+      // nothing is texted until he answers it. Only a reply the host would send waits out the window.
+      let pre = null;
+      try { pre = await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({}, payload, { preflight: true })); } catch (e) { pre = null; }
+      if (pre && !pre.held) {
+        res = pre; viaPreflight = true;
+        undoP.then(async u => {             // 🗑️ during the window still cancels the held reply behind a prompt
+          if (!(u && u.trashed)) return;
+          const g = await getPendingGuess();
+          if (g && g.xUuid === xUuid) await clearPendingGuess();
+          await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
+        }).catch(() => {});
+      } else if (pre && pre.held) delete payload.quoteProbe;     // logged once, by the preflight
     }
-    await updateEvent(item.key, { status: 'sending' });
+    if (!viaPreflight) {
+      const u = await undoP;
+      if (u && u.trashed) {
+        await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
+        try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
+        return;
+      }
+      await updateEvent(item.key, { status: 'sending' });
+    }
   } else {
     await addEvent(Object.assign(ev, { status: 'sending' }));
   }
-  const payload = { type: 'send', text: item.text || '', quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
-  if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
-  if (Number(item.mediaCount) > 0) {
+  if (!viaPreflight && Number(item.mediaCount) > 0) {
     if (cfg.relayAttachments !== false && xUuid && src) {
       const up = await uploadMedia(xUuid, item.mediaCount, src);
       if (up.atts.length) payload.attachments = up.atts;
       if (up.skipped) payload.attachmentsSkipped = up.skipped;
     } else payload.attachmentsSkipped = Math.min(10, Number(item.mediaCount));
   }
-  if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
-  if (item.cards) payload.cards = item.cards;
-  console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
+  if (!viaPreflight) console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
                                                       attachments: (payload.attachments || []).length });
-  let res, status, detail;
   try {
-    res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
+    if (!viaPreflight) res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
     if (!res) { status = 'error'; detail = 'no response'; }
     else if (res.needsConfirm && res.handle) {  // item 3 / W1: hold the text in session; confirm with /yes
       await setPendingGuess({ text: item.text, label: String(res.label || ''), handle: String(res.handle || ''),

@@ -23,8 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.15'
-EXTENSION_VERSION = '1.4.14'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
+VERSION = '1.4.16'
+EXTENSION_VERSION = '1.4.16'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')

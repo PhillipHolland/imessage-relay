@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.15
+# iMessage Relay v1.4.16
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,6 +22,12 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.16: the ✅ after a send lands again: v1.4.15 typed the picker search word into X Chat's chat-list
+  Search box (it existed before the picker opened), so the full picker never showed ✅ ('no-emoji'). Only a search
+  box that appears with the picker is used; quick row, full picker and search are tried in one 40 ms poll (no fixed
+  1.2 s waits); twemoji images match by codepoint. Prompts show at once: during the undo window the extension asks
+  the host (preflight, never sends) and a pick / Contacts / "reply to …?" prompt no longer waits out undoSeconds;
+  a reply that would go out still waits the full window and a 🗑️ still cancels it.
 - v1.4.15 (Mac helper only; extension stays 1.4.14): conversational guardrails. Within 10 minutes of any prompt,
   a short reply (up to 4 characters, digits, last 4, emoji only, an email start) is only ever a prompt answer: one
   that matches no choice gets "That isn't one of the choices" and nothing is sent. Text that came from a prompt
@@ -136,7 +142,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.15)
+## Limits (v1.4.16)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
