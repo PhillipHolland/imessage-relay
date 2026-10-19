@@ -498,8 +498,16 @@ async function handleItem(item, src) {
   if (d.ignore) return;
   if (await isDuplicate(item.key)) return;
   const ev = { kind: 'reply', key: item.key, contactName: d.contactName, textLength: (item.text || '').length };
-  if (d.skip) { await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip })); return; }
   const xUuid = uuidFromKey(item.key);
+  if (d.skip) {
+    await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip }));
+    // v1.4.10: never silent. Anything he typed that we saw but won't relay gets a visible ⚠️ on it
+    // (history / other-account items are not his new replies and stay quiet).
+    if (xUuid && src && cfg.uiReactions !== false && !/^(stale item|direction score)/.test(d.skip)) {
+      await tabUi(src, { action: 'react', uuid: xUuid, emoji: '\u26A0\uFE0F' });
+    }
+    return;
+  }
   const undoMs = Math.max(0, Math.min(10, Number(cfg.undoSeconds) || 0)) * 1000;
   if (undoMs && xUuid && src && !/^\s*(\/|relay:)/i.test(String(item.text || ''))) {
     // v1.4.6 undo window: a 🗑️ on his own message within undoSeconds cancels it before it goes out.

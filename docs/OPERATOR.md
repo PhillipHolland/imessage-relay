@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.9)
+# iMessage Relay: operator reference (v1.4.10)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -844,6 +844,11 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.10 changes only the Chrome extension** (content.js, background.js; Mac helper stays v1.4.8, relay_post.py stays
+v1.4.9): emoji-only replies and native Replies to a relayed photo reach the Mac; a skipped reply gets a ⚠️; the ✅
+reaction opens the full emoji picker when the quick bar lacks ✅.
+Install on the Mac, then reload the extension and press Cmd+R on the X Chat tab.
+
 **v1.4.9 changes only relay_post.py** (bot side; the Mac stays on v1.4.8): a photo line always carries the
 sender label ("Jordan:" as the image caption, "Jordan: 📷 Photo couldn't be relayed …" as its notice), and the
 routine can report a body-free `media_error` with `media_off`. The template's upload step gained the

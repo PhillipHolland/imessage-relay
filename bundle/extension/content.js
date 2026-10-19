@@ -292,6 +292,8 @@
       if (!kept.some(l => l.trim() && !isChipText(l))) return kept.filter(l => l.trim())[0] || text;
       return kept.join('\n').replace(/\n+$/, '');
     }
+    function isEmojiAlt(alt) { return !!alt && alt.length <= 16 && !/[A-Za-z0-9]/.test(alt) && /[^\s]/.test(alt); }
+    function hasEmojiImg(el) { return safeAll(el, 'img[alt]').some(i => isEmojiAlt(String(i.getAttribute('alt') || ''))); }
     function extractText(textEl) {
       const parts = [];   // strings, or {chip: text} for chip-only elements (kept only if not trailing)
       function walk(node) {
@@ -299,9 +301,14 @@
           if (c.nodeType === 3) { parts.push(c.nodeValue); continue; }
           if (c.nodeType !== 1) continue;
           if (c.tagName === 'BR') { parts.push('\n'); continue; }
+          if (c.tagName === 'IMG') {          // v1.4.10: X draws emoji as <img alt="❤️">: they are text
+            const alt = String(c.getAttribute('alt') || '');
+            if (isEmojiAlt(alt)) parts.push(alt);
+            continue;
+          }
           if (isStripEl(c)) continue;
           const block = cfg.blockTags.includes(c.tagName);
-          if (!c.shadowRoot && isChipText(c.textContent)) {
+          if (!c.shadowRoot && isChipText(c.textContent) && !hasEmojiImg(c)) {   // v1.4.10: emoji images are text
             parts.push({ chip: (block ? '\n' : '') + c.textContent + (block ? '\n' : '') });
             continue;
           }
@@ -455,28 +462,40 @@
       return t ? t + (/:$/.test(t) || t.indexOf('\n') < 0 && t.length < 40 ? ' ' : '\n') + urls.join('\n') : urls.join('\n');
     }
 
-    function previewQuote(entry) {
+    // v1.4.10: the preview block(s) of a native Reply: the article's preceding siblings at the nearest level
+    // that shows text OR a photo thumbnail (a reply to an image bubble has a preview with no text at all).
+    function previewInfo(entry) {
+      const none = { els: [], text: '', media: false };
       const body = bodyEl(entry);
-      if (!body || body === entry) return '';
+      if (!body || body === entry) return none;
       let art = null;
       for (let n = body; n && n !== entry; n = parentOf(n)) if (n.getAttribute && n.getAttribute('role') === 'article') { art = n; break; }
       const start = art || body;
-      const parts = [];
       const cards = cardInfo(entry);
       for (let n = start; n && n !== entry; n = parentOf(n)) {
-        const sibs = [];
+        const els = [], texts = [];
+        let media = false;
         for (let sib = n.previousElementSibling; sib; sib = sib.previousElementSibling) {
           if (isUuidEntry(sib) || safeAll(sib, cfg.uuidEntryPrefixSelector).some(isUuidEntry)) break;   // another message
           if (isHiddenEl(sib)) continue;
           if (cards.blocks.some(b => deepContains(b, sib) || deepContains(sib, b))) continue;   // v1.4.6: a shared card, not a quote
           const t = visibleText(sib);
-          if (t && !isChipText(t)) sibs.unshift(t);
+          const img = safeAll(sib, 'img').some(i => MEDIA_SRC_RE.test(String(i.getAttribute('src') || '')) && !isEmojiImg(i)) ||
+            safeAll(sib, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i]').length > 0;
+          if ((t && !isChipText(t)) || img) { els.unshift(sib); if (t && !isChipText(t)) texts.unshift(t); media = media || img; }
         }
-        if (sibs.length) parts.unshift(sibs.join(' '));
-        if (parts.length) break;            // the nearest level with a preview wins
+        if (els.length) return { els, text: texts.join(' ').trim(), media };   // the nearest level with a preview wins
       }
-      return parts.join(' ').trim();
+      return none;
     }
+    function previewQuote(entry) {
+      const p = previewInfo(entry);
+      // a quoted photo whose preview shows no caption: mark it as a photo; with no "Name:" the host falls back
+      // to its own message mapping, then asks ❓
+      if (p.media && p.text.indexOf('\u{1F4F7}') < 0) return (p.text ? p.text + ' ' : '') + '\u{1F4F7} Photo';
+      return p.text;
+    }
+    function inPreview(entry, el, info) { return (info || previewInfo(entry)).els.some(b => deepContains(b, el)); }
     function entryQuote(entry) {
       const q = findQuote(entry);
       let t = q ? extractText(q) : '';
@@ -1070,6 +1089,8 @@
     const realNow = () => Date.now();
     const uiPromptUuids = new Map();         // uuid -> at: the owner's message carrying a relay ❓ (2 min)
     const REACT_LABEL_RE = /\b(add\s+)?(react|reacts|reaction|reactions|emoji)\b/i;
+    const EXPAND_RE = /^(?:\+|(?:more|all|other|choose|pick|add|open|show(?:\s+(?:more|all))?)\s+(?:an?\s+)?(?:emojis?|reactions?)|emoji\s+(?:picker|keyboard|menu)|(?:open\s+)?emoji\s+picker)$/i;
+    const EXPAND_BAD_RE = /delete|unsend|remove|report|block|mute|leave|forward|copy|edit|reply/i;
     const DANGER_RE = /delete|unsend|remove|report|copy|forward|edit|reply|pin|share|block|mute|leave|more|download|translate/i;
     const VOCAB = ['react', 'reaction', 'emoji', 'reply', 'more', 'copy', 'delete', 'edit', 'add', 'search', 'pin',
                    'forward', 'unsend', 'options', 'actions', 'close', 'menu', 'like', 'heart'];
@@ -1225,14 +1246,26 @@
       const btn = await waitFor(() => findReactButton(entry), 1200);
       if (!btn) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
       const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));   // e.g. an existing pill
+      const preBtns = new Set(safeAll(doc, 'button,[role="button"]'));
       press(btn);
       let option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
-      if (!option) {
+      const trySearch = async () => {
         const search = safeAll(doc, 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"]')
           .find(el => !otherEntry(el, entry) && !/composer/i.test(String(el.getAttribute('data-testid') || '')) && !(el.closest && el.closest('[data-testid*="omposer"]')));
-        if (search) {
-          setNativeValue(search, SEARCH_WORD[want] || '');
+        if (!search) return null;
+        setNativeValue(search, SEARCH_WORD[want] || '');
+        return waitFor(() => findEmojiOption(entry, want, stale), 1200);
+      };
+      if (!option) option = await trySearch();
+      if (!option) {
+        // v1.4.10: X's hover bar shows only a few quick reactions (no ✅) and no search box. Open the full
+        // picker: a NEW button (appeared with the bar) labelled for more emoji/reactions, never a message action.
+        const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
+          !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
+        if (more) {
+          press(more);
           option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
+          if (!option) option = await trySearch();
         }
       }
       if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry) }); }
@@ -1292,10 +1325,12 @@
       let q = null;
       try { q = findQuote(entry); } catch (e) { q = null; }
       const cards = cardInfo(entry);
+      const pv = previewInfo(entry);
       for (const img of safeAll(entry, 'img')) {
         const src = String(img.getAttribute('src') || '');
         if (!src || !MEDIA_SRC_RE.test(src) || isEmojiImg(img) || isExcluded(img)) continue;
         if (q && deepContains(q, img)) continue;      // a photo in the quoted message is theirs, never re-sent
+        if (inPreview(entry, img, pv)) continue;      // v1.4.10: so is the thumbnail in a native Reply preview
         if (inCard(entry, img, cards)) continue;      // a shared post / link thumbnail: the URL goes instead
         if (!out.includes(src)) out.push(src);
         if (out.length >= MEDIA_MAX) break;
@@ -1304,7 +1339,9 @@
     }
     function mediaShell(entry) {        // a photo bubble whose image has not loaded yet
       if (mediaOf(entry).length) return false;
-      return safeAll(entry, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i],[aria-label*="image" i],[aria-label*="photo" i]').length > 0;
+      const pv = previewInfo(entry);
+      return safeAll(entry, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i],[aria-label*="image" i],[aria-label*="photo" i]')
+        .some(el => !inPreview(entry, el, pv));     // v1.4.10: a quoted photo's placeholder is not his photo
     }
     function pruneMedia() {
       const t = realNow();

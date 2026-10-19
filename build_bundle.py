@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.9, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.10, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=449ae5208f36e03702dcda1d9431b4f57f2ed2548bb10664652f913136c8ff6d nl=1
-# iMessage Relay v1.4.9
+@@@@ FILE README.md mode=644 sha256=f06bb40b9f9c2311878953d776c51dc0c47119136029c2e815ec0e640823f92d nl=1
+# iMessage Relay v1.4.10
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,7 +41,13 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
-- The Chrome extension did not change in v1.4.7, v1.4.8 or v1.4.9 (no reload needed from v1.4.6).
+- v1.4.10 (Chrome extension only; Mac helper stays v1.4.8, bot side v1.4.9): a native Reply to a relayed photo
+  (the image bubble or its "Name: 📷 Photo" caption) now reaches the Mac. Emoji-only replies ("❤️❤️❤️", drawn by X as
+  emoji images) count as text, the quoted thumbnail is never sent as your photo, a caption quote routes to that name,
+  an image-only quote asks ❓, any reply the extension sees but skips gets a ⚠️ on it (never silent), and the
+  ✅ "sent" reaction opens X's full emoji picker when the quick bar lacks ✅ (no more "→ Name ✓✓ delivered" text line).
+  Reload the extension in chrome://extensions and press Cmd+R on the X Chat tab.
+- The Chrome extension did not change in v1.4.7, v1.4.8 or v1.4.9.
 - v1.4.9 (bot side only; the Mac code is v1.4.8): a relayed photo always carries the sender's label, even
   right after another text from them, and the routine's upload failures are logged with a short code.
   Photos need the sender's X connection to have the `media.write` permission.
@@ -124,7 +130,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.9)
+## Limits (v1.4.10)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -675,7 +681,7 @@ cat <<NEXT
 Log (counts only, never message text): $LOGS/imessage-relay.log
 NEXT
 @@@@ END
-@@@@ FILE run_tests.sh mode=755 sha256=bff3585987fc76ee7c3b314cfdb9eb73cc8215baacdd0ed0ab46797166b4f286 nl=1
+@@@@ FILE run_tests.sh mode=755 sha256=1cd60d453c99c9252881c7848e38ca27bc738e334bfcc2cb031486594f11e9af nl=1
 #!/bin/bash
 # Runs every test. Needs python3 (3.9+); the JS tests also need node and jsdom
 # (NODE_PATH pointing at a node_modules with jsdom, or `npm i jsdom` here).
@@ -695,7 +701,7 @@ if command -v node >/dev/null 2>&1 && ! node -e "require('jsdom')" >/dev/null 2>
   _gr="$(npm root -g 2>/dev/null)"; [[ -n "$_gr" ]] && export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gr"
 fi
 if command -v node >/dev/null 2>&1 && node -e "require('jsdom')" >/dev/null 2>&1; then
-  for t in detect frames owner native guess yes reaction quote probe xreply trash ui bgui media cards drop e2etest chips smoke-chrome; do
+  for t in detect frames owner native guess yes reaction quote probe xreply xmedia_reply trash ui bgui media cards drop e2etest chips smoke-chrome; do
     echo "== JS: $t =="
     node "tests/js/$t.test.js" 2>&1 | grep -E 'passed|FAIL|PASS chrome' ; [[ ${PIPESTATUS[0]} -eq 0 ]] || fail=1
   done
@@ -1119,7 +1125,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=87a4d3ffe24b96427ff81fc199122431ef6b05ea629f82a3a2dbc99c616817b5 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=9cefa04cd24ee6c4049a3e93bb85e9651ff8a62c31c1da99e3bac48f03eec813 nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1620,8 +1626,16 @@ async function handleItem(item, src) {
   if (d.ignore) return;
   if (await isDuplicate(item.key)) return;
   const ev = { kind: 'reply', key: item.key, contactName: d.contactName, textLength: (item.text || '').length };
-  if (d.skip) { await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip })); return; }
   const xUuid = uuidFromKey(item.key);
+  if (d.skip) {
+    await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip }));
+    // v1.4.10: never silent. Anything he typed that we saw but won't relay gets a visible ⚠️ on it
+    // (history / other-account items are not his new replies and stay quiet).
+    if (xUuid && src && cfg.uiReactions !== false && !/^(stale item|direction score)/.test(d.skip)) {
+      await tabUi(src, { action: 'react', uuid: xUuid, emoji: '\u26A0\uFE0F' });
+    }
+    return;
+  }
   const undoMs = Math.max(0, Math.min(10, Number(cfg.undoSeconds) || 0)) * 1000;
   if (undoMs && xUuid && src && !/^\s*(\/|relay:)/i.test(String(item.text || ''))) {
     // v1.4.6 undo window: a 🗑️ on his own message within undoSeconds cancels it before it goes out.
@@ -1817,7 +1831,7 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=7835a064e0eea993f02fdf21c53c186d10d93185f083a838d792bbdb7920c3cd nl=1
+@@@@ FILE extension/content.js mode=644 sha256=c8f383ad9a6430eb1e1d8387ee130f4f83f313b610f50117112038e0bce923b4 nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -2112,6 +2126,8 @@ chrome.runtime.onStartup.addListener(boot);
       if (!kept.some(l => l.trim() && !isChipText(l))) return kept.filter(l => l.trim())[0] || text;
       return kept.join('\n').replace(/\n+$/, '');
     }
+    function isEmojiAlt(alt) { return !!alt && alt.length <= 16 && !/[A-Za-z0-9]/.test(alt) && /[^\s]/.test(alt); }
+    function hasEmojiImg(el) { return safeAll(el, 'img[alt]').some(i => isEmojiAlt(String(i.getAttribute('alt') || ''))); }
     function extractText(textEl) {
       const parts = [];   // strings, or {chip: text} for chip-only elements (kept only if not trailing)
       function walk(node) {
@@ -2119,9 +2135,14 @@ chrome.runtime.onStartup.addListener(boot);
           if (c.nodeType === 3) { parts.push(c.nodeValue); continue; }
           if (c.nodeType !== 1) continue;
           if (c.tagName === 'BR') { parts.push('\n'); continue; }
+          if (c.tagName === 'IMG') {          // v1.4.10: X draws emoji as <img alt="❤️">: they are text
+            const alt = String(c.getAttribute('alt') || '');
+            if (isEmojiAlt(alt)) parts.push(alt);
+            continue;
+          }
           if (isStripEl(c)) continue;
           const block = cfg.blockTags.includes(c.tagName);
-          if (!c.shadowRoot && isChipText(c.textContent)) {
+          if (!c.shadowRoot && isChipText(c.textContent) && !hasEmojiImg(c)) {   // v1.4.10: emoji images are text
             parts.push({ chip: (block ? '\n' : '') + c.textContent + (block ? '\n' : '') });
             continue;
           }
@@ -2275,28 +2296,40 @@ chrome.runtime.onStartup.addListener(boot);
       return t ? t + (/:$/.test(t) || t.indexOf('\n') < 0 && t.length < 40 ? ' ' : '\n') + urls.join('\n') : urls.join('\n');
     }
 
-    function previewQuote(entry) {
+    // v1.4.10: the preview block(s) of a native Reply: the article's preceding siblings at the nearest level
+    // that shows text OR a photo thumbnail (a reply to an image bubble has a preview with no text at all).
+    function previewInfo(entry) {
+      const none = { els: [], text: '', media: false };
       const body = bodyEl(entry);
-      if (!body || body === entry) return '';
+      if (!body || body === entry) return none;
       let art = null;
       for (let n = body; n && n !== entry; n = parentOf(n)) if (n.getAttribute && n.getAttribute('role') === 'article') { art = n; break; }
       const start = art || body;
-      const parts = [];
       const cards = cardInfo(entry);
       for (let n = start; n && n !== entry; n = parentOf(n)) {
-        const sibs = [];
+        const els = [], texts = [];
+        let media = false;
         for (let sib = n.previousElementSibling; sib; sib = sib.previousElementSibling) {
           if (isUuidEntry(sib) || safeAll(sib, cfg.uuidEntryPrefixSelector).some(isUuidEntry)) break;   // another message
           if (isHiddenEl(sib)) continue;
           if (cards.blocks.some(b => deepContains(b, sib) || deepContains(sib, b))) continue;   // v1.4.6: a shared card, not a quote
           const t = visibleText(sib);
-          if (t && !isChipText(t)) sibs.unshift(t);
+          const img = safeAll(sib, 'img').some(i => MEDIA_SRC_RE.test(String(i.getAttribute('src') || '')) && !isEmojiImg(i)) ||
+            safeAll(sib, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i]').length > 0;
+          if ((t && !isChipText(t)) || img) { els.unshift(sib); if (t && !isChipText(t)) texts.unshift(t); media = media || img; }
         }
-        if (sibs.length) parts.unshift(sibs.join(' '));
-        if (parts.length) break;            // the nearest level with a preview wins
+        if (els.length) return { els, text: texts.join(' ').trim(), media };   // the nearest level with a preview wins
       }
-      return parts.join(' ').trim();
+      return none;
     }
+    function previewQuote(entry) {
+      const p = previewInfo(entry);
+      // a quoted photo whose preview shows no caption: mark it as a photo; with no "Name:" the host falls back
+      // to its own message mapping, then asks ❓
+      if (p.media && p.text.indexOf('\u{1F4F7}') < 0) return (p.text ? p.text + ' ' : '') + '\u{1F4F7} Photo';
+      return p.text;
+    }
+    function inPreview(entry, el, info) { return (info || previewInfo(entry)).els.some(b => deepContains(b, el)); }
     function entryQuote(entry) {
       const q = findQuote(entry);
       let t = q ? extractText(q) : '';
@@ -2890,6 +2923,8 @@ chrome.runtime.onStartup.addListener(boot);
     const realNow = () => Date.now();
     const uiPromptUuids = new Map();         // uuid -> at: the owner's message carrying a relay ❓ (2 min)
     const REACT_LABEL_RE = /\b(add\s+)?(react|reacts|reaction|reactions|emoji)\b/i;
+    const EXPAND_RE = /^(?:\+|(?:more|all|other|choose|pick|add|open|show(?:\s+(?:more|all))?)\s+(?:an?\s+)?(?:emojis?|reactions?)|emoji\s+(?:picker|keyboard|menu)|(?:open\s+)?emoji\s+picker)$/i;
+    const EXPAND_BAD_RE = /delete|unsend|remove|report|block|mute|leave|forward|copy|edit|reply/i;
     const DANGER_RE = /delete|unsend|remove|report|copy|forward|edit|reply|pin|share|block|mute|leave|more|download|translate/i;
     const VOCAB = ['react', 'reaction', 'emoji', 'reply', 'more', 'copy', 'delete', 'edit', 'add', 'search', 'pin',
                    'forward', 'unsend', 'options', 'actions', 'close', 'menu', 'like', 'heart'];
@@ -3045,14 +3080,26 @@ chrome.runtime.onStartup.addListener(boot);
       const btn = await waitFor(() => findReactButton(entry), 1200);
       if (!btn) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
       const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));   // e.g. an existing pill
+      const preBtns = new Set(safeAll(doc, 'button,[role="button"]'));
       press(btn);
       let option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
-      if (!option) {
+      const trySearch = async () => {
         const search = safeAll(doc, 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"]')
           .find(el => !otherEntry(el, entry) && !/composer/i.test(String(el.getAttribute('data-testid') || '')) && !(el.closest && el.closest('[data-testid*="omposer"]')));
-        if (search) {
-          setNativeValue(search, SEARCH_WORD[want] || '');
+        if (!search) return null;
+        setNativeValue(search, SEARCH_WORD[want] || '');
+        return waitFor(() => findEmojiOption(entry, want, stale), 1200);
+      };
+      if (!option) option = await trySearch();
+      if (!option) {
+        // v1.4.10: X's hover bar shows only a few quick reactions (no ✅) and no search box. Open the full
+        // picker: a NEW button (appeared with the bar) labelled for more emoji/reactions, never a message action.
+        const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
+          !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
+        if (more) {
+          press(more);
           option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
+          if (!option) option = await trySearch();
         }
       }
       if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry) }); }
@@ -3112,10 +3159,12 @@ chrome.runtime.onStartup.addListener(boot);
       let q = null;
       try { q = findQuote(entry); } catch (e) { q = null; }
       const cards = cardInfo(entry);
+      const pv = previewInfo(entry);
       for (const img of safeAll(entry, 'img')) {
         const src = String(img.getAttribute('src') || '');
         if (!src || !MEDIA_SRC_RE.test(src) || isEmojiImg(img) || isExcluded(img)) continue;
         if (q && deepContains(q, img)) continue;      // a photo in the quoted message is theirs, never re-sent
+        if (inPreview(entry, img, pv)) continue;      // v1.4.10: so is the thumbnail in a native Reply preview
         if (inCard(entry, img, cards)) continue;      // a shared post / link thumbnail: the URL goes instead
         if (!out.includes(src)) out.push(src);
         if (out.length >= MEDIA_MAX) break;
@@ -3124,7 +3173,9 @@ chrome.runtime.onStartup.addListener(boot);
     }
     function mediaShell(entry) {        // a photo bubble whose image has not loaded yet
       if (mediaOf(entry).length) return false;
-      return safeAll(entry, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i],[aria-label*="image" i],[aria-label*="photo" i]').length > 0;
+      const pv = previewInfo(entry);
+      return safeAll(entry, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i],[aria-label*="image" i],[aria-label*="photo" i]')
+        .some(el => !inPreview(entry, el, pv));     // v1.4.10: a quoted photo's placeholder is not his photo
     }
     function pruneMedia() {
       const t = realNow();
@@ -3444,11 +3495,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=34d718e7d534cfd6b05c7580a30662bfea3686869cdbcb7999153d92f1fdfd5e nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=3ab6d6642a21d28362ca1c21a5b0e887088820c7007ff800f022ae5bfd97af39 nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.6",
+  "version": "1.4.10",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -6639,7 +6690,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=6a70831f91c9d7a87f2aa3c3378d499ac71a6512cd460b45016ab80dd9932c9e nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=fa10749cc367a35d432bf10704ffa1f0a281bc5e67d3edf608699d2d70a67b9e nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -6666,7 +6717,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 VERSION = '1.4.8'
-EXTENSION_VERSION = '1.4.6'   # v1.4.7 and v1.4.8 did not change the Chrome extension: no reload needed from 1.4.6
+EXTENSION_VERSION = '1.4.10'   # v1.4.10: emoji-only replies and replies to a relayed photo (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -13257,7 +13308,7 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/js/media.test.js mode=644 sha256=f9e7b0ac3fc7e072dd0f8e494ddc186874c19991da7c29c40d2661f79068afc6 nl=1
+@@@@ FILE tests/js/media.test.js mode=644 sha256=b0619bec8fe5838405454309806f91dace4d5002b0a8ccfe6672a532c8350057 nl=1
 /* v1.4.6: his photos in X Chat go out as iMessage attachments. content.js finds images in HIS outbound
  * bubble only (not emoji, not the quoted message) and reads them in 512 KiB chunks; background.js streams
  * them to the Mac (attach_chunk), sends metadata only with the reply, and keeps them for a "yes".
@@ -13414,6 +13465,13 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     assert.strictEqual(b.host.filter(m => m.type === 'attach_chunk').length, 0);
   });
 
+  await test('background (v1.4.10): a skipped reply is never silent: it gets a warning reaction', async () => {
+    const b = bootBg({ send: () => ({ ok: true }), tab: tabOk });
+    await b.reply('', {});
+    assert.strictEqual(b.host.filter(m => m.type === 'send').length, 0);
+    const r = b.tabMsgs.find(m => m.action === 'react');
+    assert.ok(r && r.emoji === '\u26A0\uFE0F' && r.uuid === uuid(1), JSON.stringify(b.tabMsgs));
+  });
   await test('background: attachments off -> nothing is read, the host is told', async () => {
     const b = bootBg({ off: true, tab: tabOk, send: () => ({ ok: true, sent: true }) });
     await b.reply('Jordan: look', { mediaCount: 2 });
@@ -14191,7 +14249,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=1b56ea66b56b1deaef6b93e7a336473ef40c18c3920e7e10ab7ecd8e33a7b8e9 nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=1aafc22cf2ec089c6169dbee7bd1314b4a1ad72e34040baf9e769a607128d7ed nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -14246,7 +14304,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.6');
+  assert.strictEqual(m.version, '1.4.10');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -14435,7 +14493,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/ui.test.js mode=644 sha256=c0821914372586a6899b69c3f6e7f9475ef8686b697334b441d1de9acfdc3c27 nl=1
+@@@@ FILE tests/js/ui.test.js mode=644 sha256=fc54326ebad876eae660ec1758ba9b5cb32e6ae908aa4f65fdf35752d39c1ffd nl=1
 /* v1.4.6: the UI engine (reactions on the owner's own messages, typed 🤖 prompts, undo), on a fake X Chat UI. Run:
  *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
  */
@@ -14532,6 +14590,11 @@ function fakeUi(doc, opts = {}) {
     const p = doc.createElement('div'); p.setAttribute('role', 'dialog'); p.className = 'picker';
     const opt = em => { const b = doc.createElement('button'); b.textContent = em; b.addEventListener('click', () => { clicks.push('pick:' + em); p.remove(); if (!opts.noPlace) { const pill = doc.createElement('div'); pill.setAttribute('data-testid', 'reactions'); const s = doc.createElement('span'); s.textContent = em; pill.appendChild(s); entry.appendChild(pill); } }); p.appendChild(b); };
     ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}'].forEach(opt);
+    if (opts.quickOnly) {                // v1.4.10: X's real bar: a few quick reactions + an expand button, no search
+      const more = doc.createElement('button'); more.setAttribute('aria-label', 'More emojis');
+      more.addEventListener('click', () => { clicks.push('More emojis'); more.remove(); opt(CHECK); });
+      p.appendChild(more); doc.body.appendChild(p); return;
+    }
     if (!opts.searchOnly) opt(CHECK);
     const inp = doc.createElement('input'); inp.setAttribute('type', 'search');
     inp.addEventListener('input', () => { if (/check/.test(inp.value) && !p.querySelector('.found')) { opt(CHECK); p.lastChild.className = 'found'; } if (/question/.test(inp.value)) opt(QM); });
@@ -14582,6 +14645,17 @@ function composer(doc, opts = {}) {
     const r = await det.uiReact(uuid(2), CHECK);
     assert.strictEqual(r.ok, true, JSON.stringify(r));
     assert.ok(ui.clicks.includes('pick:' + CHECK));
+  });
+
+  await test('v1.4.10: quick bar without ✅ or search -> opens "More emojis" and places ✅ (no text fallback)', async () => {
+    const { doc, det } = setup();
+    const ui = fakeUi(doc, { quickOnly: true });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 3, 'out', 'Jordan: \u2764\uFE0F\u2764\uFE0F\u2764\uFE0F'));
+    await sleep(100);
+    const r = await det.uiReact(uuid(3), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.deepStrictEqual(ui.clicks, ['React', 'More emojis', 'pick:' + CHECK]);
   });
 
   await test('no React control -> clean failure, nothing clicked, text-free vocabulary only', async () => {
@@ -14708,6 +14782,143 @@ function composer(doc, opts = {}) {
   });
 
   console.log(`${passed} passed, ${failed} failed (v1.4.6 UI engine)`);
+  process.exit(failed ? 1 : 0);
+})();
+@@@@ END
+@@@@ FILE tests/js/xmedia_reply.test.js mode=644 sha256=cfec7397a347aaecfea227d7d0a6c42437357ca2a92031d63862cd90e9034cd3 nl=1
+/* v1.4.10: native Reply to a relayed PHOTO (image bubble or its caption) with an emoji-only body. Run:
+ *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+const { JSDOM } = require('jsdom');
+const { CONFIG, createRelayDetector } = require('../../extension/content.js');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+
+function setup(html, url, opts = {}) {
+  const dom = new JSDOM(html || fixture, { url: url || 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
+  const { window } = dom;
+  window.Element.prototype.getBoundingClientRect = function () {
+    const v = this.getAttribute('data-fake-rect');
+    if (!v) return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    const [l, t, w, h] = v.split(',').map(Number);
+    return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
+  };
+  const state = Object.assign({ paused: false, conversationFilter: '' }, opts.state);
+  const logs = [];
+  const statuses = [];
+  const seenSet = opts.seenSet || new Set();
+  const det = createRelayDetector({
+    window, document: window.document, config: Object.assign({}, FAST, opts.config), getState: () => state,
+    onEmit: i => logs.push(i), onStatus: s => statuses.push(s), log: () => {},
+    now: opts.now, ownerCheck: opts.ownerCheck,
+    seen: { has: u => seenSet.has(u), add: u => seenSet.add(u) },
+  });
+  det.start();
+  return { window, doc: window.document, det, logs, statuses, state, dom, seenSet };
+}
+
+// uuid helpers
+const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
+function msg(doc, n, dir, build, opts = {}) {
+  const e = doc.createElement('div');
+  e.setAttribute('data-testid', 'message-' + uuid(n));
+  e.style.display = 'flex';
+  e.style.justifyContent = dir === 'out' ? 'flex-end' : 'flex-start';
+  const left = dir === 'out' ? 780 : 420;
+  const b = doc.createElement('div');
+  b.setAttribute('data-fake-rect', `${left},0,200,40`);
+  if (dir === 'in') b.innerHTML = '<a href="/SenderBot"><img alt="SenderBot"></a>';
+  const span = doc.createElement('span');
+  span.setAttribute('data-testid', 'message-text-' + uuid(n));
+  if (typeof build === 'function') build(span, doc); else span.textContent = build;
+  b.appendChild(span);
+  if (opts.time) { const t = doc.createElement('time'); t.setAttribute('datetime', opts.time); t.textContent = 't'; b.appendChild(t); }
+  e.appendChild(b);
+  return e;
+}
+const panel = doc => doc.querySelector('[data-testid="dm-conversation-panel"]');
+const fixture = '<html><body><div data-testid="dm-conversation-panel"><div data-testid="message-df48633d-6588-4b18-bc77-000000009999"><span data-testid="message-text-df48633d-6588-4b18-bc77-000000009999">earlier</span></div></div></body></html>';
+
+// The row shape X served on 2026-10-19 (from the text-free fingerprint):
+// E=0.div@message-<self>{data-dm-message-row,data-send-status}
+//   1.div{aria-hidden} (empty), 1.span{hidden,id}+t x2      (screen-reader labels)
+//   1.div > 2.div (empty) , 2.div > 3.div (PREVIEW: 4.div[5.svg icon, 5.div>6.div>7.div+t] 4.div>5.span>6.span+t)
+//                                  3.div#article{aria-labelledby,...} > 4.div@message-text-<self> ...
+function xRow(doc, n, opts = {}) {
+  const u = uuid(n);
+  const row = doc.createElement('div');
+  row.setAttribute('data-testid', 'message-' + u);
+  row.setAttribute('data-dm-message-row', '');
+  row.setAttribute('data-send-status', 'sent');
+  const sr = opts.srText || ['You sent', '12:56 PM'];
+  row.innerHTML =
+    '<div aria-hidden="true"></div><span hidden id="a' + n + '">' + sr[0] + '</span><span hidden id="b' + n + '">' + sr[1] + '</span>' +
+    '<div><div></div><div>' +
+      (opts.preview === false ? '' :
+        '<div class="pv"><div><svg data-icon="reply" viewBox="0 0 24 24"><path d="M0 0"></path></svg><div><div><div>' + (opts.head || 'iMessage') + '</div></div></div></div>' +
+        '<div><span><span>' + (opts.quoted || 'Jordan: (I got it)') + '</span></span></div></div>') +
+      '<div role="article" tabindex="0" aria-labelledby="a' + n + '" aria-describedby="b' + n + '">' +
+        '<div data-testid="message-text-' + u + '" id="t' + n + '"><div><span><span dir="auto"><span>' + (opts.text || 'Thanks!') + '</span></span>' +
+        '<span aria-hidden="true"><div><span>12:56 PM</span><svg data-icon="check"></svg></div></span></span></div></div>' +
+      '</div>' +
+    '</div></div>';
+  return row;
+}
+
+
+const HEART = '<img alt="\u2764\uFE0F" draggable="false" src="https://abs-0.twimg.com/emoji/v2/svg/2764.svg">';
+const THUMB = '<img alt="Image" src="https://pbs.twimg.com/media/Fabc123?format=jpg&name=small" width="200" height="150">';
+(async () => {
+  await test('emoji-only reply quoting the IMAGE bubble: text is the emoji, thumbnail is not his photo, quote = photo with no name', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    panel(doc).appendChild(xRow(doc, 1, { quoted: THUMB, head: '', text: HEART + HEART + HEART }));
+    await sleep(150);
+    assert.strictEqual(logs.length, 1, JSON.stringify(logs));
+    assert.strictEqual(logs[0].text, '\u2764\uFE0F\u2764\uFE0F\u2764\uFE0F');
+    assert.ok(!logs[0].mediaCount, 'the quoted thumbnail must not ride along as his photo');
+    assert.ok(/^(iMessage )?\u{1F4F7} Photo$/u.test(logs[0].quotedText), logs[0].quotedText);
+    det.stop();
+  });
+  await test('emoji-only reply quoting the CAPTION (preview has thumbnail + "Jordan: 📷 Photo"): routes by the caption name', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    panel(doc).appendChild(xRow(doc, 2, { quoted: THUMB + 'Jordan: \u{1F4F7} Photo', text: HEART + HEART + HEART }));
+    await sleep(150);
+    assert.strictEqual(logs.length, 1, JSON.stringify(logs));
+    assert.strictEqual(logs[0].text, '\u2764\uFE0F\u2764\uFE0F\u2764\uFE0F');
+    assert.ok(!logs[0].mediaCount);
+    assert.ok(/^(iMessage )?Jordan: \u{1F4F7} Photo$/u.test(logs[0].quotedText), logs[0].quotedText);
+    det.stop();
+  });
+  await test('plain emoji-only message (no reply) is valid text', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    panel(doc).appendChild(xRow(doc, 3, { preview: false, text: HEART }));
+    await sleep(150);
+    assert.strictEqual(logs.length, 1);
+    assert.strictEqual(logs[0].text, '\u2764\uFE0F');
+    det.stop();
+  });
+  await test('a word image alt ("Image") is never read as text', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    panel(doc).appendChild(xRow(doc, 4, { preview: false, text: 'hi ' + THUMB }));
+    await sleep(150);
+    assert.strictEqual(logs[0].text, 'hi');
+    det.stop();
+  });
+  console.log(passed + ' passed, ' + failed + ' failed (v1.4.10 reply to a photo)');
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
@@ -19625,6 +19836,30 @@ class RoutineNewContact(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+@@@@ END
+@@@@ FILE tests/py/test_v1410_photo_reply.py mode=644 sha256=fe09de9fbe7804bc6edd89cda6ee861d2f5acf36a7000cfc3501a672bb66203d nl=1
+"""v1.4.10: an emoji-only native Reply to a relayed photo (image bubble or its caption) reaches the host."""
+from helpers import read_log
+from test_v142_quote import Quote, RORY
+
+HEARTS = '\u2764\ufe0f\u2764\ufe0f\u2764\ufe0f'
+
+
+class PhotoReply(Quote):
+    def test_caption_quote_routes_to_caption_name(self):
+        r = self.send_q(HEARTS, 'iMessage Rory: \U0001F4F7 Photo')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][2:4], [HEARTS, RORY])
+        self.assertNotIn(HEARTS, read_log())
+
+    def test_image_only_quote_asks_never_silent(self):
+        r = self.send_q(HEARTS, 'iMessage \U0001F4F7 Photo')
+        self.assertTrue(r.get('needsConfirm') or r.get('needsTarget'), r)
+        self.assertEqual(self.osa(), [])
+        self.assertTrue([p for p, _ in self.posts if p['type'] in ('needs_confirm', 'needs_target')])
+
+
+del Quote
 @@@@ END
 @@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=c445fb291fdea4cdc89b2bd5f7ab91094df5a633c64ffa6e67098166e2e4446c nl=1
 """v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),

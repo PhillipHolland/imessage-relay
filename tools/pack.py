@@ -13,7 +13,7 @@ MARK = '@@@@ '
 
 HEADER = '''#!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.9, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.10, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR

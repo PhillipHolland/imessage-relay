@@ -94,6 +94,11 @@ function fakeUi(doc, opts = {}) {
     const p = doc.createElement('div'); p.setAttribute('role', 'dialog'); p.className = 'picker';
     const opt = em => { const b = doc.createElement('button'); b.textContent = em; b.addEventListener('click', () => { clicks.push('pick:' + em); p.remove(); if (!opts.noPlace) { const pill = doc.createElement('div'); pill.setAttribute('data-testid', 'reactions'); const s = doc.createElement('span'); s.textContent = em; pill.appendChild(s); entry.appendChild(pill); } }); p.appendChild(b); };
     ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}'].forEach(opt);
+    if (opts.quickOnly) {                // v1.4.10: X's real bar: a few quick reactions + an expand button, no search
+      const more = doc.createElement('button'); more.setAttribute('aria-label', 'More emojis');
+      more.addEventListener('click', () => { clicks.push('More emojis'); more.remove(); opt(CHECK); });
+      p.appendChild(more); doc.body.appendChild(p); return;
+    }
     if (!opts.searchOnly) opt(CHECK);
     const inp = doc.createElement('input'); inp.setAttribute('type', 'search');
     inp.addEventListener('input', () => { if (/check/.test(inp.value) && !p.querySelector('.found')) { opt(CHECK); p.lastChild.className = 'found'; } if (/question/.test(inp.value)) opt(QM); });
@@ -144,6 +149,17 @@ function composer(doc, opts = {}) {
     const r = await det.uiReact(uuid(2), CHECK);
     assert.strictEqual(r.ok, true, JSON.stringify(r));
     assert.ok(ui.clicks.includes('pick:' + CHECK));
+  });
+
+  await test('v1.4.10: quick bar without ✅ or search -> opens "More emojis" and places ✅ (no text fallback)', async () => {
+    const { doc, det } = setup();
+    const ui = fakeUi(doc, { quickOnly: true });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 3, 'out', 'Jordan: \u2764\uFE0F\u2764\uFE0F\u2764\uFE0F'));
+    await sleep(100);
+    const r = await det.uiReact(uuid(3), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.deepStrictEqual(ui.clicks, ['React', 'More emojis', 'pick:' + CHECK]);
   });
 
   await test('no React control -> clean failure, nothing clicked, text-free vocabulary only', async () => {

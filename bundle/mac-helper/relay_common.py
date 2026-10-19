@@ -24,7 +24,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 VERSION = '1.4.8'
-EXTENSION_VERSION = '1.4.6'   # v1.4.7 and v1.4.8 did not change the Chrome extension: no reload needed from 1.4.6
+EXTENSION_VERSION = '1.4.10'   # v1.4.10: emoji-only replies and replies to a relayed photo (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
