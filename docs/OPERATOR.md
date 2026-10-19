@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.3)
+# iMessage Relay: operator reference (v1.4.4)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -28,9 +28,9 @@ github.com/PhillipHolland/imessage-relay. It is one Python file that writes ever
 Mac helper, installer, tests) and checks each one against an embedded sha256 digest. Nothing is
 cloned or installed from the repo; you only download this one pinned file.
 
-**Pinned release (v1.4.3):**
-- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.3/build_bundle.py`
-- sha256: `dc5c564a3ffff9d44aaa8293fd8cdc28491e848f38b54b9be1596757f49a5f64`
+**Pinned release (v1.4.4):**
+- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.4/build_bundle.py`
+- sha256: `36784c405f30bf58fe5245202d69a9cf1e70e66ab26861de3cce076081dcc192`
 
 **Always verify before running.** Download with `curl -fsSL`, check the sha256 against the pinned
 value above, and run the file only on an exact match. On a mismatch (or a failed download), **refuse**:
@@ -175,7 +175,7 @@ windows the checklist needs.
    machine Shell that reads it on **stdin**. Never put it on a command line.
 3. Run, with a perl alarm of 300 s:
    ```
-   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.3/build_bundle.py' && echo "dc5c564a3ffff9d44aaa8293fd8cdc28491e848f38b54b9be1596757f49a5f64  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
+   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.4/build_bundle.py' && echo "36784c405f30bf58fe5245202d69a9cf1e70e66ab26861de3cce076081dcc192  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
    ```
 
 **Paste path (the owner runs it):** nothing to save or attach; the line downloads the pinned file to
@@ -184,7 +184,7 @@ line. When it asks for the webhook key,
 open grokbot://app/v1/sidebar?target=webhook-key&automation=<folder>, copy the key and paste it there
 (it stays hidden)."**
 ```
-cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.3/build_bundle.py' && echo "dc5c564a3ffff9d44aaa8293fd8cdc28491e848f38b54b9be1596757f49a5f64  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
+cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.4/build_bundle.py' && echo "36784c405f30bf58fe5245202d69a9cf1e70e66ab26861de3cce076081dcc192  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
 ```
 
 **Read the output** (machine path: the JSON; paste path: ask "Did it end with "ok": true?"):
@@ -282,7 +282,7 @@ Settings > Privacy & Security > Automation > Google Chrome > Messages on.
 ### Step U. Existing install (upgrade in place)
 Ask nothing. Download the newest pinned build_bundle.py (the pinned release at the top of this skill)
 the same way, verify it, and run (perl alarm 300):
-`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.3/build_bundle.py' && echo "dc5c564a3ffff9d44aaa8293fd8cdc28491e848f38b54b9be1596757f49a5f64  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
+`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.4/build_bundle.py' && echo "36784c405f30bf58fe5245202d69a9cf1e70e66ab26861de3cce076081dcc192  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
 A sha256 mismatch → refuse, exactly as in Step 5.
 The installer keeps config.json, roster.json and the watcher app with its Full Disk Access grant (it
 never rebuilds or re-signs it). The setup JSON shows what's already set. If a value is missing
@@ -462,6 +462,14 @@ quoted message. The extension reads that preview (or the replied-to message's id
 the Mac routes to the label at its start ("<label>: …"). A quote that still can't be placed falls back to
 whoever wrote last and is **always** confirmed first; it never gets "Who's this for?" when one person
 clearly wrote last. The "Who's this for?" example is always the generic "Alex", never a real label.
+**Native Reply markup (v1.4.4).** X's current reply row has no "Replied to" text, testid or message id:
+the preview (a reply icon, the quoted sender and the quoted text) is a plain block placed before the
+message's `role="article"`. The extension reads the visible text of the blocks before the article (hidden
+screen-reader labels, icons and times are skipped) as the quote; the Mac routes on the "<label>:" in it.
+If the quote still can't be placed, the fallback to whoever wrote last applies only when that person is
+in Contacts (else "Who's this for?"). If a **group** wrote most recently, a bare reply asks "Who's this
+for?" instead of guessing an older 1:1 sender. Replies never go to a group (quoted, named or confirmed).
+
 **Quote diagnostics (v1.4.3, text-free).** For every reply the owner sends, the extension records a
 structural outline of that bubble, its 3 preceding siblings, and those of up to 2 wrappers that hold only
 that bubble: tag names, roles, data-testid values (uuids → `<self>`/`<uuid>`; segments with digits, the
@@ -686,7 +694,7 @@ LaunchAgent pointing at whatever applet it already runs. An early app that runs
 **only if the extension changed in this version**, the owner clicks the reload icon on the extension
 card **and then refreshes any open x.com chat tab (Cmd+R)** — reloading the extension disconnects its
 content script from already-open tabs, so replies sent in them before the refresh are missed.
-**v1.4.3 changes the extension** (quote diagnostics, Copy page structure), **v1.4.2 changed it** (👍/👎 on a prompt), **v1.4.1 changed it** (a plain `yes`/`no` answers a reply prompt), **v1.4.0 changed it** (the popup
+**v1.4.4 changes the extension** (native Reply quotes), **v1.4.3 changed it** (quote diagnostics, Copy page structure), **v1.4.2 changed it** (👍/👎 on a prompt), **v1.4.1 changed it** (a plain `yes`/`no` answers a reply prompt), **v1.4.0 changed it** (the popup
 wording for a Contacts confirmation), **v1.3.9 changed it**
 (X Chat's bubble times, now plain spans in the message text, are no
 longer appended to replies; the native host also strips them, so an old extension can't leak them), and

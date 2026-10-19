@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.4.3: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.4: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -23,7 +23,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.3'
+VERSION = '1.4.4'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -976,6 +976,14 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
     def recent_route():
         # The "recent" fallback: configured contacts, plus (v1.4.2, relay-all) roster people within the window.
         live = recent_live()
+        # v1.4.4: if a GROUP wrote most recently, a bare reply is never guessed onto someone older (and
+        # never onto the group): the owner was most likely answering the group. Ask for a name.
+        grp = [e for e in d if e['kind'] == 'group' and e['lastInboundAt'] is not None and e['handle'] not in muted
+               and 0 <= now - e['lastInboundAt'] <= window]
+        if grp and (not live or max(g['lastInboundAt'] for g in grp) >= live[0]['lastInboundAt']):
+            return need('a group wrote last (group replies are not supported)',
+                        'Who\'s this for? Start with a name, like "%s: \u2026" (group replies aren\'t supported yet)'
+                        % example_label(cfg, d))
         if not live:
             return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
         if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
@@ -1014,6 +1022,11 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
         return res
     res = recent_route()
     if quote_unresolved and 'contact' in res:
+        if not _namelike(res['contact'].get('label')):
+            # v1.4.4: a quote we could not place never falls back to someone who is not in Contacts
+            # (e.g. a spam sender who wrote last): ask for a name instead of offering them.
+            return need('a quote could not be placed and the last texter is not in Contacts',
+                        'Who\'s this for? Start with a name, like "%s: \u2026"' % example_label(cfg, d))
         res['quoteUnresolved'] = True
     return res
 

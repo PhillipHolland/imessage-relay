@@ -384,6 +384,50 @@
       const lab = String(label.textContent || '').replace(/\s+/g, ' ').trim();
       return full.indexOf(lab) === 0 ? full.slice(lab.length).trim() : full.replace(lab, '').trim();
     }
+    // v1.4.4: X Chat's real Reply markup (read from a v1.4.3 quote_probe): inside the message row, the
+    // preview is an un-labelled block (reply icon svg + the quoted sender/text) that comes BEFORE the
+    // role="article" holding message-text-<uuid>. No "Replied to" text, no testid, no other message id.
+    // Take the visible text of the article's preceding siblings, walking up to the row.
+    function isHiddenEl(el) {
+      if (!el || el.nodeType !== 1) return false;
+      if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') return true;
+      const s = style(el);
+      return !!(s && (s.display === 'none' || s.visibility === 'hidden'));
+    }
+    function visibleText(root) {
+      const parts = [];
+      const visit = el => {
+        for (let c = el.firstChild; c; c = c.nextSibling) {
+          if (c.nodeType === 3) { const v = normSpaces(c.nodeValue).trim(); if (v) parts.push(v); continue; }
+          if (c.nodeType !== 1) continue;
+          const tag = String(c.tagName).toLowerCase();
+          if (tag === 'svg' || tag === 'time' || tag === 'script' || tag === 'style' || isHiddenEl(c)) continue;
+          visit(c);
+        }
+      };
+      if (root && !isHiddenEl(root)) visit(root);
+      return parts.join(' ').replace(/\s+/g, ' ').trim();
+    }
+    function previewQuote(entry) {
+      const body = bodyEl(entry);
+      if (!body || body === entry) return '';
+      let art = null;
+      for (let n = body; n && n !== entry; n = parentOf(n)) if (n.getAttribute && n.getAttribute('role') === 'article') { art = n; break; }
+      const start = art || body;
+      const parts = [];
+      for (let n = start; n && n !== entry; n = parentOf(n)) {
+        const sibs = [];
+        for (let sib = n.previousElementSibling; sib; sib = sib.previousElementSibling) {
+          if (isUuidEntry(sib) || safeAll(sib, cfg.uuidEntryPrefixSelector).some(isUuidEntry)) break;   // another message
+          if (isHiddenEl(sib)) continue;
+          const t = visibleText(sib);
+          if (t && !isChipText(t)) sibs.unshift(t);
+        }
+        if (sibs.length) parts.unshift(sibs.join(' '));
+        if (parts.length) break;            // the nearest level with a preview wins
+      }
+      return parts.join(' ').trim();
+    }
     function entryQuote(entry) {
       const q = findQuote(entry);
       let t = q ? extractText(q) : '';
@@ -399,6 +443,7 @@
       if (!t) scanAbove(entry);
       const wrap = parentOf(entry);
       if (!t && wrap && wrap !== doc.body && collectEntries(wrap).length === 1) scanAbove(wrap);
+      if (!t) t = previewQuote(entry);
       return String(t || '').replace(/\n+/g, ' ').trim().slice(0, cfg.maxQuoteLength);
     }
     function timeEl(entry) { return safeAll(entry, 'time[datetime],time,[datetime]')[0] || null; }

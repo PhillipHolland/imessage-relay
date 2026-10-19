@@ -1,4 +1,4 @@
-"""iMessage Relay v1.4.3 -- conversational addressing (directive parsing).
+"""iMessage Relay v1.4.4 -- conversational addressing (directive parsing).
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.parse_directive, rc.DIRECTIVE_DICT_WORDS, ...); relay_common re-exports these
 names lazily. Do not import relay_directive before relay_common.

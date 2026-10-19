@@ -1,5 +1,5 @@
 /*
- * iMessage Relay v1.4.3: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.4: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.

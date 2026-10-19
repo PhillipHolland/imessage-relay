@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.3 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.4 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
