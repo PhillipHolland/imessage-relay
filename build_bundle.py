@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.2, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.3, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=47af0fa0bbe9c89eabf73a8356908f3edbf84e54155eb2fd0c715ab97ed4fd1d nl=1
-# iMessage Relay v1.4.2
+@@@@ FILE README.md mode=644 sha256=9769161f7fb8fa6a6acabb0a93f83ab1d210c68ca80fc320da67619986409762 nl=1
+# iMessage Relay v1.4.3
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -46,6 +46,11 @@ Your reply in the relay chat (x.com in Chrome)
   card with exactly one number or email sends right away, saves the contact and reports
   "→ Jordan Rivera ✓ (new contact, •••0188)". `relayctl set confirmNewContacts always` asks every time
   (default `exact-skip`). `/add Jordan +1 555 555 0188` adds someone directly.
+- v1.4.3: a bare reply is never guessed onto a business (Apple Business Chat), a short code or any
+  other non-person handle; you get "Who's this for? Start with a name, like "Alex: …"" instead (quote
+  or name them to reply). A "Reply to …?" prompt shows the Contacts name, or the masked number plus
+  "⚠️ not in Contacts". Quote diagnostics: each reply sends a text-free outline of the page structure
+  around it to the Mac's log (`quote_probe`), and the popup has **Copy page structure**.
 - v1.4.2: X Chat's native Reply ("Replied to …" + preview) routes to the quoted person again; a quote
   that can't be placed, or a bare reply to a roster-only last texter (relay-all), asks "Reply to <label>?"
   instead of "Who's this for?". "✓✓ delivered" is checked every ~2 s while a reply is waiting.
@@ -72,7 +77,7 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.2)
+## Limits (v1.4.3)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -117,8 +122,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.2 changes the extension: 👍/👎 on a prompt;
-v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
+reload the extension card in chrome://extensions (v1.4.3 changes the extension: quote diagnostics and
+Copy page structure; v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations
@@ -169,9 +174,9 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing","detail","at"}` (no message body)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=6dc0e0f72900c2d78b6f7a49cbdcf109030a6ed67c49c871335c204785779fbb nl=1
+@@@@ FILE install.sh mode=755 sha256=f713730b05a496a9b3a5231cd69900b31a45cf4afd5b2f4f768df11618fe5d57 nl=1
 #!/bin/bash
-# iMessage Relay v1.4.2 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
+# iMessage Relay v1.4.3 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
 # roster.json, and the existing "iMessage Relay Watcher" app (never rebuilt or re-signed, so
 # its Full Disk Access grant survives), and keeps the LaunchAgent pointing at that app.
@@ -600,7 +605,7 @@ cat <<NEXT
 Log (counts only, never message text): $LOGS/imessage-relay.log
 NEXT
 @@@@ END
-@@@@ FILE run_tests.sh mode=755 sha256=44a1211765dbef0fb96802503e6f19e542c3876b14a882c6b18c9c7edb22f54d nl=1
+@@@@ FILE run_tests.sh mode=755 sha256=5d90fac809ee0c65f7d32f89707da31e04ed01d966c04a5fff95584979e7a53f nl=1
 #!/bin/bash
 # Runs every test. Needs python3 (3.9+); the JS tests also need node and jsdom
 # (NODE_PATH pointing at a node_modules with jsdom, or `npm i jsdom` here).
@@ -620,7 +625,7 @@ if command -v node >/dev/null 2>&1 && ! node -e "require('jsdom')" >/dev/null 2>
   _gr="$(npm root -g 2>/dev/null)"; [[ -n "$_gr" ]] && export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gr"
 fi
 if command -v node >/dev/null 2>&1 && node -e "require('jsdom')" >/dev/null 2>&1; then
-  for t in detect frames owner native guess yes reaction quote e2etest chips smoke-chrome; do
+  for t in detect frames owner native guess yes reaction quote probe e2etest chips smoke-chrome; do
     echo "== JS: $t =="
     node "tests/js/$t.test.js" 2>&1 | grep -E 'passed|FAIL|PASS chrome' ; [[ ${PIPESTATUS[0]} -eq 0 ]] || fail=1
   done
@@ -716,9 +721,9 @@ Also, by hand if you like:
   - System Settings > Privacy & Security > Automation -> turn off Messages for Google Chrome
 DONE
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=241f5b2d8a232b350ef205819657c08065124364dbc1b3daf36051eafbdce4c2 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=fd4de8f419848436af353e62e4a60a3449044bf5d21c9480cc34959812b250ac nl=1
 /*
- * iMessage Relay v1.4.2: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.3: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -1111,6 +1116,7 @@ async function handleItem(item) {
   if (d.skip) { await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip })); return; }
   await addEvent(Object.assign(ev, { status: 'sending' }));
   const payload = { type: 'send', text: item.text, quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
   console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: item.text.length, quoted: !!item.quotedText });
   let res, status, detail;
   try {
@@ -1173,6 +1179,10 @@ function sanitizeItem(raw) {
     score: Number.isFinite(Number(raw.score)) ? Number(raw.score) : 0,
     source: ['frame', 'top', 'page'].includes(raw.source) ? raw.source : 'page',
   };
+  if (typeof raw.quoteProbe === 'string' && raw.quoteProbe) {
+    // v1.4.3: text-free structure only; closed character set, capped
+    out.quoteProbe = raw.quoteProbe.replace(/[^A-Za-z0-9#@\[\]{},.:;<>|_\-!+=/ ()]/g, '').slice(0, 4000);
+  }
   if (raw.refuse) { out.refuse = String(raw.refuse).slice(0, 40); out.textLength = Number(raw.textLength) || 0; out.limit = Number(raw.limit) || 4000; }
   return out;
 }
@@ -1252,7 +1262,7 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=0809e64948ac3f7657a073d30619b2e0bfa30ba90d793144a57dffbeb013bce1 nl=1
+@@@@ FILE extension/content.js mode=644 sha256=3b0e1076f515c0d4b7c0a870edf9cb1c534a8b5b00820eb0d27af43c83b79551 nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -1982,6 +1992,7 @@ chrome.runtime.onStartup.addListener(boot);
         seen.add(a.uuid);
         const item = { ts, conversationId: conv, direction: a.direction, text: a.text, signals: a.signals, score: a.score, key: a.key, source };
         if (a.quotedText) item.quotedText = a.quotedText;
+        if (a.direction !== 'inbound') { try { item.quoteProbe = structureOf(e); } catch (err) { /* diagnostics only */ } }
         try { emit(item); } catch (err) { info('emit failed', err); }
       }
     }
@@ -2060,6 +2071,87 @@ chrome.runtime.onStartup.addListener(boot);
         outerHTML: sanitize(el, a.text),
       };
     }
+    // ---------- v1.4.3: text-free quote diagnostics ----------
+    // A structural fingerprint of a bubble and its ~3 preceding siblings (and those of up to 2 wrappers
+    // that hold only this bubble): tag, role, a sanitized data-testid, attribute NAMES (never values),
+    // and yes/no flags: RA = an aria-label contains "Replied to", RT = the element's own text contains
+    // "Replied to", REF = an attribute references ANOTHER message uuid, t = has its own text. No text,
+    // no labels, no handles, no uuids.
+    const UUID_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+    const PROBE_REPLIED_RE = /replied to/i;
+    function cleanTid(tid, ownUuid) {
+      let t = String(tid || '').replace(UUID_G, m => (ownUuid && m.toLowerCase() === ownUuid ? '<self>' : '<uuid>'));
+      const names = cfg.ownerNames.concat(cfg.botNames).map(lc).filter(Boolean);
+      t = t.split(/([-_])/).map((seg, i, arr) => {
+        if (seg === '-' || seg === '_' || /^<(self|uuid)>$/.test(seg)) return seg;
+        if (/[0-9]/.test(seg) || names.includes(lc(seg).replace(/^@/, ''))) return '<x>';
+        if (i >= 2 && /container$/i.test(arr[i - 2] || '')) return '<x>';   // UserAvatar-Container-<handle>
+        return seg.replace(/[^A-Za-z]/g, '').slice(0, 40);
+      }).join('');
+      return t.slice(0, 80);
+    }
+    function nodeSig(el, depth, ownUuid) {
+      let sig = depth + '.' + String(el.tagName || '?').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 30);
+      const role = el.getAttribute('role');
+      if (role) sig += '#' + role.replace(/[^A-Za-z-]/g, '').slice(0, 30);
+      const tid = el.getAttribute('data-testid');
+      if (tid) sig += '@' + cleanTid(tid, ownUuid);
+      const names = [];
+      let ra = false, ref = false;
+      for (const a of Array.from(el.attributes || [])) {
+        const n = a.name;
+        if (n === 'class' || n === 'style') continue;
+        if (n !== 'data-testid' && n !== 'role' && names.length < 12) names.push(n.replace(/[^a-z0-9-]/gi, '').slice(0, 30));
+        const v = String(a.value || '');
+        if (n === 'aria-label' && PROBE_REPLIED_RE.test(v)) ra = true;
+        const ids = v.match(UUID_G);
+        if (ids && ids.some(u => u.toLowerCase() !== ownUuid)) ref = true;
+      }
+      if (names.length) sig += '{' + names.join(',') + '}';
+      const ot = ownText(el);
+      if (ra) sig += '!RA';
+      if (PROBE_REPLIED_RE.test(ot)) sig += '!RT';
+      if (ref) sig += '!REF';
+      if (ot.trim()) sig += '+t';
+      return sig;
+    }
+    function treeSig(root, ownUuid, maxNodes) {
+      const out = [];
+      const visit = (el, depth) => {
+        if (out.length >= maxNodes || depth > 9) return;
+        out.push(nodeSig(el, depth, ownUuid));
+        for (let c = el.firstElementChild; c && out.length < maxNodes; c = c.nextElementSibling) visit(c, depth + 1);
+      };
+      visit(root, 0);
+      if (out.length >= maxNodes) out.push('...');
+      return out.join(' ');
+    }
+    function structureOf(entry) {
+      const own = uuidOf(entry);
+      const parts = ['E=' + treeSig(entry, own, 40)];
+      const sibs = (start, tag) => {
+        let sib = start && start.previousElementSibling;
+        for (let i = 1; sib && i <= 3; i++, sib = sib.previousElementSibling) {
+          parts.push(tag + '-' + i + (isUuidEntry(sib) ? '(msg)' : '') + '=' + treeSig(sib, own, 25));
+        }
+      };
+      sibs(entry, 'S');
+      let up = parentOf(entry);
+      for (let lvl = 1; lvl <= 2 && up && up !== doc.body && collectEntries(up).length === 1; lvl++, up = parentOf(up)) {
+        parts.push('P' + lvl + '=' + nodeSig(up, 0, own));
+        sibs(up, 'P' + lvl + 'S');
+      }
+      return parts.join(' | ').slice(0, 3800);
+    }
+    function pageStructure() {
+      const all = allEntries().slice(-6);
+      return {
+        v: 1, generatedAt: new Date(now()).toISOString(), mode, chatRoot: chatRoot().selector,
+        entriesOnPage: allEntries().length, newestAtTop: newestAtTop(),
+        entries: all.map(e => { const a = analyze(e); return { direction: a.direction, quoteSeen: !!a.quotedText, structure: structureOf(e) }; }),
+      };
+    }
+
     function debugSnapshot() {
       const all = allEntries();
       const primary = (lastEls.any && lastEls.any.isConnected) ? lastEls.any : all[all.length - 1];
@@ -2121,6 +2213,8 @@ chrome.runtime.onStartup.addListener(boot);
       rebaseline: baseline,
       flushNow() { if (flushTimer) { win.clearTimeout(flushTimer); flushTimer = null; } flush(); },
       debugSnapshot,
+      pageStructure,               // v1.4.3: popup "Copy page structure" (text-free)
+      structureOf,
       status() { return { conversationId: conversationId(), mode, chatRoot: chatRoot().selector, entriesOnPage: allEntries().length, ownerConfirmed: !!ownerCheck(), stats: Object.assign({}, stats) }; },
       _analyze: analyze,
     };
@@ -2288,6 +2382,11 @@ chrome.runtime.onStartup.addListener(boot);
   // Troubleshooting: a "relay-debug" message answered by the detector in this frame (if it has
   // messages). No cross-frame fallback any more; each frame answers for itself.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg && msg.type === 'relay-structure') {          // v1.4.3 popup button; text-free
+      if (!mainDetector || !mainDetector.hasEntries()) return false;
+      try { sendResponse({ ok: true, from: role, structure: mainDetector.pageStructure() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
+      return false;
+    }
     if (!msg || msg.type !== 'relay-debug') return false;
     if (!mainDetector || !mainDetector.hasEntries()) return false;
     try { sendResponse({ ok: true, from: role, snapshot: mainDetector.debugSnapshot() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
@@ -2295,11 +2394,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=d062d8218fc9095d9d6ff3b91114607b41771134e27a47268c33fd15f3f9ad44 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=02fc86bbdeda05ac15a1b3e413799318d75c87d2731616e8088e63de34ba49e7 nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open chat page only; never posts, types, or calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -2350,7 +2449,7 @@ li { border-top: 1px solid #eff3f4; padding: 4px 0; }
 .st.needs-name { background: #ffd400; color: #0f1419; }
 .st.test-ok { background: #00ba7c; } .st.test-failed { background: #f4212e; } .st.testing, .st.test-waiting { background: #8b98a5; }
 @@@@ END
-@@@@ FILE extension/popup.html mode=644 sha256=b72528bb0a7bfcd90647491b611f8820612a29e9a3ce6495e92e19becda1e202 nl=1
+@@@@ FILE extension/popup.html mode=644 sha256=d999f45bf5e43f1e90bc6c798a3903bc5cf4d7396421928a6457a8e78bb021f2 nl=1
 <!doctype html>
 <html>
 <head>
@@ -2364,12 +2463,13 @@ li { border-top: 1px solid #eff3f4; padding: 4px 0; }
   <div id="contacts" class="muted"></div>
   <h2>Last 5 events</h2>
   <ol id="list"></ol>
+  <p><button id="structure" type="button">Copy page structure</button> <span id="structureMsg" class="muted"></span></p>
   <p class="muted foot">Settings live on the Mac (~/.imessage-relay/config.json). Ask your bot to pause, resume, or change contacts.</p>
   <script src="popup.js"></script>
 </body>
 </html>
 @@@@ END
-@@@@ FILE extension/popup.js mode=644 sha256=865ddd3062f3a3693987525a7bc4298410bddd3e776138b22b892adba0b75b3e nl=1
+@@@@ FILE extension/popup.js mode=644 sha256=02e92001cb30e2ea70e4b80722ba6c6c52b69911e936cc2eef79e55c1f622be8 nl=1
 'use strict';
 // Status view only: on/paused/dry run/wrong-account, host connected yes/no, last 5 events. No settings here.
 const $ = id => document.getElementById(id);
@@ -2424,6 +2524,31 @@ function render(status, events) {
 
 chrome.storage.local.get(['status', 'events']).then(v => render(v.status || {}, (v.events || []).slice(-5).reverse()));
 chrome.runtime.sendMessage({ type: 'relay-status' }).then(r => { if (r) render(r.status || {}, r.events || []); }).catch(() => {});
+
+// v1.4.3: "Copy page structure" -- a text-free outline of the open chat (tags, roles, sanitized test ids,
+// attribute names, 'Replied to' yes/no flags) for fixing quote detection. Never message text, names or handles.
+async function copyStructure() {
+  const msg = $('structureMsg');
+  msg.textContent = 'Reading…';
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) throw new Error('no active tab');
+    const r = await chrome.tabs.sendMessage(tab.id, { type: 'relay-structure' });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'open the relay chat on x.com first');
+    const json = JSON.stringify(r.structure);
+    try { await navigator.clipboard.writeText(json); }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = json; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+    }
+    msg.textContent = 'Copied (' + json.length + ' chars, no message text).';
+  } catch (e) {
+    msg.textContent = 'Could not read the page: ' + String((e && e.message) || e).slice(0, 120);
+  }
+}
+const sb = $('structure');
+if (sb) sb.addEventListener('click', () => { copyStructure(); });
 @@@@ END
 @@@@ FILE mac-helper/com.imessage-relay.watch.plist.template mode=644 sha256=73edc7e1f702225a9a0d5d19c654dc9ca53a33f15c1d76755919235e811bb81d nl=1
 <?xml version="1.0" encoding="UTF-8"?>
@@ -2482,10 +2607,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=8eadb8b1e65511ef7de157029a5e44b808c2cc850fb49f7b1b8d257a8452ba64 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=ce8e07a9e37e9571d5bcaed9f2e0b577704028ae2cefd6ad6bfceff26f1efed5 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.2.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.3.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -3361,6 +3486,13 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         return refuse('no contacts in config', textLength=len(text))
 
     route = rc.route_reply(text, quoted[:500], cfg, rc.load_roster(), now())
+    probe = msg.get('quoteProbe')
+    if isinstance(probe, str) and probe:
+        # v1.4.3 quote diagnostics: text-free page structure around the owner's bubble (tags, roles,
+        # sanitized test ids, attribute NAMES, 'Replied to' yes/no flags). Never any message text.
+        rc.log_event('quote_probe', quoteSeen=bool(quoted.strip()), quoteResolved=route.get('by') == 'quote',
+                     routedBy=route.get('by') or '', needsTarget=bool(route.get('needsTarget')),
+                     confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe))
     confirmed = bool(msg.get('confirmed'))
     hint = msg.get('handle')
     hint_norm = rc.normalize_handle(hint, cfg['defaultCountryCode']) if hint else None
@@ -3455,10 +3587,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         must_ask = by == 'recent' and (route.get('quoteUnresolved') or contact.get('kind') == 'roster')
         if must_ask or (by == 'recent' and cfg['confirmGuessed'] != 'off'
                         and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
-            detail = '❓ Reply to %s? Reply yes within 2 min.' % contact['label']
-            rc.log_event('needs_confirm', routedBy=by, reason='guessed', textLength=len(body))
+            shown = rc.guess_label(contact)          # v1.4.3: Contacts name, else masked handle + warning
+            detail = '❓ Reply to %s? Reply yes within 2 min.' % shown
+            rc.log_event('needs_confirm', routedBy=by, reason='guessed', textLength=len(body),
+                         inContacts=shown == contact['label'])
             _note_prompt(now())
-            notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'reason': 'guessed',
+            notify(cfg, poster, {'type': 'needs_confirm', 'label': shown, 'reason': 'guessed',
                                  'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, needsConfirm=True, guess=True, label=contact['label'],
                         handle=handle, reason='guessed', contact=contact['label'], routedBy=by)
@@ -3648,10 +3782,10 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=f659348e4d9b7ba0f7d056dd3c2d69c43abddeb28f8def9fc84d2464abc14d02 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=f09085e2c52fffded2f93aa4901e3b2d9086abe5c8a9ee0a1d0e2cb80c1ebbb6 nl=1
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.2: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.3: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -4647,9 +4781,9 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=000799f761a807df4d3c3a23374752ce29f5cc2c2d16abeee55f8d0d7f1795b1 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=73a4a4aa50e32d565f8c376549d8978874cb7f029b947a6ecaf91aa3b6f7c302 nl=1
 """
-iMessage Relay v1.4.2: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.3: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -4673,7 +4807,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.2'
+VERSION = '1.4.3'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -4971,6 +5105,32 @@ def mask_handle(h):
         cc = ('+' + digits[:len(digits) - 10] + ' ') if len(digits) > 10 else ''
         return cc + '\u2022\u2022\u2022' + digits[-4:]
     return h
+
+
+def is_person_handle(h):
+    """v1.4.3: a normal person's iMessage handle -- an email, or a phone number in plain E.164 (a +1 number
+    is exactly 10 digits with a valid area code and exchange). Apple Business Chat ids (urn:biz:..., or
+    over-long "+1577..." numbers), 5-6 digit short codes and anything else are NOT, so a bare reply is
+    never guessed onto one (they can still be reached by quote or name)."""
+    h = str(h or '').strip()
+    if not h or h.lower().startswith('urn:'):
+        return False
+    if '@' in h:
+        return bool(EMAIL_RE.match(h))
+    if not E164_RE.match(h):
+        return False
+    if h.startswith('+1'):
+        return bool(re.match(r'^\+1[2-9][0-9]{2}[2-9][0-9]{6}$', h))
+    return 8 <= len(h) - 1 <= 15
+
+
+def guess_label(contact):
+    """v1.4.3: how a guessed recipient is named in a "Reply to ...?" prompt: the Contacts name when known,
+    else the masked handle plus a warning (the owner sees at once that it is not someone they know)."""
+    lab = str((contact or {}).get('label') or '')
+    if _namelike(lab):
+        return lab
+    return mask_handle((contact or {}).get('handle') or lab) + ' (\u26a0\ufe0f not in Contacts)'
 
 
 def clean_label(v):
@@ -5604,6 +5764,10 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
             return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
         if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
             return need('two people wrote within %d seconds of each other' % cfg['ambiguousSeconds'])
+        if not is_person_handle(live[0]['handle']):
+            # v1.4.3: the last texter is a business / short code / odd handle: never guessed; ask for a name
+            return need('the last texter is a business or short-code handle',
+                        'Who\'s this for? Start with a name, like "%s: \u2026"' % example_label(cfg, d))
         return deliver(live[0], text, 'recent')
 
     cands = name_candidates(text) if p_status == 'none' and not quote_unresolved else []
@@ -5705,6 +5869,19 @@ def in_quiet_hours(qh, now=None):
 # ---------- logging (counts + routing method only: never bodies, handles, names or labels) ----------
 FORBIDDEN_LOG_KEYS = ('text', 'body', 'message', 'outgoing')   # raise: a body must never be logged
 SCRUB_LOG_KEYS = ('handle', 'label', 'name', 'contact', 'contactName', 'detail', 'hint')  # dropped (item 7)
+
+
+PROBE_MAX = 4000
+_PROBE_BAD_RE = re.compile(r'[^A-Za-z0-9#@\[\]{},.:;<>|_\-!+=/ ()]')
+
+
+def clean_probe(fp):
+    """v1.4.3: the extension's text-free quote fingerprint, re-sanitized on the Mac before it is logged:
+    a closed character set (no quotes, no emoji, no free text), uuids and long digit runs masked, capped."""
+    fp = _PROBE_BAD_RE.sub('', str(fp or ''))
+    fp = re.sub(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', '<uuid>', fp)
+    fp = re.sub(r'[0-9]{4,}', '<n>', fp)
+    return fp[:PROBE_MAX]
 
 
 def log_event(event, **fields):
@@ -5829,8 +6006,8 @@ def __getattr__(name):
         return getattr(relay_echo, name)
     raise AttributeError("module 'relay_common' has no attribute %r" % name)
 @@@@ END
-@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=f88db16015a5693bb2b6e2c03e94ffdd5dd7661f94a2ecb5ed061ceef46b2972 nl=1
-"""iMessage Relay v1.4.2 -- look a name up in the Mac's Contacts (for a reply to someone new).
+@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=df523cb0d6608897164116d450441375d0fb4a22005ef10ca343a8dcbc147ff9 nl=1
+"""iMessage Relay v1.4.3 -- look a name up in the Mac's Contacts (for a reply to someone new).
 
 When the owner starts a reply with a name that is on no relay list ("Jordan Rivera: hey"), the host
 asks the watcher (it holds Full Disk Access, which covers the Contacts database) to look that name up.
@@ -5957,8 +6134,8 @@ def lookup(name, cfg, globs=None, people=None, fuzzy=False):
             break
     return {'ok': True, 'matches': out}
 @@@@ END
-@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=605ae542d35ad27fe9065c5c83a44200eb69b6d0afb6cb50e4832e2607fb891a nl=1
-"""iMessage Relay v1.4.2 -- conversational addressing (directive parsing).
+@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=d5b256789356b4c5a8965f829523b4bd734a71c83a30bf8d112b9756f796ec92 nl=1
+"""iMessage Relay v1.4.3 -- conversational addressing (directive parsing).
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.parse_directive, rc.DIRECTIVE_DICT_WORDS, ...); relay_common re-exports these
 names lazily. Do not import relay_directive before relay_common.
@@ -6082,8 +6259,8 @@ def parse_directive(text, cfg, directory=None):
                 return h, text, 'unknown_handle', 'handle', ''
     return None, text, 'none', '', ''
 @@@@ END
-@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=6c24c97076c79b50bc7bfdf1d4e945d5b2f27095926464dbaceaa47541cbdb01 nl=1
-"""iMessage Relay v1.4.2 -- echo guard + bot-output detection.
+@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=c37ac1953136d528663cad28613dc421abeeaaec00aa13ba00958defacf83d78 nl=1
+"""iMessage Relay v1.4.3 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
 these names lazily. Do not import relay_echo before relay_common."""
@@ -6204,8 +6381,8 @@ def is_echoed_inbound(text, prefix_stripped=None, at=None, path=None, handle='')
             return True
     return False
 @@@@ END
-@@@@ FILE mac-helper/relay_send.py mode=644 sha256=f2f99c1f4546464a776cbe960888d955f38cdd0f589eee8064a8a5fd05234417 nl=1
-"""iMessage Relay v1.4.2 -- delivery-proof queries and Messages.app sending.
+@@@@ FILE mac-helper/relay_send.py mode=644 sha256=24c3354cf0f648515f2a49a102ea8644247a315325491b51e261a99033a9b499 nl=1
+"""iMessage Relay v1.4.3 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
@@ -6420,9 +6597,9 @@ def open_messages_hidden(runner=subprocess.run):
     except Exception:
         return False
 @@@@ END
-@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=f1f0047d1d7bbf52639f68e026bf81e43b21dbf9dfb498cb269ab35fe9d53e7e nl=1
+@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=e76356bc1e8112b2d504f35694a11f04a19a3897d1570445e30b9e80e97ebd41 nl=1
 """
-iMessage Relay v1.4.2: guided-setup helpers shared by relayctl and the watcher.
+iMessage Relay v1.4.3: guided-setup helpers shared by relayctl and the watcher.
 
   detect_owner_handles(con, cc)   the owner's OWN iMessage/SMS addresses, read from chat.db rows the
                                   owner sent (message.account / destination_caller_id). Handles only;
@@ -6574,9 +6751,9 @@ def apply_setup(values, token=None):
     rc.with_host_lock(_do)
     return out
 @@@@ END
-@@@@ FILE mac-helper/relay_test.py mode=644 sha256=ff4dad5eea8e5f597aa249c46822bee2ffb7b85d3bd9b586c293a1a4ace9e779 nl=1
+@@@@ FILE mac-helper/relay_test.py mode=644 sha256=7b833e6c59b713938ff3fd2a49c5e23e630c4aab427ed420e96856cac7db73c8 nl=1
 """
-iMessage Relay v1.4.2: the /test end-to-end check (runs inside the native host).
+iMessage Relay v1.4.3: the /test end-to-end check (runs inside the native host).
 
 The owner types "/test" (or "/test send") in the relay chat. The extension intercepts it before any
 reply routing and asks the host for {type:"test"}. The host then checks, each with its own timeout:
@@ -7645,9 +7822,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=8b5a1ee1dfe1c8514db2e9faebd73715496552da5e73c42830240a28b41f6cf8 nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=9a1c7fc64664806518d6132858dd8f91b5d952355e229223d5d30715610b69fd nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.2 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.3 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -9298,6 +9475,188 @@ t('T10 no twid, no switcher, account-nav avatar outside any panel -> true', chec
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
 @@@@ END
+@@@@ FILE tests/js/probe.test.js mode=644 sha256=450d5763ec53e3fd1b7f9cb234b888b902f5ada64aef74ebbc02d238a1d8f9fb nl=1
+/* v1.4.3: text-free quote diagnostics (structure fingerprint on each outbound, popup page structure). Run:
+ *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+const { JSDOM } = require('jsdom');
+const { CONFIG, createRelayDetector } = require('../../extension/content.js');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+
+function setup(html, url, opts = {}) {
+  const dom = new JSDOM(html || fixture, { url: url || 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
+  const { window } = dom;
+  window.Element.prototype.getBoundingClientRect = function () {
+    const v = this.getAttribute('data-fake-rect');
+    if (!v) return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    const [l, t, w, h] = v.split(',').map(Number);
+    return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
+  };
+  const state = Object.assign({ paused: false, conversationFilter: '' }, opts.state);
+  const logs = [];
+  const statuses = [];
+  const seenSet = opts.seenSet || new Set();
+  const det = createRelayDetector({
+    window, document: window.document, config: Object.assign({}, FAST, opts.config), getState: () => state,
+    onEmit: i => logs.push(i), onStatus: s => statuses.push(s), log: () => {},
+    now: opts.now, ownerCheck: opts.ownerCheck,
+    seen: { has: u => seenSet.has(u), add: u => seenSet.add(u) },
+  });
+  det.start();
+  return { window, doc: window.document, det, logs, statuses, state, dom, seenSet };
+}
+
+// uuid helpers
+const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
+function msg(doc, n, dir, build, opts = {}) {
+  const e = doc.createElement('div');
+  e.setAttribute('data-testid', 'message-' + uuid(n));
+  e.style.display = 'flex';
+  e.style.justifyContent = dir === 'out' ? 'flex-end' : 'flex-start';
+  const left = dir === 'out' ? 780 : 420;
+  const b = doc.createElement('div');
+  b.setAttribute('data-fake-rect', `${left},0,200,40`);
+  if (dir === 'in') b.innerHTML = '<a href="/SenderBot"><img alt="SenderBot"></a>';
+  const span = doc.createElement('span');
+  span.setAttribute('data-testid', 'message-text-' + uuid(n));
+  if (typeof build === 'function') build(span, doc); else span.textContent = build;
+  b.appendChild(span);
+  if (opts.time) { const t = doc.createElement('time'); t.setAttribute('datetime', opts.time); t.textContent = 't'; b.appendChild(t); }
+  e.appendChild(b);
+  return e;
+}
+const panel = doc => doc.querySelector('[data-testid="dm-conversation-panel"]');
+const fixture = '<html><body><div data-testid="dm-conversation-panel"><div data-testid="message-df48633d-6588-4b18-bc77-000000009999"><span data-testid="message-text-df48633d-6588-4b18-bc77-000000009999">earlier</span></div></div></body></html>';
+
+function bgHarness() {
+  const vm = require('vm');
+  const bgListeners = [], hostCalls = [];
+  const bag = {};
+  const st = { async get(k) { const o = {}; (typeof k === 'string' ? [k] : (k || Object.keys(bag))).forEach(x => { if (x in bag) o[x] = bag[x]; }); return o; }, async set(o) { Object.assign(bag, o); }, async remove(k) { delete bag[k]; } };
+  const chrome = {
+    runtime: { id: 'ext', onMessage: { addListener: f => bgListeners.push(f) }, onInstalled: { addListener() {} }, onStartup: { addListener() {} },
+      sendNativeMessage: async (h, m) => { hostCalls.push(m); if (m.type === 'get_config') return { ok: true, paused: false, dryRun: true, relayConversationId: '111-222', ownerXHandle: 'OwnerAcct', senderXHandle: 'SenderBot', contacts: [{ name: 'Sam Alpha', label: 'Sam', handle: '+15555550123' }] }; return { ok: true, dryRun: true }; } },
+    storage: { local: st, session: st, onChanged: { addListener() {} } },
+    tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} }, query: async () => [] },
+    alarms: { create() {}, clear() {}, onAlarm: { addListener() {} } },
+    action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../extension/background.js'), 'utf8'), { chrome, console: { log() {}, warn() {} } });
+  return { bgListeners, hostCalls };
+}
+const SECRET = ['Ha, true', 'Rory', 'Not since the jump', 'OwnerAcct', 'SenderBot', 'df48633d'];
+const noText = (s, extra = []) => { for (const t of SECRET.concat(extra)) assert.ok(!String(s).includes(t), 'leaked ' + t + ': ' + s); };
+
+(async () => {
+  await test('outbound carries a text-free fingerprint; "Replied to" text is a flag only', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    const m = msg(doc, 1, 'out', 'Ha, true');
+    const pv = doc.createElement('div');
+    pv.setAttribute('data-testid', 'reply-quote');
+    pv.innerHTML = '<div><span>Replied to Rory</span></div><div role="button" aria-label="Not since the jump"><span>Rory: Not since the jump</span></div>';
+    m.querySelector('div').prepend(pv);
+    panel(doc).appendChild(m);
+    await sleep(80);
+    const fp = logs[0].quoteProbe;
+    assert.ok(fp && fp.startsWith('E='), fp);
+    assert.ok(fp.includes('!RT'), fp);
+    assert.ok(fp.includes('@reply-quote'), fp);
+    assert.ok(fp.includes('#button{aria-label}'), fp);
+    assert.ok(!fp.includes('!RA'), fp);
+    assert.ok(fp.includes('@message-<self>'), fp);
+    noText(fp);
+    det.stop();
+  });
+  await test('aria-label value is redacted except a "Replied to" flag', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    const m = msg(doc, 2, 'out', 'Ha, true');
+    m.setAttribute('aria-label', 'Replied to Rory: Not since the jump');
+    panel(doc).appendChild(m);
+    await sleep(80);
+    const fp = logs[0].quoteProbe;
+    assert.ok(/^E=0\.div@message-<self>\{[^}]*aria-label[^}]*\}!RA/.test(fp), fp);
+    noText(fp);
+    det.stop();
+  });
+  await test('preceding siblings recorded; a reference to another message is REF', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    const row = doc.createElement('div');
+    row.setAttribute('data-quoted-id', 'message-' + uuid(77));
+    row.innerHTML = '<span>Rory: Not since the jump</span>';
+    panel(doc).appendChild(row);
+    panel(doc).appendChild(msg(doc, 3, 'out', 'Ha, true'));
+    await sleep(80);
+    const fp = logs[logs.length - 1].quoteProbe;
+    assert.ok(/S-1=0\.div\{data-quoted-id\}!REF/.test(fp), fp);
+    assert.ok(/S-2\(msg\)=0\.div@message-<uuid>/.test(fp), fp);
+    noText(fp);
+    det.stop();
+  });
+  await test('test ids holding a handle or digits are masked', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    const m = msg(doc, 4, 'out', 'Ha, true');
+    m.querySelector('div').insertAdjacentHTML('afterbegin', '<div data-testid="UserAvatar-Container-OwnerAcct"></div><div data-testid="cell-5551234"></div>');
+    panel(doc).appendChild(m);
+    await sleep(80);
+    const fp = logs[0].quoteProbe;
+    assert.ok(fp.includes('@UserAvatar-Container-<x>'), fp);
+    assert.ok(fp.includes('@cell-<x>'), fp);
+    noText(fp, ['5551234']);
+    det.stop();
+  });
+  await test('inbound messages carry no fingerprint', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 5, 'in', 'Rory: Not since the jump'));
+    await sleep(80);
+    assert.ok(logs.length && !logs[0].quoteProbe);
+    det.stop();
+  });
+  await test('popup page structure: last entries, structure only', async () => {
+    const { doc, det } = setup();
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 6, 'in', 'Rory: Not since the jump'));
+    panel(doc).appendChild(msg(doc, 7, 'out', 'Ha, true'));
+    await sleep(80);
+    const ps = det.pageStructure();
+    assert.ok(ps.entries.length >= 2);
+    assert.ok(ps.entries.every(e => typeof e.structure === 'string' && 'quoteSeen' in e));
+    const js = JSON.stringify(ps);
+    noText(js);
+    assert.ok(!js.includes('earlier'));
+    det.stop();
+  });
+  await test('background forwards the fingerprint (closed charset) to the Mac', async () => {
+    const { bgListeners, hostCalls } = bgHarness();
+    await sleep(30);
+    const item = { ts: new Date().toISOString(), conversationId: '111-222', direction: 'outbound', text: 'Sam: hi', key: 'k1', score: 5, source: 'frame',
+                   quoteProbe: 'E=0.div@message-<self> "quoted words" \u{1F600}' };
+    bgListeners.forEach(f => f({ type: 'relay-log', item }, { id: 'ext', tab: { id: 1 } }, () => {}));
+    await sleep(60);
+    const s = hostCalls.find(c => c.type === 'send');
+    assert.ok(s && s.quoteProbe, JSON.stringify(s));
+    assert.ok(s.quoteProbe.startsWith('E=0.div@message-<self>'));
+    assert.ok(!/["\u{1F600}]/u.test(s.quoteProbe), s.quoteProbe);
+  });
+  console.log(passed + ' passed, ' + failed + ' failed (v1.4.3 quote diagnostics)');
+  process.exit(failed ? 1 : 0);
+})();
+@@@@ END
 @@@@ FILE tests/js/quote.test.js mode=644 sha256=636cc3e193898e86787f97a1b32cff212383cecef4ba0aece3c95e71227d689e nl=1
 /* v1.4.2: X Chat's current native Reply ('Replied to <name>' + preview). Harness from detect.test.js. Run:
  *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
@@ -9598,7 +9957,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=f3827210cd54cc018df3407bbd0aa7f437c95b6e2c9e5a13cdbb65dea6c4fb18 nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=47ac9e5a51b717fa6327d84c61ab4e83cce013ead3cccfb50d5be5c5907a1952 nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -9653,7 +10012,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.2');
+  assert.strictEqual(m.version, '1.4.3');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -10163,7 +10522,7 @@ class RosterTolerance(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_host.py mode=644 sha256=b076b5c0eb8822813c1c817f5c8db43f518a1c6d188be2861cef2f8d492f8449 nl=1
+@@@@ FILE tests/py/test_host.py mode=644 sha256=125fd1df8cb1f300027dcb607d7739aec044fe862b80e7c2619046bebcd4cef6 nl=1
 """Native host: framing, get_config, send gating (paused / relay chat / routing / normalization /
 rate limit), confirmations and "who is this for?" webhooks, dry run, -1712 retry, self-test, and
 an end-to-end run of the real script."""
@@ -10227,7 +10586,7 @@ class GetConfig(Base):
         r = self.h.handle_request({'type': 'get_config'}, cfg=self.cfg(ownerXHandle='OwnerAcct', senderXHandle='SenderBot',
                                                                         ownerXUserId='99887766', webhookToken='tok'), now=self.clock.now)
         self.assertEqual(r['ok'], True)
-        self.assertEqual(r['version'], '1.4.2')
+        self.assertEqual(r['version'], '1.4.3')
         self.assertEqual((r['paused'], r['dryRun']), (False, True))
         self.assertEqual(r['contacts'], [{'name': 'Test Contact', 'label': 'Test', 'handle': '+15555550123'}])
         self.assertEqual(r['relayConversationId'], CONV)
@@ -14749,6 +15108,175 @@ class FastDeliveryCheck(Base):
         finally:
             _s.signal(_s.SIGTERM, old)
         self.assertEqual(calls, [])
+@@@@ END
+@@@@ FILE tests/py/test_v143_handles.py mode=644 sha256=20aacc0d3f0b860a6daf3c07f56cb55c437d35ac9d7a83ac2560371b2a6bb639 nl=1
+"""v1.4.3: business / short-code / odd handles are never a last-texter guess; guessed prompts show the
+Contacts name or a masked handle + "not in Contacts"; text-free quote diagnostics are logged."""
+import json
+import unittest
+
+from helpers import read_log
+from helpers import FakeRunner
+from test_v140 import CONV, Base as _Base
+
+
+class Base(_Base):
+    def send(self, text, confirmed=False, handle=None, runner=None, **kw):
+        msg = {'type': 'send', 'text': text, 'conversationId': CONV}
+        if confirmed:
+            msg.update(confirmed=True, handle=handle)
+        msg.update(kw)
+        self.runner = runner or FakeRunner([(0, '')] * 5)
+        return self.m.host.handle_request(msg, cfg=self.cfg(), runner=self.runner, sleeper=self.sleeper,
+                                          now=self.clock.now, poster=self.poster)
+
+RORY = '+15555550133'
+BIZ = '+1577000000000001'       # Apple Business Chat style over-long id (fictional)
+SHORT = '24273'                  # a 5-digit short code (fictional)
+NOBODY = '+15555550144'          # a person not in Contacts
+
+
+class PersonHandle(unittest.TestCase):
+    def test_classification(self):
+        import relay_common as rc
+        for h in ('+15555550133', '+447700900123', 'someone@example.com', '+12125550100'):
+            self.assertTrue(rc.is_person_handle(h), h)
+        for h in (BIZ, SHORT, '262966', 'urn:biz:1234abcd-0000-0000-0000-000000000000', '+1055555501',
+                  '+15550123', '', None, 'not a handle', '+11555550133'):
+            self.assertFalse(rc.is_person_handle(h), h)
+
+    def test_guess_label(self):
+        import relay_common as rc
+        self.assertEqual(rc.guess_label({'label': 'Rory', 'handle': RORY}), 'Rory')
+        self.assertEqual(rc.guess_label({'label': '(555) 555-0144', 'handle': NOBODY}),
+                         '+1 \u2022\u2022\u20220144 (\u26a0\ufe0f not in Contacts)')
+
+    def test_clean_probe_is_closed_and_masked(self):
+        import relay_common as rc
+        fp = rc.clean_probe('E=0.div@message-12345678-1234-1234-1234-123456789abc{aria-label}!RA "hi" Ünï 5551234 😀')
+        self.assertNotIn('12345678-1234', fp)
+        self.assertNotIn('"', fp)
+        self.assertNotIn('5551234', fp)
+        self.assertNotIn('\U0001f600', fp)
+        self.assertIn('!RA', fp)
+        self.assertLessEqual(len(rc.clean_probe('x' * 9000)), rc.PROBE_MAX)
+
+
+class Odd(Base):
+    def setUp(self):
+        super().setUp()
+        self.raw['relayAll'] = True
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
+        self.clock.t += 600
+
+    def last(self, handle, label, ago=30):
+        self.m.rc.record_inbound(handle, self.clock.t - ago, label=label)
+
+    def targets(self):
+        return [p for p, _ in self.posts if p['type'] == 'needs_target']
+
+    def confirms(self):
+        return [p for p, _ in self.posts if p['type'] == 'needs_confirm']
+
+    def test_business_last_texter_is_never_guessed(self):
+        self.last(RORY, 'Rory', ago=200)
+        self.last(BIZ, '+1577000000000001')
+        r = self.send('Sounds good thanks')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.assertEqual(self.osa(), [])
+        self.assertEqual(self.targets()[-1]['detail'], 'Who\'s this for? Start with a name, like "Alex: \u2026"')
+        self.assertFalse(self.confirms())
+        self.assertNotIn('Sounds good', read_log())
+
+    def test_yes_after_business_prompt_sends_nothing(self):
+        self.last(BIZ, '+1577000000000001')
+        self.send('Sounds good thanks')
+        self.clock.t += 5
+        r = self.send('yes')
+        self.assertEqual(self.osa(), [])
+        self.assertFalse(r.get('ok') and r.get('sent'), r)
+
+    def test_short_code_last_texter_is_never_guessed(self):
+        self.last(SHORT, SHORT)
+        r = self.send('STOP please')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.assertEqual(self.osa(), [])
+
+    def test_business_reachable_by_quote(self):
+        self.last(BIZ, 'Acme Support')
+        r = self.send('Thanks!', quotedText='Acme Support: Your order shipped')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][3], BIZ)
+
+    def test_business_reachable_by_name(self):
+        self.last(BIZ, 'Acme Support')
+        r = self.send('Acme Support: thanks!')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][2:4], ['thanks!', BIZ])
+
+    def test_guess_prompt_shows_contacts_name(self):
+        self.last(RORY, 'Rory')
+        r = self.send('On my way')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(self.confirms()[-1]['detail'], '\u2753 Reply to Rory? Reply yes within 2 min.')
+
+    def test_guess_prompt_masks_unknown_number(self):
+        self.last(NOBODY, '(555) 555-0144')
+        r = self.send('On my way')
+        self.assertTrue(r.get('needsConfirm'), r)
+        ev = self.confirms()[-1]
+        self.assertEqual(ev['detail'], '\u2753 Reply to +1 \u2022\u2022\u20220144 (\u26a0\ufe0f not in Contacts)? Reply yes within 2 min.')
+        self.assertNotIn('555-0144', json.dumps(ev))
+        self.clock.t += 5
+        r = self.send('On my way', confirmed=True, handle=NOBODY)
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][3], NOBODY)
+
+
+class Probe(Base):
+    FP = ('E=0.div@message-<self>{aria-label} 1.div#group@messageReplyPreview!RA+t 2.span+t | '
+          'S-1(msg)=0.div@message-<uuid> | P1=0.div{data-x}!REF')
+
+    def events(self):
+        return [json.loads(l) for l in read_log().splitlines() if '"quote_probe"' in l]
+
+    def test_probe_logged_without_text(self):
+        self.clock.t += 10
+        r = self.send('Ha, true', quotedText='Test: our secret plan', quoteProbe=self.FP)
+        ev = self.events()[-1]
+        self.assertTrue(ev['quoteSeen'])
+        self.assertIn(ev['quoteResolved'], (True, False))
+        self.assertIn('messageReplyPreview!RA', ev['fingerprint'])
+        log = read_log()
+        for s in ('Ha, true', 'secret plan'):
+            self.assertNotIn(s, log)
+
+    def test_no_quote_seen(self):
+        self.send('Test: hello', quoteProbe=self.FP)
+        ev = self.events()[-1]
+        self.assertFalse(ev['quoteSeen'])
+        self.assertFalse(ev['quoteResolved'])
+        self.assertEqual(ev['routedBy'], 'prefix')
+
+    def test_quote_resolved(self):
+        self.send('cool', quotedText='Test: hi', quoteProbe=self.FP)
+        ev = self.events()[-1]
+        self.assertTrue(ev['quoteSeen'])
+        self.assertTrue(ev['quoteResolved'])
+
+    def test_free_text_in_probe_is_stripped(self):
+        self.send('Test: hello', quoteProbe='E=0.div "Meet at 5pm at Joe\'s" 😀')
+        fp = self.events()[-1]['fingerprint']
+        self.assertNotIn('"', fp)
+        self.assertNotIn("'", fp)
+
+    def test_absent_probe_logs_nothing(self):
+        self.send('Test: hello')
+        self.assertEqual(self.events(), [])
+
+
+if __name__ == '__main__':
+    unittest.main()
 @@@@ END
 @@@@ FILE tests/py/test_watch.py mode=644 sha256=69d496cdbfc99ee6f2e1c861e1a566e39e6c061c0800ee8563d0c2f21e325715 nl=1
 """Inbound watcher against a temp sqlite db shaped like chat.db."""

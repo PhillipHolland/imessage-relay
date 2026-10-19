@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.4.2: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.3: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -23,7 +23,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.2'
+VERSION = '1.4.3'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -321,6 +321,32 @@ def mask_handle(h):
         cc = ('+' + digits[:len(digits) - 10] + ' ') if len(digits) > 10 else ''
         return cc + '\u2022\u2022\u2022' + digits[-4:]
     return h
+
+
+def is_person_handle(h):
+    """v1.4.3: a normal person's iMessage handle -- an email, or a phone number in plain E.164 (a +1 number
+    is exactly 10 digits with a valid area code and exchange). Apple Business Chat ids (urn:biz:..., or
+    over-long "+1577..." numbers), 5-6 digit short codes and anything else are NOT, so a bare reply is
+    never guessed onto one (they can still be reached by quote or name)."""
+    h = str(h or '').strip()
+    if not h or h.lower().startswith('urn:'):
+        return False
+    if '@' in h:
+        return bool(EMAIL_RE.match(h))
+    if not E164_RE.match(h):
+        return False
+    if h.startswith('+1'):
+        return bool(re.match(r'^\+1[2-9][0-9]{2}[2-9][0-9]{6}$', h))
+    return 8 <= len(h) - 1 <= 15
+
+
+def guess_label(contact):
+    """v1.4.3: how a guessed recipient is named in a "Reply to ...?" prompt: the Contacts name when known,
+    else the masked handle plus a warning (the owner sees at once that it is not someone they know)."""
+    lab = str((contact or {}).get('label') or '')
+    if _namelike(lab):
+        return lab
+    return mask_handle((contact or {}).get('handle') or lab) + ' (\u26a0\ufe0f not in Contacts)'
 
 
 def clean_label(v):
@@ -954,6 +980,10 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
             return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
         if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
             return need('two people wrote within %d seconds of each other' % cfg['ambiguousSeconds'])
+        if not is_person_handle(live[0]['handle']):
+            # v1.4.3: the last texter is a business / short code / odd handle: never guessed; ask for a name
+            return need('the last texter is a business or short-code handle',
+                        'Who\'s this for? Start with a name, like "%s: \u2026"' % example_label(cfg, d))
         return deliver(live[0], text, 'recent')
 
     cands = name_candidates(text) if p_status == 'none' and not quote_unresolved else []
@@ -1055,6 +1085,19 @@ def in_quiet_hours(qh, now=None):
 # ---------- logging (counts + routing method only: never bodies, handles, names or labels) ----------
 FORBIDDEN_LOG_KEYS = ('text', 'body', 'message', 'outgoing')   # raise: a body must never be logged
 SCRUB_LOG_KEYS = ('handle', 'label', 'name', 'contact', 'contactName', 'detail', 'hint')  # dropped (item 7)
+
+
+PROBE_MAX = 4000
+_PROBE_BAD_RE = re.compile(r'[^A-Za-z0-9#@\[\]{},.:;<>|_\-!+=/ ()]')
+
+
+def clean_probe(fp):
+    """v1.4.3: the extension's text-free quote fingerprint, re-sanitized on the Mac before it is logged:
+    a closed character set (no quotes, no emoji, no free text), uuids and long digit runs masked, capped."""
+    fp = _PROBE_BAD_RE.sub('', str(fp or ''))
+    fp = re.sub(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', '<uuid>', fp)
+    fp = re.sub(r'[0-9]{4,}', '<n>', fp)
+    return fp[:PROBE_MAX]
 
 
 def log_event(event, **fields):

@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.2.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.3.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -876,6 +876,13 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         return refuse('no contacts in config', textLength=len(text))
 
     route = rc.route_reply(text, quoted[:500], cfg, rc.load_roster(), now())
+    probe = msg.get('quoteProbe')
+    if isinstance(probe, str) and probe:
+        # v1.4.3 quote diagnostics: text-free page structure around the owner's bubble (tags, roles,
+        # sanitized test ids, attribute NAMES, 'Replied to' yes/no flags). Never any message text.
+        rc.log_event('quote_probe', quoteSeen=bool(quoted.strip()), quoteResolved=route.get('by') == 'quote',
+                     routedBy=route.get('by') or '', needsTarget=bool(route.get('needsTarget')),
+                     confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe))
     confirmed = bool(msg.get('confirmed'))
     hint = msg.get('handle')
     hint_norm = rc.normalize_handle(hint, cfg['defaultCountryCode']) if hint else None
@@ -970,10 +977,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         must_ask = by == 'recent' and (route.get('quoteUnresolved') or contact.get('kind') == 'roster')
         if must_ask or (by == 'recent' and cfg['confirmGuessed'] != 'off'
                         and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
-            detail = '❓ Reply to %s? Reply yes within 2 min.' % contact['label']
-            rc.log_event('needs_confirm', routedBy=by, reason='guessed', textLength=len(body))
+            shown = rc.guess_label(contact)          # v1.4.3: Contacts name, else masked handle + warning
+            detail = '❓ Reply to %s? Reply yes within 2 min.' % shown
+            rc.log_event('needs_confirm', routedBy=by, reason='guessed', textLength=len(body),
+                         inContacts=shown == contact['label'])
             _note_prompt(now())
-            notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'reason': 'guessed',
+            notify(cfg, poster, {'type': 'needs_confirm', 'label': shown, 'reason': 'guessed',
                                  'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, needsConfirm=True, guess=True, label=contact['label'],
                         handle=handle, reason='guessed', contact=contact['label'], routedBy=by)

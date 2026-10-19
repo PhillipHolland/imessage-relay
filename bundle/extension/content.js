@@ -727,6 +727,7 @@
         seen.add(a.uuid);
         const item = { ts, conversationId: conv, direction: a.direction, text: a.text, signals: a.signals, score: a.score, key: a.key, source };
         if (a.quotedText) item.quotedText = a.quotedText;
+        if (a.direction !== 'inbound') { try { item.quoteProbe = structureOf(e); } catch (err) { /* diagnostics only */ } }
         try { emit(item); } catch (err) { info('emit failed', err); }
       }
     }
@@ -805,6 +806,87 @@
         outerHTML: sanitize(el, a.text),
       };
     }
+    // ---------- v1.4.3: text-free quote diagnostics ----------
+    // A structural fingerprint of a bubble and its ~3 preceding siblings (and those of up to 2 wrappers
+    // that hold only this bubble): tag, role, a sanitized data-testid, attribute NAMES (never values),
+    // and yes/no flags: RA = an aria-label contains "Replied to", RT = the element's own text contains
+    // "Replied to", REF = an attribute references ANOTHER message uuid, t = has its own text. No text,
+    // no labels, no handles, no uuids.
+    const UUID_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+    const PROBE_REPLIED_RE = /replied to/i;
+    function cleanTid(tid, ownUuid) {
+      let t = String(tid || '').replace(UUID_G, m => (ownUuid && m.toLowerCase() === ownUuid ? '<self>' : '<uuid>'));
+      const names = cfg.ownerNames.concat(cfg.botNames).map(lc).filter(Boolean);
+      t = t.split(/([-_])/).map((seg, i, arr) => {
+        if (seg === '-' || seg === '_' || /^<(self|uuid)>$/.test(seg)) return seg;
+        if (/[0-9]/.test(seg) || names.includes(lc(seg).replace(/^@/, ''))) return '<x>';
+        if (i >= 2 && /container$/i.test(arr[i - 2] || '')) return '<x>';   // UserAvatar-Container-<handle>
+        return seg.replace(/[^A-Za-z]/g, '').slice(0, 40);
+      }).join('');
+      return t.slice(0, 80);
+    }
+    function nodeSig(el, depth, ownUuid) {
+      let sig = depth + '.' + String(el.tagName || '?').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 30);
+      const role = el.getAttribute('role');
+      if (role) sig += '#' + role.replace(/[^A-Za-z-]/g, '').slice(0, 30);
+      const tid = el.getAttribute('data-testid');
+      if (tid) sig += '@' + cleanTid(tid, ownUuid);
+      const names = [];
+      let ra = false, ref = false;
+      for (const a of Array.from(el.attributes || [])) {
+        const n = a.name;
+        if (n === 'class' || n === 'style') continue;
+        if (n !== 'data-testid' && n !== 'role' && names.length < 12) names.push(n.replace(/[^a-z0-9-]/gi, '').slice(0, 30));
+        const v = String(a.value || '');
+        if (n === 'aria-label' && PROBE_REPLIED_RE.test(v)) ra = true;
+        const ids = v.match(UUID_G);
+        if (ids && ids.some(u => u.toLowerCase() !== ownUuid)) ref = true;
+      }
+      if (names.length) sig += '{' + names.join(',') + '}';
+      const ot = ownText(el);
+      if (ra) sig += '!RA';
+      if (PROBE_REPLIED_RE.test(ot)) sig += '!RT';
+      if (ref) sig += '!REF';
+      if (ot.trim()) sig += '+t';
+      return sig;
+    }
+    function treeSig(root, ownUuid, maxNodes) {
+      const out = [];
+      const visit = (el, depth) => {
+        if (out.length >= maxNodes || depth > 9) return;
+        out.push(nodeSig(el, depth, ownUuid));
+        for (let c = el.firstElementChild; c && out.length < maxNodes; c = c.nextElementSibling) visit(c, depth + 1);
+      };
+      visit(root, 0);
+      if (out.length >= maxNodes) out.push('...');
+      return out.join(' ');
+    }
+    function structureOf(entry) {
+      const own = uuidOf(entry);
+      const parts = ['E=' + treeSig(entry, own, 40)];
+      const sibs = (start, tag) => {
+        let sib = start && start.previousElementSibling;
+        for (let i = 1; sib && i <= 3; i++, sib = sib.previousElementSibling) {
+          parts.push(tag + '-' + i + (isUuidEntry(sib) ? '(msg)' : '') + '=' + treeSig(sib, own, 25));
+        }
+      };
+      sibs(entry, 'S');
+      let up = parentOf(entry);
+      for (let lvl = 1; lvl <= 2 && up && up !== doc.body && collectEntries(up).length === 1; lvl++, up = parentOf(up)) {
+        parts.push('P' + lvl + '=' + nodeSig(up, 0, own));
+        sibs(up, 'P' + lvl + 'S');
+      }
+      return parts.join(' | ').slice(0, 3800);
+    }
+    function pageStructure() {
+      const all = allEntries().slice(-6);
+      return {
+        v: 1, generatedAt: new Date(now()).toISOString(), mode, chatRoot: chatRoot().selector,
+        entriesOnPage: allEntries().length, newestAtTop: newestAtTop(),
+        entries: all.map(e => { const a = analyze(e); return { direction: a.direction, quoteSeen: !!a.quotedText, structure: structureOf(e) }; }),
+      };
+    }
+
     function debugSnapshot() {
       const all = allEntries();
       const primary = (lastEls.any && lastEls.any.isConnected) ? lastEls.any : all[all.length - 1];
@@ -866,6 +948,8 @@
       rebaseline: baseline,
       flushNow() { if (flushTimer) { win.clearTimeout(flushTimer); flushTimer = null; } flush(); },
       debugSnapshot,
+      pageStructure,               // v1.4.3: popup "Copy page structure" (text-free)
+      structureOf,
       status() { return { conversationId: conversationId(), mode, chatRoot: chatRoot().selector, entriesOnPage: allEntries().length, ownerConfirmed: !!ownerCheck(), stats: Object.assign({}, stats) }; },
       _analyze: analyze,
     };
@@ -1033,6 +1117,11 @@
   // Troubleshooting: a "relay-debug" message answered by the detector in this frame (if it has
   // messages). No cross-frame fallback any more; each frame answers for itself.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg && msg.type === 'relay-structure') {          // v1.4.3 popup button; text-free
+      if (!mainDetector || !mainDetector.hasEntries()) return false;
+      try { sendResponse({ ok: true, from: role, structure: mainDetector.pageStructure() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
+      return false;
+    }
     if (!msg || msg.type !== 'relay-debug') return false;
     if (!mainDetector || !mainDetector.hasEntries()) return false;
     try { sendResponse({ ok: true, from: role, snapshot: mainDetector.debugSnapshot() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }

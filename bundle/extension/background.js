@@ -1,5 +1,5 @@
 /*
- * iMessage Relay v1.4.2: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.3: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -392,6 +392,7 @@ async function handleItem(item) {
   if (d.skip) { await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip })); return; }
   await addEvent(Object.assign(ev, { status: 'sending' }));
   const payload = { type: 'send', text: item.text, quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
   console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: item.text.length, quoted: !!item.quotedText });
   let res, status, detail;
   try {
@@ -454,6 +455,10 @@ function sanitizeItem(raw) {
     score: Number.isFinite(Number(raw.score)) ? Number(raw.score) : 0,
     source: ['frame', 'top', 'page'].includes(raw.source) ? raw.source : 'page',
   };
+  if (typeof raw.quoteProbe === 'string' && raw.quoteProbe) {
+    // v1.4.3: text-free structure only; closed character set, capped
+    out.quoteProbe = raw.quoteProbe.replace(/[^A-Za-z0-9#@\[\]{},.:;<>|_\-!+=/ ()]/g, '').slice(0, 4000);
+  }
   if (raw.refuse) { out.refuse = String(raw.refuse).slice(0, 40); out.textLength = Number(raw.textLength) || 0; out.limit = Number(raw.limit) || 4000; }
   return out;
 }

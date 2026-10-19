@@ -52,3 +52,28 @@ function render(status, events) {
 
 chrome.storage.local.get(['status', 'events']).then(v => render(v.status || {}, (v.events || []).slice(-5).reverse()));
 chrome.runtime.sendMessage({ type: 'relay-status' }).then(r => { if (r) render(r.status || {}, r.events || []); }).catch(() => {});
+
+// v1.4.3: "Copy page structure" -- a text-free outline of the open chat (tags, roles, sanitized test ids,
+// attribute names, 'Replied to' yes/no flags) for fixing quote detection. Never message text, names or handles.
+async function copyStructure() {
+  const msg = $('structureMsg');
+  msg.textContent = 'Reading…';
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) throw new Error('no active tab');
+    const r = await chrome.tabs.sendMessage(tab.id, { type: 'relay-structure' });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'open the relay chat on x.com first');
+    const json = JSON.stringify(r.structure);
+    try { await navigator.clipboard.writeText(json); }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = json; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+    }
+    msg.textContent = 'Copied (' + json.length + ' chars, no message text).';
+  } catch (e) {
+    msg.textContent = 'Could not read the page: ' + String((e && e.message) || e).slice(0, 120);
+  }
+}
+const sb = $('structure');
+if (sb) sb.addEventListener('click', () => { copyStructure(); });

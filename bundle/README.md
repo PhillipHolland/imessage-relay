@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.2
+# iMessage Relay v1.4.3
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -27,6 +27,11 @@ Your reply in the relay chat (x.com in Chrome)
   card with exactly one number or email sends right away, saves the contact and reports
   "→ Jordan Rivera ✓ (new contact, •••0188)". `relayctl set confirmNewContacts always` asks every time
   (default `exact-skip`). `/add Jordan +1 555 555 0188` adds someone directly.
+- v1.4.3: a bare reply is never guessed onto a business (Apple Business Chat), a short code or any
+  other non-person handle; you get "Who's this for? Start with a name, like "Alex: …"" instead (quote
+  or name them to reply). A "Reply to …?" prompt shows the Contacts name, or the masked number plus
+  "⚠️ not in Contacts". Quote diagnostics: each reply sends a text-free outline of the page structure
+  around it to the Mac's log (`quote_probe`), and the popup has **Copy page structure**.
 - v1.4.2: X Chat's native Reply ("Replied to …" + preview) routes to the quoted person again; a quote
   that can't be placed, or a bare reply to a roster-only last texter (relay-all), asks "Reply to <label>?"
   instead of "Who's this for?". "✓✓ delivered" is checked every ~2 s while a reply is waiting.
@@ -53,7 +58,7 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.2)
+## Limits (v1.4.3)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -98,8 +103,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.2 changes the extension: 👍/👎 on a prompt;
-v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
+reload the extension card in chrome://extensions (v1.4.3 changes the extension: quote diagnostics and
+Copy page structure; v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations
