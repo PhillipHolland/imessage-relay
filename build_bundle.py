@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.7, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.8, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=36f7ee9ebb3b1afccfc188dbbc5ed7738a6ecfd864ef597a6397489c99a3cc3d nl=1
-# iMessage Relay v1.4.7
+@@@@ FILE README.md mode=644 sha256=29e689910cd7527b58982552770fdc685663e99de931cedfd45dbcb04992d8d8 nl=1
+# iMessage Relay v1.4.8
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -35,11 +35,15 @@ Your reply in the relay chat (x.com in Chrome)
 v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bot access to the Mac:
 - The Mac encrypts each incoming 1:1 photo with a fresh random AES-256-GCM key and uploads only the
   ciphertext to a tiny drop service you own (`drop/`; Vercel by default, Cloudflare community-only). The
-  webhook carries just `{token, url, size, sha256, key}`; the bot downloads the ciphertext once, checks
+  webhook carries just `{token, size, sha256}` (v1.4.8: the photo's key is sealed inside the drop blob
+  with a wrap key only the Mac and the bot have, so no key or URL passes through the routine; v1.4.7 sent
+  `{token, url, size, sha256, key}`, still accepted); the bot downloads the ciphertext once, checks
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
-- The Chrome extension did not change in v1.4.7 (no reload needed from v1.4.6).
+- The Chrome extension did not change in v1.4.7 or v1.4.8 (no reload needed from v1.4.6).
+- v1.4.8: every photo run reports body-free `media_status` codes and appends a counts-only line to the
+  bot's `media.log`, so a "couldn't be relayed" notice always says why (e.g. `no_key`, `fetch_failed`).
 
 v1.4.6 makes the relay feel native in X Chat:
 - **✅ on your reply** as soon as Messages accepts it, placed by the extension in your X tab (seconds, not
@@ -117,7 +121,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.7)
+## Limits (v1.4.8)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -139,7 +143,7 @@ v1.4.6 makes the relay feel native in X Chat:
 - `mac-helper/`: `imessage_relay_host.py` (native host `com.imessage_relay.host`),
   `imessage_relay_watch.py` (watcher), `watch_launcher.py` (run by the watcher app), `typedstream.py` (attributedBody decoder),
   `relayctl.py` (operations), `relay_common.py`, `relay_ui.py` (v1.4.6 reaction queue + id map),
-  `relay_media.py` (v1.4.6 in-flight attachments), `relay_drop.py` (v1.4.7 photo encryption + drop upload), `relay_echo.py`, `send_imessage.applescript`, templates,
+  `relay_media.py` (v1.4.6 in-flight attachments), `relay_drop.py` (v1.4.7 photo encryption + drop upload; v1.4.8 key wrap), `relay_echo.py`, `send_imessage.applescript`, templates,
   `config.example.json`.
 - `drop/`: the v1.4.7 encrypted photo drop (`core.mjs` shared; `api/` + `vercel.json` for Vercel,
   `cloudflare/` untested, community-only). Deployed by the bot, never installed on the Mac. See `drop/README.md`.
@@ -173,7 +177,7 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions **only when coming from v1.4.5 or older** (v1.4.7 did not
+reload the extension card in chrome://extensions **only when coming from v1.4.5 or older** (v1.4.7 and v1.4.8 did not
 change it; v1.4.6 changed the extension: ✅/❓/👀 reactions,
 🤖 prompts, undo, photos; v1.4.5 changed it too (🗑️ to block); v1.4.4, v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
@@ -185,6 +189,7 @@ relayctl mute "Bank" | unmute "Bank" | roster [--days 7]
 relayctl add-contact … | label … | remove-contact … | contacts | recent-senders | selftest
 relayctl setup … | test-result | owner-handles detect [--apply]
 relayctl set-drop --url https://… --key-stdin | set-drop --off      # v1.4.7 photo drop (key on stdin only)
+relayctl set-drop --wrap-key-stdin                                  # v1.4.8 photo-key wrap key (stdin only)
 ```
 In the relay chat: `/test` (end-to-end check), `/test send` (also texts your own number), `/help`.
 
@@ -219,24 +224,26 @@ In the relay chat: `/test` (end-to-end check), `/test send` (also texts your own
   "spamMode": "follow-messages",
   "uiReactions": true, "uiPrompts": true, "readReceipts": true, "mirrorTapbacks": true,
   "stripOptOut": true, "relayAttachments": true, "quietNamesSeconds": 600, "undoSeconds": 5,
-  "dropUrl": "", "dropKey": 
+  "dropUrl": "", "dropKey": "", "dropWrapKey": ""
 }
 ```
 Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component re-reads it.
 
 ## Webhook payloads (Mac -> bot)
 - `{"type":"message","contactName","label","handle","text","receivedAt","untrusted":true}`, plus optional
-  `tag`, `unknown`, `quiet`, `reaction` and (v1.4.7) `media:[{token,kind,mime,ext,size,sha256,url,key}]`
-  (no name, no path: the ciphertext is on the drop at `url`, `key` decrypts it; relay_post.py fetches it once)
+  `tag`, `unknown`, `quiet`, `reaction` and `media:[{token,kind,mime,ext,size,sha256,v:2}]` (v1.4.8, with a
+  wrap key: the ciphertext and its sealed key are on the drop at `<drop url>/d/<token>`) or
+  `media:[{token,kind,mime,ext,size,sha256,url,key}]` (v1.4.7 / no wrap key). No name, no path; relay_post.py
+  fetches each photo once, only from its own drop.json url
 - `{"type":"batch","messages":[...]}` (several texts from one tick)
 - `{"type":"digest","count","quietHours","messages":[...],"untrusted":true}`
 - `{"type":"sent","label","contactName","dryRun","delivered","routedBy","at"}` (host, after a reply; no body)
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing","detail","at"}` (no message body)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=207a01f2034194b5e70eda4916a4c82b018529a026c5f70fdd53b2861b1e7e43 nl=1
+@@@@ FILE install.sh mode=755 sha256=72956590d73b307f1c51399d69585e61a9bade7e0c6a63f901089f9d06eb6721 nl=1
 #!/bin/bash
-# iMessage Relay v1.4.7 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
+# iMessage Relay v1.4.8 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
 # roster.json, and the existing "iMessage Relay Watcher" app (never rebuilt or re-signed, so
 # its Full Disk Access grant survives), and keeps the LaunchAgent pointing at that app.
@@ -786,13 +793,15 @@ cloudflare/
 *.test.*
 README.md
 @@@@ END
-@@@@ FILE drop/README.md mode=644 sha256=8bab5eb5179cc5e0d93639abb0e84de6449caee1e7f4f01f0e5828081ab8610c nl=1
+@@@@ FILE drop/README.md mode=644 sha256=1f7bb982977b799e15ce2001600ec86f30ec94bc65fcd6c38dd64740c4c169c8 nl=1
 # iMessage Relay photo drop (v1.4.7)
 
 A tiny service that lets inbound 1:1 photos reach X Chat **without the bot ever touching the Mac**.
 
 - The Mac encrypts each photo with a **fresh random AES-256-GCM key** and PUTs only the ciphertext here.
-  The key travels only inside that one webhook body to the bot; this service never sees it.
+  v1.4.7: the key travels only inside that one webhook body to the bot. v1.4.8 (wrap key set): the key is
+  sealed with a wrap key only the Mac and the bot hold and stored inside the blob, so the webhook carries
+  no key at all. Either way this service never sees a usable key (it never has the wrap key).
 - It stores **ciphertext only**: no plaintext, no filenames, no sender, no metadata beyond size and expiry.
   The stored name is a hash of the URL token.
 - Each file is **served once** (deleted before the response is returned) and **deleted after 10 minutes**
@@ -827,9 +836,12 @@ files with no cron. Checked only with `wrangler deploy --dry-run` and `wrangler 
 by the maintainers. See the comments in `wrangler.toml` for the three commands.
 
 ## Wiring
-- Mac: `printf %s "$PUT_KEY" | ~/.imessage-relay/relayctl set-drop --url https://<your-drop> --key-stdin`
-  (or pipe it from a file; never argv). `relayctl set-drop --off` turns photos back into "📷 Photo".
-- Bot: `~/.imessage-relay-routine/drop.json` (mode 600): `{"url":"https://<your-drop>","get_key":"…"}`.
+- Mac (copy each key file over first, then delete it on both sides):
+  `~/.imessage-relay/relayctl set-drop --url https://<your-drop> --key-stdin < put_key` and (v1.4.8)
+  `~/.imessage-relay/relayctl set-drop --wrap-key-stdin < wrap_key`
+  Never argv. `relayctl set-drop --off` turns photos back into "📷 Photo".
+- Bot: `~/.imessage-relay-routine/drop.json` (mode 600): `{"url":"https://<your-drop>","get_key":"…",
+  "wrap_key":"…","media_upload":true}` (`media_upload` only once the live routine prompt has the photo steps).
   relay_post.py only ever fetches from that url.
 @@@@ END
 @@@@ FILE drop/core.mjs mode=644 sha256=a72e0ffa8ac8b5d204db32baa25c77184a0ca923882631d43bf31e37f8af54dd nl=1
@@ -3613,7 +3625,7 @@ __PROGRAM_ARGUMENTS__
   "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
 }
 @@@@ END
-@@@@ FILE mac-helper/config.example.json mode=644 sha256=1b24d9b7252ce9f9aeb111ccc361583259019da7abd31127bb26b45a2fe97e4f nl=1
+@@@@ FILE mac-helper/config.example.json mode=644 sha256=8b6beddb8aa6323b9b6fbefcd67674a92ccc82e00dd9d5d5d9b9fc9d948a2575 nl=1
 {
   "paused": false,
   "dryRun": true,
@@ -3636,6 +3648,7 @@ __PROGRAM_ARGUMENTS__
   "webhookToken": "",
   "dropUrl": "",
   "dropKey": "",
+  "dropWrapKey": "",
   "ownerHandle": "",
   "ownerXHandle": "",
   "senderXHandle": "",
@@ -3644,10 +3657,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=73dcbac9d132f8638d35c66c8febdac2f862d2f32fdc22bfc6c6502f5955031d nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=904f71e3439afb1e08a7a9ceb4845698c6d03a2d335aa7f296f23132400fe03c nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.7.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.8.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -5236,10 +5249,10 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=baed0f56035b5851cef718796bf9b01c3bbfc0d72101fc7612b8c72b6921d894 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=1d41e7f9d28e11d73a884b76621b57370f8f010ce985c3d6763ae43f7f05fd04 nl=1
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.7: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -5978,7 +5991,7 @@ class Watcher:
         if m.get('quiet'):
             p['quiet'] = True               # v1.4.6: same sender as the line just above -> no "Name:" prefix
         if m.get('media'):
-            # v1.4.7: photo metadata for relay_post (token, kind, mime, ext, size, sha256, url, key); no names
+            # v1.4.7/v1.4.8: photo metadata for relay_post (token, kind, mime, ext, size, sha256, and url+key or v:2); no names
             p['media'] = [dict(x) for x in m['media']]
         if m.get('unknown'):
             p['unknown'] = True             # v1.4.5 spamMode tag: posted as "⚠️ Unknown · <label>: <text>"
@@ -6623,9 +6636,9 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=252ccaadca91125996b219bc030862045f40258fa3b4e6122e2333a89a7d43ec nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=6a70831f91c9d7a87f2aa3c3378d499ac71a6512cd460b45016ab80dd9932c9e nl=1
 """
-iMessage Relay v1.4.7: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -6649,8 +6662,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.7'
-EXTENSION_VERSION = '1.4.6'   # v1.4.7 did not change the Chrome extension: no reload needed from 1.4.6
+VERSION = '1.4.8'
+EXTENSION_VERSION = '1.4.6'   # v1.4.7 and v1.4.8 did not change the Chrome extension: no reload needed from 1.4.6
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -6717,6 +6730,7 @@ DEFAULT_CONFIG = {
     'webhookToken': '',
     'dropUrl': '',                 # v1.4.7: encrypted photo drop (https://…); empty = photos arrive as "📷 Photo"
     'dropKey': '',                 # v1.4.7: the drop's PUT/DELETE key (never logged, never in argv)
+    'dropWrapKey': '',             # v1.4.8: seals each photo's key inside the drop blob (shared with the bot only)
     'ownerHandle': '',
     'ownerXUserId': '',
     'ownerHandles': [],
@@ -6857,7 +6871,7 @@ def sanitize_config(user):
     cfg['dryRun'] = truthy(cfg.get('dryRun'), True)               # stays ON unless explicitly off
     cfg['deliveryCheck'] = truthy(cfg.get('deliveryCheck'), True)
     cfg['autoReopenMessages'] = truthy(cfg.get('autoReopenMessages'), False)
-    for k in ('footer', 'webhookUrl', 'webhookToken', 'ownerXHandle', 'senderXHandle', 'dropUrl', 'dropKey'):
+    for k in ('footer', 'webhookUrl', 'webhookToken', 'ownerXHandle', 'senderXHandle', 'dropUrl', 'dropKey', 'dropWrapKey'):
         if not isinstance(cfg.get(k), str):
             cfg[k] = ''
     cfg['ownerHandle'] = normalize_handle(cfg.get('ownerHandle'), cc) if isinstance(cfg.get('ownerHandle'), str) else ''
@@ -7917,8 +7931,8 @@ def __getattr__(name):
         return getattr(relay_echo, name)
     raise AttributeError("module 'relay_common' has no attribute %r" % name)
 @@@@ END
-@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=90f05382243b38af30b5ebbf513c85c9fdb0be80315d2e31f16d625b5b0dc1c5 nl=1
-"""iMessage Relay v1.4.7 -- look a name up in the Mac's Contacts (for a reply to someone new).
+@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=d314e4c16f8f82dab8aaf62a1171f0c07fe0fdecd75433058242360f23b6db38 nl=1
+"""iMessage Relay v1.4.8 -- look a name up in the Mac's Contacts (for a reply to someone new).
 
 When the owner starts a reply with a name that is on no relay list ("Jordan Rivera: hey"), the host
 asks the watcher (it holds Full Disk Access, which covers the Contacts database) to look that name up.
@@ -8045,8 +8059,8 @@ def lookup(name, cfg, globs=None, people=None, fuzzy=False):
             break
     return {'ok': True, 'matches': out}
 @@@@ END
-@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=09c9dc368522e84678ed38fa6719610e041f705d63f0fb9187cc087fd761e947 nl=1
-"""iMessage Relay v1.4.7 -- conversational addressing (directive parsing).
+@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=3903b47c098ad7f02f8a0df2d7658511631580ef6891c4688365ec2b574a056b nl=1
+"""iMessage Relay v1.4.8 -- conversational addressing (directive parsing).
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.parse_directive, rc.DIRECTIVE_DICT_WORDS, ...); relay_common re-exports these
 names lazily. Do not import relay_directive before relay_common.
@@ -8170,8 +8184,8 @@ def parse_directive(text, cfg, directory=None):
                 return h, text, 'unknown_handle', 'handle', ''
     return None, text, 'none', '', ''
 @@@@ END
-@@@@ FILE mac-helper/relay_drop.py mode=644 sha256=5ee2ead2dc1dd6c1af803839981e0fb3783826134ec89b32f34e9364b6a5c81e nl=1
-"""iMessage Relay v1.4.7 -- the encrypted photo drop (Mac side, inbound 1:1 photos only).
+@@@@ FILE mac-helper/relay_drop.py mode=644 sha256=47ca8c58ca992eb6e84f9327d899b3e7a2c940aa968f4ac2858516f9d0b3be2a nl=1
+"""iMessage Relay v1.4.8 -- the encrypted photo drop (Mac side, inbound 1:1 photos only).
 
 For each inbound 1:1 photo the watcher has staged (relay_media.stage_image: converted/downsized copy,
 mode 600), this module
@@ -8182,8 +8196,12 @@ mode 600), this module
   3. PUTs only that ciphertext to the drop (Authorization: Bearer <put key>), which keeps it at most
      10 minutes and serves it once,
   4. returns webhook metadata {token, kind, mime, ext, size, sha256, url, key} -- no filename, no path.
-The key exists only in memory and in that one webhook body; the drop never sees it, and it never sees
-the plaintext. Nothing about photos is logged except counts, sizes and kinds; never keys, URLs or hashes.
+v1.4.8 (format v2, used whenever dropWrapKey is set): the fresh per-photo key is itself sealed with the
+pre-shared wrap key (AES-256-GCM, associated data "imr-drop-v2-key:" + token) and travels INSIDE the drop
+blob: wire = 0x02 || wrap nonce(12) || wrapped key(32) || tag(16) || nonce(12) || ciphertext || tag(16),
+data associated data "imr-drop-v2:" + token. The webhook then carries only {token, kind, mime, ext, size,
+sha256, v: 2}: no key and no URL, so nothing secret or fragile passes through the routine's hands.
+The drop still holds ciphertext only (it never has the wrap key) and never sees the plaintext. Nothing about photos is logged except counts, sizes and kinds; never keys, URLs or hashes.
 The drop key (dropKey) is only a PUT/DELETE credential: it can't read anything back.
 """
 import base64
@@ -8195,10 +8213,14 @@ import urllib.error
 import urllib.request
 
 AAD_PREFIX = b'imr-drop-v1:'
+AAD_V2 = b'imr-drop-v2:'
+AAD_V2_KEY = b'imr-drop-v2-key:'
+V2_MAGIC = b'\x02'
+V2_HEADER = 1 + 12 + 32 + 16                 # magic + wrap nonce + wrapped key + tag
 NONCE_LEN = 12
 TAG_LEN = 16
 KEY_LEN = 32
-MAX_PLAIN = 4 * 1024 * 1024          # the drop's limit (Vercel's 4.5 MB function body, minus headroom)
+MAX_PLAIN = 4 * 1024 * 1024 - 64     # the drop's 4 MiB + 28 limit (Vercel's 4.5 MB body) minus the v2 header
 PUT_TIMEOUT_S = 20
 _CC = None
 
@@ -8266,6 +8288,40 @@ def seal(token, plain, rand=secrets.token_bytes):
     return nonce + gcm_encrypt(key, nonce, plain, AAD_PREFIX + token.encode('ascii')), b64u(key)
 
 
+def _b64u_decode(s):
+    return base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
+
+
+def wrap_key(cfg):
+    """The 32-byte wrap key (dropWrapKey, base64url) or None."""
+    s = str(cfg.get('dropWrapKey') or '')
+    if len(s) != 43:
+        return None
+    try:
+        k = _b64u_decode(s)
+    except Exception:
+        return None
+    return k if len(k) == KEY_LEN else None
+
+
+def seal_v2(token, plain, wkey, rand=secrets.token_bytes):
+    """v1.4.8 wire bytes for one photo: a fresh key and nonce every time, the key sealed with the wrap key."""
+    key, nonce, wnonce = rand(KEY_LEN), rand(NONCE_LEN), rand(NONCE_LEN)
+    tok = token.encode('ascii')
+    wrapped = wnonce + gcm_encrypt(wkey, wnonce, key, AAD_V2_KEY + tok)
+    return V2_MAGIC + wrapped + nonce + gcm_encrypt(key, nonce, plain, AAD_V2 + tok)
+
+
+def open_v2(token, wire, wkey):
+    """Inverse of seal_v2 (self-checks and tests). Raises ValueError."""
+    if len(wire) < V2_HEADER + NONCE_LEN + TAG_LEN or wire[:1] != V2_MAGIC:
+        raise ValueError('not v2')
+    tok = token.encode('ascii')
+    key = gcm_decrypt(wkey, wire[1:13], wire[13:V2_HEADER], AAD_V2_KEY + tok)
+    body = wire[V2_HEADER:]
+    return gcm_decrypt(key, body[:NONCE_LEN], body[NONCE_LEN:], AAD_V2 + tok)
+
+
 def configured(cfg):
     url, key = str(cfg.get('dropUrl') or ''), str(cfg.get('dropKey') or '')
     return url.startswith('https://') and len(key) >= 16
@@ -8278,7 +8334,7 @@ def drop_url(cfg, token):
 def _request(method, url, key, body=None, timeout=PUT_TIMEOUT_S):
     req = urllib.request.Request(url, data=body, method=method,
                                  headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/octet-stream',
-                                          'User-Agent': 'imessage-relay-drop/1.4.7'})
+                                          'User-Agent': 'imessage-relay-drop/1.4.8'})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status
@@ -8298,14 +8354,15 @@ def discard(media, cfg, requester=_request):
         return
     for x in media or []:
         tok = str((x or {}).get('token') or '')
-        if (x or {}).get('url') and len(tok) == 32:
+        if len(tok) == 32 and ((x or {}).get('url') or (x or {}).get('v') == 2):
             requester('DELETE', drop_url(cfg, tok), str(cfg['dropKey']))
 
 
 def upload_staged(media, cfg, requester=_request, rand=secrets.token_bytes):
     """Encrypt + PUT each staged photo; its plaintext copy is deleted before the upload starts, on every
     path. Returns (webhook_media, failed_count). webhook_media items: {token, kind, mime, ext, size,
-    sha256, url, key}."""
+    sha256, url, key} (format v1), or {token, kind, mime, ext, size, sha256, v: 2} with a wrap key."""
+    wkey = wrap_key(cfg)
     out, failed = [], 0
     for m in media or []:
         p = str(m.get('macPath') or '')
@@ -8324,7 +8381,10 @@ def upload_staged(media, cfg, requester=_request, rand=secrets.token_bytes):
             failed += 1
             continue
         try:
-            wire, key = seal(m['token'], data, rand)
+            if wkey:
+                wire, key = seal_v2(m['token'], data, wkey, rand), None
+            else:
+                wire, key = seal(m['token'], data, rand)
         except Exception:
             failed += 1
             continue
@@ -8333,12 +8393,17 @@ def upload_staged(media, cfg, requester=_request, rand=secrets.token_bytes):
         if not put(cfg, m['token'], wire, requester):
             failed += 1
             continue
-        out.append({'token': m['token'], 'kind': 'image', 'mime': m.get('mime'), 'ext': m.get('ext'),
-                    'size': m.get('size'), 'sha256': m.get('sha256'), 'url': drop_url(cfg, m['token']), 'key': key})
+        item = {'token': m['token'], 'kind': 'image', 'mime': m.get('mime'), 'ext': m.get('ext'),
+                'size': m.get('size'), 'sha256': m.get('sha256')}
+        if key is None:
+            item['v'] = 2                          # the key is inside the drop blob, sealed with the wrap key
+        else:
+            item.update(url=drop_url(cfg, m['token']), key=key)
+        out.append(item)
     return out, failed
 @@@@ END
-@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=d85d83f543cb7203f0d4c3f75ba39138ed962285d12f5ae2acf4b76b65ec4b5a nl=1
-"""iMessage Relay v1.4.7 -- echo guard + bot-output detection.
+@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=b4147f31fbced66663673af9775fbd1ef28bf8f62994981523901deca229c070 nl=1
+"""iMessage Relay v1.4.8 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
 these names lazily. Do not import relay_echo before relay_common."""
@@ -8527,8 +8592,8 @@ def lookup_quote(quoted, cfg=None, at=None, path=None):
             return hits
     return set()
 @@@@ END
-@@@@ FILE mac-helper/relay_media.py mode=644 sha256=4349a49067f76a734889ef3d338867768f7a3335d7da2159bc443404186f273b nl=1
-"""iMessage Relay v1.4.7 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
+@@@@ FILE mac-helper/relay_media.py mode=644 sha256=64c5ac38b2ad36114a510d8e5c024430b97ee6b1944b4fbdc56b2d6d1d48a0c0 nl=1
+"""iMessage Relay v1.4.8 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
 
 Inbound (iMessage -> X Chat). The watcher holds Full Disk Access, so it is the only process that can
 read ~/Library/Messages/Attachments. For a relayed message with photos it:
@@ -8970,8 +9035,8 @@ def sweep_all(now=None):
     return {'outbox': sweep(OUTBOX_DIR, OUTBOX_TTL_S, now), 'inflight': sweep(INFLIGHT_DIR, INFLIGHT_TTL_S, now),
             'sendStage': sweep(SEND_STAGE_DIR, SEND_STAGE_TTL_S, now)}
 @@@@ END
-@@@@ FILE mac-helper/relay_send.py mode=644 sha256=d4a018c5c167a5fb14ac6d4c44698dd4a488a34a7b2360dcf70072ea9d7d3e5c nl=1
-"""iMessage Relay v1.4.7 -- delivery-proof queries and Messages.app sending.
+@@@@ FILE mac-helper/relay_send.py mode=644 sha256=8e2e1332269eeecb2d3b371fd37c6749845dc6c7139acae93cd992fbe15963cd nl=1
+"""iMessage Relay v1.4.8 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
@@ -9229,9 +9294,9 @@ def open_messages_hidden(runner=subprocess.run):
     except Exception:
         return False
 @@@@ END
-@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=b3f2ad25642649d9861848991ddb62e2700efca5622baef73c4793221e1924f4 nl=1
+@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=d249caca1cd28425182a634cc213c45d3617d6bc957f0584d13595d0fbe2d787 nl=1
 """
-iMessage Relay v1.4.7: guided-setup helpers shared by relayctl and the watcher.
+iMessage Relay v1.4.8: guided-setup helpers shared by relayctl and the watcher.
 
   detect_owner_handles(con, cc)   the owner's OWN iMessage/SMS addresses, read from chat.db rows the
                                   owner sent (message.account / destination_caller_id). Handles only;
@@ -9383,9 +9448,9 @@ def apply_setup(values, token=None):
     rc.with_host_lock(_do)
     return out
 @@@@ END
-@@@@ FILE mac-helper/relay_test.py mode=644 sha256=e9e5ce592e5a9b73926ce736e238742802cf1346dbfb2ac28d934103fbb0a665 nl=1
+@@@@ FILE mac-helper/relay_test.py mode=644 sha256=e8c522667ef6364c25861a36d8c66211ee0edc8f33fac92267628754478f4fd1 nl=1
 """
-iMessage Relay v1.4.7: the /test end-to-end check (runs inside the native host).
+iMessage Relay v1.4.8: the /test end-to-end check (runs inside the native host).
 
 The owner types "/test" (or "/test send") in the relay chat. The extension intercepts it before any
 reply routing and asks the host for {type:"test"}. The host then checks, each with its own timeout:
@@ -9564,8 +9629,8 @@ def record_routine(test_id, seen, now):
     rc.log_event('test_routine', testId=rec['testId'], seen=bool(seen))
     return True
 @@@@ END
-@@@@ FILE mac-helper/relay_ui.py mode=644 sha256=2aa855eac5e69c052fef2770650876f3e9347f090cee98bae492118b1b67e4f6 nl=1
-"""v1.4.7: fast, phone-visible feedback through the owner's own X tab (the browser extension).
+@@@@ FILE mac-helper/relay_ui.py mode=644 sha256=5616f2c3b8695ceff2fc5a320c462b959524ae5a27860fa1c615a080f54793b6 nl=1
+"""v1.4.8: fast, phone-visible feedback through the owner's own X tab (the browser extension).
 
 The watcher (chat.db) and the host (per-request, under Chrome) leave small BODY-FREE action records here;
 the extension polls the host for them and performs them in X Chat's web UI as the owner:
@@ -9759,7 +9824,7 @@ def map_unread(path=None, now=None, max_age_s=86400):
     return [(g, v) for g, v in sorted(ent.items(), key=lambda kv: -kv[1]['at'])
             if v.get('dm') and not v.get('read') and v.get('rowid') is not None and now - v['at'] < max_age_s]
 @@@@ END
-@@@@ FILE mac-helper/relayctl.py mode=755 sha256=f70a4a7f3b1617f030d2b49dbc1371963e12639bc3afb0d0265fe65ed3ababfe nl=1
+@@@@ FILE mac-helper/relayctl.py mode=755 sha256=93d15bbc12847ea63fd667124b65fe12be29e91c864b6ae4cd9b07d2c7151c12 nl=1
 #!/usr/bin/python3
 """
 relayctl: the one command the bot (or you) uses to operate iMessage Relay on the Mac.
@@ -9783,6 +9848,7 @@ Every command prints one JSON object. Message bodies are never printed or stored
                                           spamMode follow-messages|tag|off (v1.4.6 default follow-messages: mirror Messages' filtering)
                                           batchWebhooks on|off (v1.4.5: texts waiting together share one webhook)
   relayctl set-drop --url URL --key-stdin       v1.4.7 encrypted photo drop (key on stdin only); --off clears it
+  relayctl set-drop --wrap-key-stdin            v1.4.8 photo-key wrap key (stdin only; keeps keys out of the webhook)
   relayctl set-webhook --url URL --token-stdin   set webhookUrl + webhookToken together; the key is
                                           read from stdin so it never lands in argv or shell history
   relayctl contacts                       list opted-in contacts with their labels
@@ -9880,6 +9946,7 @@ def public_config(cfg):
     c = dict(cfg)
     c['webhookToken'] = 'set' if cfg.get('webhookToken') else ''
     c['dropKey'] = 'set' if cfg.get('dropKey') else ''
+    c['dropWrapKey'] = 'set' if cfg.get('dropWrapKey') else ''
     c['webhookUrl'] = 'set' if cfg.get('webhookUrl') else ''
     return c
 
@@ -9931,12 +9998,23 @@ def cmd_set_webhook(url, token_stdin=False, stdin=None):
     return {'ok': True, 'set': ['webhookUrl', 'webhookToken'], 'config': public_config(cfg)}
 
 
-def cmd_set_drop(url=None, key_stdin=False, off=False, stdin=None):
+def cmd_set_drop(url=None, key_stdin=False, off=False, stdin=None, wrap_key_stdin=False):
     """v1.4.7: the encrypted photo drop. The PUT key is ALWAYS read from stdin (never argv); `--off`
-    clears both, after which inbound photos arrive as "📷 Photo" again."""
+    clears all drop settings, after which inbound photos arrive as "📷 Photo" again.
+    v1.4.8: `--wrap-key-stdin` sets dropWrapKey (43-char base64url, 32 bytes) from stdin; with it the
+    per-photo key travels sealed inside the drop blob instead of in the webhook."""
     if off:
-        cfg = edit_config(lambda raw: raw.update({'dropUrl': '', 'dropKey': ''}))
-        return {'ok': True, 'set': ['dropUrl', 'dropKey'], 'photoDrop': False}
+        cfg = edit_config(lambda raw: raw.update({'dropUrl': '', 'dropKey': '', 'dropWrapKey': ''}))
+        return {'ok': True, 'set': ['dropUrl', 'dropKey', 'dropWrapKey'], 'photoDrop': False}
+    if wrap_key_stdin:
+        if url or key_stdin:
+            raise CtlError('set the wrap key on its own: relayctl set-drop --wrap-key-stdin < file')
+        wk = (stdin or sys.stdin).read().strip()
+        if not re.match(r'^[A-Za-z0-9_-]{43}$', wk):
+            raise CtlError('bad wrap key (expected 43 base64url characters)')
+        cfg = edit_config(lambda raw: raw.update({'dropWrapKey': wk}))
+        return {'ok': True, 'set': ['dropWrapKey'], 'photoDropWrapped': True,
+                'photoDrop': bool(str(cfg.get('dropUrl') or '').startswith('https://') and cfg.get('dropKey'))}
     url = (url or '').strip().rstrip('/')
     if not re.match(r'^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$', url):
         raise CtlError('dropUrl must be an https:// URL')
@@ -10405,7 +10483,8 @@ def cmd_status(runner=subprocess.run):
             'watcherApp': app,
             'launchAgentLoaded': launchagent_loaded(runner), 'hostManifests': host_manifests(),
             'messagesRunning': rc.messages_running(runner), 'extension': ext, 'problems': problems,
-            'photoDrop': bool(str(cfg.get('dropUrl') or '').startswith('https://') and cfg.get('dropKey'))}
+            'photoDrop': bool(str(cfg.get('dropUrl') or '').startswith('https://') and cfg.get('dropKey')),
+            'photoDropWrapped': bool(cfg.get('dropWrapKey'))}
 
 
 def main(argv=None):
@@ -10421,7 +10500,7 @@ def main(argv=None):
     a = sp.add_parser('roster'); a.add_argument('--days', type=int, default=0)
     a = sp.add_parser('quiet-hours'); a.add_argument('start'); a.add_argument('end', nargs='?'); a.add_argument('--tz', default='local')
     a = sp.add_parser('set'); a.add_argument('key'); a.add_argument('value')
-    a = sp.add_parser('set-drop'); a.add_argument('--url'); a.add_argument('--key-stdin', action='store_true'); a.add_argument('--off', action='store_true')
+    a = sp.add_parser('set-drop'); a.add_argument('--url'); a.add_argument('--key-stdin', action='store_true'); a.add_argument('--off', action='store_true'); a.add_argument('--wrap-key-stdin', action='store_true')
     a = sp.add_parser('set-webhook'); a.add_argument('--url', required=True); a.add_argument('--token-stdin', action='store_true')
     a = sp.add_parser('add-contact'); a.add_argument('--name', required=True); a.add_argument('--handle', required=True); a.add_argument('--label', default='')
     a = sp.add_parser('label'); a.add_argument('key'); a.add_argument('label')
@@ -10465,7 +10544,7 @@ def main(argv=None):
         elif c == 'set':
             out = cmd_set(args.key, args.value)
         elif c == 'set-drop':
-            out = cmd_set_drop(args.url, key_stdin=args.key_stdin, off=args.off)
+            out = cmd_set_drop(args.url, key_stdin=args.key_stdin, off=args.off, wrap_key_stdin=args.wrap_key_stdin)
         elif c == 'set-webhook':
             out = cmd_set_webhook(args.url, token_stdin=args.token_stdin)
         elif c == 'contacts':
@@ -10703,9 +10782,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=1ead48d7b09d070d888a84453e7a373cfa09dd4d0c9ff1b075eb6e28cf0a6de0 nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=204c2ec0ed065ff2f46d0cd07d6e0f22c1244194913803aa816ccb4fbc986843 nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.7 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.8 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -10786,6 +10865,13 @@ STDOUT (one JSON object):
   "media_off": true (an upload failed) posts the text with a clear "couldn't be relayed" notice; so does
   a photo the drop no longer has. Photos are only fetched and uploaded when the request has
   "media_upload": true (a routine prompt with the photo steps); without it the text posts with the notice.
+  v1.4.8: a v2 photo item carries no key and no url ({token, ext, size, sha256, v: 2}); the per-photo key is
+  sealed inside the drop blob with drop.json's "wrap_key", and the url is always drop.json's url + /d/<token>.
+  drop.json "media_upload": true (set by the operator once the live prompt has the photo steps) works like
+  the request flag. Every photo run reports "media_status" {code: count} (body-free) and appends one
+  counts-only line to <state dir>/media.log: not_requested, routine_media_off, no_drop, no_key, bad_url,
+  fetch_failed, size_mismatch, decrypt_failed, sha_mismatch, no_media_helper, prepare_failed,
+  upload_ready, attached, missing_after_upload.
   The routine never touches the Mac.
   Photos are in flight only: the copy, the parts and a tiny state file (mode 600) are deleted when the
   send is built, on any error, or by the sweep after 15 min. Nothing about them is logged.
@@ -10857,6 +10943,10 @@ DROP_CONFIG = '~/.imessage-relay-routine/drop.json'
 DROP_TIMEOUT_S = 30
 DROP_AAD = b'imr-drop-v1:'
 DROP_OVERHEAD = 12 + 16
+DROP_AAD_V2 = b'imr-drop-v2:'
+DROP_AAD_V2_KEY = b'imr-drop-v2-key:'
+DROP_V2_HEADER = 1 + 12 + 32 + 16                # 0x02 || wrap nonce || wrapped key || tag
+MEDIA_LOG_MAX = 256 * 1024
 
 
 def media_meta(items):
@@ -10871,9 +10961,12 @@ def media_meta(items):
         if (_HEX32.match(tok) and ext in MEDIA_EXTS and _HEX64.match(sha) and isinstance(size, int)
                 and not isinstance(size, bool) and 0 < size <= MEDIA_MAX_BYTES):
             it = {'token': tok, 'ext': ext, 'size': size, 'sha256': sha}
-            url, key = str(x.get('url') or ''), str(x.get('key') or '')
-            if url.startswith('https://') and len(url) <= 300 and _B64U_KEY.match(key):
-                it.update(url=url, key=key)
+            if x.get('v') == 2:
+                it['v'] = 2                    # v1.4.8: the key is sealed inside the drop blob (wrap key)
+            else:
+                url, key = str(x.get('url') or ''), str(x.get('key') or '')
+                if url.startswith('https://') and len(url) <= 300 and _B64U_KEY.match(key):
+                    it.update(url=url, key=key)
             out.append(it)
     return out
 
@@ -10988,7 +11081,12 @@ def load_drop(req, dedupe_path):
     url, key = str((d or {}).get('url') or '').rstrip('/'), str((d or {}).get('get_key') or '')
     if not url.startswith('https://') or len(key) < 16:
         return None
-    return {'url': url, 'get_key': key, 'crypto_python': str((d or {}).get('crypto_python') or '')}
+    wk = str((d or {}).get('wrap_key') or '')
+    return {'url': url, 'get_key': key, 'crypto_python': str((d or {}).get('crypto_python') or ''),
+            'wrap_key': wk if _B64U_KEY.match(wk) else '',
+            # v1.4.8: the operator turns this on once the live routine prompt has the photo steps, so the
+            # request no longer has to carry "media_upload": true on every rerun.
+            'media_upload': (d or {}).get('media_upload') is True}
 
 
 def _b64u_decode(s):
@@ -11000,7 +11098,7 @@ def drop_get(url, key, max_bytes, timeout=DROP_TIMEOUT_S):
     """GET one ciphertext (served once). bytes or None. Never logs anything."""
     import urllib.request
     import urllib.error
-    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'imessage-relay-post/1.4.7'})
+    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'imessage-relay-post/1.4.8'})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             if r.status != 200:
@@ -11012,15 +11110,33 @@ def drop_get(url, key, max_bytes, timeout=DROP_TIMEOUT_S):
 
 
 _DECRYPT_CHILD = (
-    "import json,sys,os\n"
+    "import json,sys,os,base64\n"
     "from cryptography.hazmat.primitives.ciphers.aead import AESGCM\n"
     "a=json.load(sys.stdin)\n"
     "w=open(a['in'],'rb').read()\n"
-    "import base64\n"
-    "k=base64.urlsafe_b64decode(a['key']+'='*(-len(a['key'])%4))\n"
-    "p=AESGCM(k).decrypt(w[:12],w[12:],a['aad'].encode())\n"
+    "d=lambda s:base64.urlsafe_b64decode(s+'='*(-len(s)%4))\n"
+    "t=a['token'].encode()\n"
+    "if a.get('v')==2:\n"
+    " k=AESGCM(d(a['wrap_key'])).decrypt(w[1:13],w[13:61],b'imr-drop-v2-key:'+t);w=w[61:];aad=b'imr-drop-v2:'+t\n"
+    "else:\n"
+    " k=d(a['key']);aad=b'imr-drop-v1:'+t\n"
+    "p=AESGCM(k).decrypt(w[:12],w[12:],aad)\n"
     "fd=os.open(a['out'],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
     "os.write(fd,p);os.close(fd)\n")
+
+
+def _open_wire(AESGCM, wire, token, key_b64u=None, wrap_b64u=None, v=1):
+    """Plaintext of one drop blob (raises on any bad tag). v1: nonce||ct||tag with the webhook's key.
+    v2: 0x02 || wrapped key || nonce||ct||tag; the per-photo key is unsealed with the wrap key."""
+    t = token.encode('ascii')
+    if v == 2:
+        if wire[:1] != b'\x02':
+            raise ValueError('not v2')
+        key = AESGCM(_b64u_decode(wrap_b64u)).decrypt(wire[1:13], wire[13:DROP_V2_HEADER], DROP_AAD_V2_KEY + t)
+        wire, aad = wire[DROP_V2_HEADER:], DROP_AAD_V2 + t
+    else:
+        key, aad = _b64u_decode(key_b64u), DROP_AAD + t
+    return AESGCM(key).decrypt(wire[:12], wire[12:], aad)
 
 
 def _crypto_pythons(drop):
@@ -11032,17 +11148,17 @@ def _crypto_pythons(drop):
             yield c
 
 
-def drop_decrypt(wire, key_b64u, token, out_path, drop, runner=subprocess.run):
-    """Decrypt nonce||ct||tag into out_path (mode 600). In-process with `cryptography` when this python
-    has it, else via a python that does (key on stdin, never argv). True/False."""
-    aad = DROP_AAD + token.encode('ascii')
+def drop_decrypt(wire, key_b64u, token, out_path, drop, runner=subprocess.run, v=1):
+    """Decrypt one drop blob (v1 or v2, see _open_wire) into out_path (mode 600). In-process with
+    `cryptography` when this python has it, else via a python that does (keys on stdin, never argv)."""
+    wrap = (drop or {}).get('wrap_key') or ''
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     except ImportError:
         AESGCM = None
     if AESGCM is not None:
         try:
-            plain = AESGCM(_b64u_decode(key_b64u)).decrypt(wire[:12], wire[12:], aad)
+            plain = _open_wire(AESGCM, wire, token, key_b64u, wrap, v)
         except Exception:
             return False
         fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -11057,7 +11173,8 @@ def drop_decrypt(wire, key_b64u, token, out_path, drop, runner=subprocess.run):
         for py in _crypto_pythons(drop):
             try:
                 r = runner([py, '-c', _DECRYPT_CHILD], input=json.dumps(
-                    {'in': wire_path, 'out': out_path, 'key': key_b64u, 'aad': aad.decode('ascii')}).encode(),
+                    {'in': wire_path, 'out': out_path, 'key': key_b64u, 'wrap_key': wrap, 'v': v,
+                     'token': token}).encode(),
                     capture_output=True, timeout=60)
             except Exception:
                 continue
@@ -11069,34 +11186,66 @@ def drop_decrypt(wire, key_b64u, token, out_path, drop, runner=subprocess.run):
         _rm(wire_path)
 
 
-def media_fetch(item, drop, media_dir=None, getter=drop_get, runner=subprocess.run):
-    """v1.4.7: bring one photo from the drop: GET once (only from OUR drop's url), check the size, decrypt,
-    check the sha256. Leaves <media_dir>/<token>.<ext> (mode 600) or nothing. True/False."""
-    if not drop or not item.get('url') or not item.get('key'):
-        return False
-    if item['url'] != drop['url'] + '/d/' + item['token']:
-        return False                                   # never fetch from anywhere else (and never send our key there)
+def media_fetch_status(item, drop, media_dir=None, getter=drop_get, runner=subprocess.run):
+    """v1.4.7/v1.4.8: bring one photo from the drop: GET once (only from OUR drop's url, derived from
+    drop.json + token; never from a url in the payload), check the size, decrypt, check the sha256.
+    Leaves <media_dir>/<token>.<ext> (mode 600) or nothing. Returns a body-free status code:
+    'ok', 'no_drop', 'no_key', 'bad_url', 'fetch_failed', 'size_mismatch', 'decrypt_failed', 'sha_mismatch'."""
+    if not drop:
+        return 'no_drop'
+    v = 2 if item.get('v') == 2 else 1
+    if v == 2 and not drop.get('wrap_key'):
+        return 'no_key'
+    if v == 1 and not item.get('key'):
+        return 'no_key'
+    url = drop['url'] + '/d/' + item['token']
+    if v == 1 and item.get('url') and item['url'] != url:
+        return 'bad_url'                               # never fetch from anywhere else (and never send our key there)
     d = os.path.expanduser(media_dir or MEDIA_DIR)
     os.makedirs(d, mode=0o700, exist_ok=True)
     out = media_box_path(item, media_dir)
     if os.path.exists(out):
-        return True
-    wire = getter(item['url'], drop['get_key'], item['size'] + DROP_OVERHEAD)
-    if not wire or len(wire) != item['size'] + DROP_OVERHEAD:
-        return False
+        return 'ok'
+    want = item['size'] + DROP_OVERHEAD + (DROP_V2_HEADER if v == 2 else 0)
+    wire = getter(url, drop['get_key'], want)
+    if not wire:
+        return 'fetch_failed'
+    if len(wire) != want:
+        return 'size_mismatch'
     try:
-        if not drop_decrypt(wire, item['key'], item['token'], out, drop, runner):
+        if not drop_decrypt(wire, item.get('key'), item['token'], out, drop, runner, v=v):
             _rm(out)
-            return False
+            return 'decrypt_failed'
     except OSError:
         _rm(out)
-        return False
+        return 'decrypt_failed'
     finally:
         wire = None
     if not media_verify(item, media_dir):
         _rm(out)
-        return False
-    return True
+        return 'sha_mismatch'
+    return 'ok'
+
+
+def media_fetch(item, drop, media_dir=None, getter=drop_get, runner=subprocess.run):
+    """True when media_fetch_status() is 'ok'."""
+    return media_fetch_status(item, drop, media_dir, getter, runner) == 'ok'
+
+
+def media_log(state_dir, status, photos, nbytes, now=None):
+    """v1.4.8: one counts-only line per photo run in <state dir>/media.log (mode 600): time, number of
+    photos, total bytes and status codes. Never tokens, keys, urls, hashes, names or text."""
+    try:
+        p = os.path.join(os.path.expanduser(state_dir), 'media.log')
+        if os.path.exists(p) and os.path.getsize(p) > MEDIA_LOG_MAX:
+            os.replace(p, p + '.1')
+        line = json.dumps({'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)), 'photos': int(photos),
+                           'bytes': int(nbytes), 'status': {str(k): int(v) for k, v in sorted(status.items())}})
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, 'a') as fh:
+            fh.write(line + '\n')
+    except (OSError, ValueError):
+        pass
 
 
 def media_failed_text(text, n):
@@ -11625,10 +11774,19 @@ def process(req, runner=None):
     all_media = [it for ln in lines for it in ln.get('media') or []]
     media_keys = req.get('media_keys') if isinstance(req.get('media_keys'), dict) else {}
     line_media = {}
-    if all_media and not req.get('media_upload'):
-        # v1.4.7: only a routine prompt with the photo steps sets "media_upload": true. Any other prompt gets
-        # the text with a notice (never an "upload" answer it doesn't know); the drop copy expires unfetched.
+    media_status = {}
+
+    def _st(code, n=1):
+        media_status[code] = media_status.get(code, 0) + n
+    drop = load_drop(req, dedupe_path) if all_media else None
+    if all_media and not (req.get('media_upload') or (drop or {}).get('media_upload')):
+        # v1.4.7: only a routine prompt with the photo steps sets "media_upload": true (v1.4.8: or drop.json's
+        # "media_upload": true, set by the operator once the prompt has them). Any other prompt gets the
+        # text with a notice (never an "upload" answer it doesn't know); the drop copy expires unfetched.
         req = dict(req, media_off=True)
+        _st('not_requested', len(all_media))
+    elif all_media and req.get('media_off'):
+        _st('routine_media_off', len(all_media))
     if all_media and req.get('media_off'):
         media_cleanup(all_media, media_dir)
         for ln in lines:
@@ -11636,22 +11794,34 @@ def process(req, runner=None):
                 ln['text'] = media_failed_text(ln['text'], len(ln['media']))
     elif all_media and not media_keys:
         # v1.4.7: fetch each photo from the encrypted drop first (served once; the routine never touches the Mac)
-        drop = load_drop(req, dedupe_path)
+        ready = []
         if locate_media_helper(req.get('helper'))[0]:
             for it in all_media:
-                if not os.path.exists(media_box_path(it, media_dir)):
-                    try:
-                        media_fetch(it, drop, media_dir, getter=req.get('_drop_getter') or drop_get)
-                    except Exception:
-                        _rm(media_box_path(it, media_dir))
+                try:
+                    code = media_fetch_status(it, drop, media_dir, getter=req.get('_drop_getter') or drop_get)
+                except Exception:
+                    code = 'fetch_failed'
+                    _rm(media_box_path(it, media_dir))
+                if code == 'ok':
+                    ready.append(it)
+                else:
+                    _st(code)
+        else:
+            _st('no_media_helper', len(all_media))
         try:
             uploads, failed = media_prepare(conv, all_media, xchat, req.get('helper'), runner, media_dir)
         except Exception:
             media_cleanup(all_media, media_dir)
             uploads, failed = [], list(all_media)
+        nprep = len([f for f in failed if f in ready])
+        if nprep:
+            _st('prepare_failed', nprep)
         if uploads:
+            _st('upload_ready', len(uploads))
+            media_log(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', media_status, len(all_media),
+                      sum(it['size'] for it in all_media))
             return {'action': 'upload', 'uploads': uploads, 'posted_kind': ev['kind'],
-                    'failed': len(failed),
+                    'failed': len(failed), 'media_status': media_status,
                     'reason': 'upload each photo (chat_media_upload_initialize/append), then run again with the same '
                               'payload and media_keys {token: media_hash_key}'}
         media_keys = {}                              # nothing uploadable: text with notices
@@ -11672,8 +11842,14 @@ def process(req, runner=None):
                     missing += 1
             if missing:
                 ln['text'] = media_failed_text(ln['text'], missing)
+                if media_keys:
+                    _st('missing_after_upload', missing)
             if entries:
                 line_media[ln['id']] = entries
+                _st('attached', len(entries))
+    if all_media:
+        media_log(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', media_status, len(all_media),
+                  sum(it['size'] for it in all_media))
 
     reply_to = payload.get('reply_to')          # item 1: X event id of the owner's reply (optional)
     if not xchat.get('events'):
@@ -11715,7 +11891,10 @@ def process(req, runner=None):
     ids = [ln['id'] for ln in lines]
     if not req.get('defer_commit'):
         dd.commit(ids)
-    return {'action': 'send', 'sends': sends, 'encrypted': True, 'posted_kind': ev['kind'], 'ack_ids': ids}
+    res = {'action': 'send', 'sends': sends, 'encrypted': True, 'posted_kind': ev['kind'], 'ack_ids': ids}
+    if media_status:
+        res['media_status'] = media_status       # v1.4.8: body-free photo outcome codes (counts only)
+    return res
 
 
 def ack(req):
@@ -21501,7 +21680,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=11568828b90f2794de3b532a3c9d9c8a0caa5775aabd1a9a1f69f9c75b94b567 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=6fa108e6796e9b1fef3d59953cd776e2509722197337059646a6246bf20d4cd4 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -21694,10 +21873,11 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.7')
+        self.assertEqual(m.rc.VERSION, '1.4.8')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
-            self.assertIn("export const VERSION = '1.4.7'", fh.read())
-        self.assertEqual(relay_drop.MAX_PLAIN, 4 * 1024 * 1024, 'matches the drop MAX_PLAIN')
+            self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
+        # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)
+        self.assertLessEqual(relay_drop.MAX_PLAIN + relay_drop.V2_HEADER + 28, 4 * 1024 * 1024 + 28)
 
 
 class Ctl(unittest.TestCase):
@@ -21717,6 +21897,245 @@ class Ctl(unittest.TestCase):
         self.ctl.cmd_set_drop(off=True)
         self.assertEqual(self.m.rc.load_config()['dropKey'], '')
         self.assertRaises(self.ctl.CtlError, self.ctl.cmd_set, 'dropKey', 'x')
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
+@@@@ FILE tests/py/test_v148_wrap.py mode=644 sha256=0ad51862ef02a04feae79457aabab199204d15198408b04773ceb82021090a6c nl=1
+"""v1.4.8: the per-photo key travels sealed inside the drop blob (wrap key), so the webhook item carries no
+key and no url; relay_post derives the url from drop.json; body-free media_status codes + counts-only
+media.log. Regression: an item whose key did not survive the routine's hands is diagnosed ('no_key'),
+never fetched. No network; fake drop. Fictional names only."""
+import base64
+import hashlib
+import io
+import json
+import os
+import subprocess
+import sys
+import unittest
+
+from helpers import fresh, tmpdir
+import test_v146_media as v146
+
+PNG = v146.PNG
+
+import relay_drop  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'routine'))
+import relay_post as rp  # noqa: E402
+
+DROP = 'https://drop.example.invalid'
+WK = relay_drop.b64u(bytes(range(32)))
+TOK = 'e' * 32
+
+
+class Wrap(unittest.TestCase):
+    def test_round_trip_fresh_and_bound(self):
+        wk = bytes(range(32))
+        w1, w2 = relay_drop.seal_v2(TOK, PNG, wk), relay_drop.seal_v2(TOK, PNG, wk)
+        self.assertEqual(w1[:1], b'\x02')
+        self.assertEqual(len(w1), len(PNG) + 28 + relay_drop.V2_HEADER)
+        self.assertNotEqual(w1[1:13], w2[1:13], 'fresh wrap nonce')
+        self.assertNotEqual(w1[relay_drop.V2_HEADER:][:12], w2[relay_drop.V2_HEADER:][:12], 'fresh data nonce')
+        self.assertEqual(relay_drop.open_v2(TOK, w1, wk), PNG)
+        for tok, key in (('f' * 32, wk), (TOK, bytes(32))):
+            with self.assertRaises(ValueError):
+                relay_drop.open_v2(tok, w1, key)           # another token, or the wrong wrap key
+        bad = bytearray(w1)
+        bad[5] ^= 1
+        with self.assertRaises(ValueError):
+            relay_drop.open_v2(TOK, bytes(bad), wk)          # a tampered wrapped key
+        self.assertNotIn(PNG[:16], w1)
+
+    def test_wrap_key_parsing(self):
+        self.assertEqual(relay_drop.wrap_key({'dropWrapKey': WK}), bytes(range(32)))
+        for bad in ('', 'short', WK[:-1], '!' * 43):
+            self.assertIsNone(relay_drop.wrap_key({'dropWrapKey': bad}))
+
+
+class UploadV2(v146.unittest.TestCase):
+    def setUp(self):
+        self.d = tmpdir()
+        self.cfg = {'dropUrl': DROP, 'dropKey': 'k' * 40, 'dropWrapKey': WK}
+        self.reqs = []
+
+    def staged(self):
+        p = os.path.join(self.d, TOK + '.png')
+        with open(p, 'wb') as fh:
+            fh.write(PNG)
+        return {'token': TOK, 'kind': 'image', 'mime': 'image/png', 'ext': 'png', 'size': len(PNG),
+                'sha256': hashlib.sha256(PNG).hexdigest(), 'macPath': p}
+
+    def requester(self, method, url, key, body=None, timeout=None):
+        self.reqs.append((method, url, body, os.listdir(self.d)))
+        return 201
+
+    def test_webhook_item_has_no_key_and_no_url(self):
+        out, failed = relay_drop.upload_staged([self.staged()], self.cfg, self.requester)
+        self.assertEqual(failed, 0)
+        self.assertEqual(out[0], {'token': TOK, 'kind': 'image', 'mime': 'image/png', 'ext': 'png', 'size': len(PNG),
+                                  'sha256': hashlib.sha256(PNG).hexdigest(), 'v': 2})
+        method, url, body, files = self.reqs[0]
+        self.assertEqual((method, url, files), ('PUT', DROP + '/d/' + TOK, []))
+        self.assertEqual(relay_drop.open_v2(TOK, body, bytes(range(32))), PNG)
+        relay_drop.discard(out, self.cfg, self.requester)
+        self.assertEqual(self.reqs[-1][:2], ('DELETE', DROP + '/d/' + TOK), 'held spam is still discarded')
+
+    def test_without_wrap_key_stays_v1(self):
+        cfg = dict(self.cfg, dropWrapKey='')
+        out, _ = relay_drop.upload_staged([self.staged()], cfg, self.requester)
+        self.assertEqual(set(out[0]) - {'kind', 'mime', 'ext', 'size', 'sha256', 'token'}, {'url', 'key'})
+
+    def test_largest_photo_fits_the_drop(self):
+        self.assertLessEqual(relay_drop.MAX_PLAIN + relay_drop.V2_HEADER + 28, 4 * 1024 * 1024 + 28)
+
+
+class RoutineV2(unittest.TestCase):
+    runner = v146.RoutineMedia.runner
+    req = v146.RoutineMedia.req
+    files = v146.RoutineMedia.files
+
+    def setUp(self):
+        v146.RoutineMedia.setUp(self)
+        os.remove(os.path.join(self.media_dir, TOK + '.png'))
+        self.wire = relay_drop.seal_v2(TOK, PNG, bytes(range(32)))
+        self.item = {k: v for k, v in self.item.items() if k != 'macPath'}
+        self.item['v'] = 2
+        self.gets = []
+
+    def getter(self, url, key, max_bytes):
+        self.gets.append((url, key, max_bytes))
+        w, self.wire = self.wire, None
+        return w
+
+    def dreq(self, drop=None, **over):
+        r = self.req(drop=drop or {'url': DROP, 'get_key': 'g' * 40, 'wrap_key': WK}, _drop_getter=self.getter)
+        r.update(over)
+        return r
+
+    def log(self):
+        p = os.path.join(self.d, 'media.log')
+        with open(p) as fh:
+            lines = [json.loads(x) for x in fh]
+        self.assertEqual(os.stat(p).st_mode & 0o777, 0o600)
+        return lines
+
+    def test_v2_fetch_decrypt_upload_send(self):
+        r1 = rp.process(self.dreq(), runner=self.runner)
+        self.assertEqual(r1['action'], 'upload', r1)
+        self.assertEqual(self.gets, [(DROP + '/d/' + TOK, 'g' * 40, len(PNG) + 28 + rp.DROP_V2_HEADER)],
+                         'url derived from drop.json, not the payload')
+        self.assertEqual(r1['media_status'], {'upload_ready': 1})
+        r2 = rp.process(self.dreq(media_keys={TOK: 'HASHKEY'}), runner=self.runner)
+        self.assertEqual(r2['action'], 'send')
+        self.assertEqual(r2['media_status'], {'attached': 1})
+        self.assertEqual(self.files(), [])
+        log = self.log()
+        self.assertEqual([x['status'] for x in log], [{'upload_ready': 1}, {'attached': 1}])
+        raw = json.dumps(log)
+        for secret in (TOK, WK, 'g' * 40, DROP, self.item['sha256'], 'Jordan'):
+            self.assertNotIn(secret, raw, 'media.log is counts only')
+
+    def test_v2_payload_url_is_ignored(self):
+        self.item['url'] = 'https://elsewhere.example.invalid/d/' + TOK
+        r = rp.process(self.dreq(), runner=self.runner)
+        self.assertEqual(r['action'], 'upload')
+        self.assertEqual(self.gets[0][0], DROP + '/d/' + TOK)
+
+    def test_v2_without_wrap_key_on_the_box(self):
+        r = rp.process(self.dreq(drop={'url': DROP, 'get_key': 'g' * 40}), runner=self.runner)
+        self.assertEqual((r['action'], r['media_status']), ('send', {'no_key': 1}))
+        self.assertEqual(self.gets, [])
+        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+
+    def test_v2_wrong_wrap_key(self):
+        r = rp.process(self.dreq(drop={'url': DROP, 'get_key': 'g' * 40, 'wrap_key': relay_drop.b64u(bytes(32))}),
+                       runner=self.runner)
+        self.assertEqual(r['media_status'], {'decrypt_failed': 1})
+        self.assertEqual(self.files(), [])
+
+    def test_regression_v1_key_lost_in_the_routine(self):
+        # 2026-10-19: a v1 item reached relay_post without a usable key -> no GET, a notice; now diagnosable
+        self.item.pop('v')
+        self.item.update(url=DROP + '/d/' + TOK, key='[redacted]')
+        r = rp.process(self.dreq(), runner=self.runner)
+        self.assertEqual((r['action'], r['media_status']), ('send', {'no_key': 1}))
+        self.assertEqual(self.gets, [])
+
+    def test_not_requested_and_drop_json_gate(self):
+        r = rp.process(self.dreq(media_upload=False), runner=self.runner)
+        self.assertEqual(r['media_status'], {'not_requested': 1})
+        self.assertEqual(self.gets, [])
+        self.calls = []
+        self.wire = relay_drop.seal_v2(TOK, PNG, bytes(range(32)))
+        r = rp.process(self.dreq(drop={'url': DROP, 'get_key': 'g' * 40, 'wrap_key': WK, 'media_upload': True},
+                                 media_upload=False, payload=dict(self.req()['payload'], id='g-2')), runner=self.runner)
+        self.assertEqual(r['action'], 'upload', 'drop.json media_upload works without the request flag')
+
+    def test_routine_media_off(self):
+        r = rp.process(self.dreq(media_off=True), runner=self.runner)
+        self.assertEqual(r['media_status'], {'routine_media_off': 1})
+
+    def test_drop_json_fields(self):
+        p = os.path.join(self.d, 'drop.json')
+        with open(p, 'w') as fh:
+            json.dump({'url': DROP, 'get_key': 'g' * 40, 'wrap_key': WK, 'media_upload': True}, fh)
+        d = rp.load_drop({}, os.path.join(self.d, 'seen.json'))
+        self.assertEqual((d['wrap_key'], d['media_upload']), (WK, True))
+        with open(p, 'w') as fh:
+            json.dump({'url': DROP, 'get_key': 'g' * 40, 'wrap_key': 'bad', 'media_upload': 'yes'}, fh)
+        d = rp.load_drop({}, os.path.join(self.d, 'seen.json'))
+        self.assertEqual((d['wrap_key'], d['media_upload']), ('', False))
+
+    def test_v2_decrypt_via_another_python(self):
+        out = os.path.join(self.media_dir, 'f' * 32 + '.png')
+        wire = relay_drop.seal_v2('f' * 32, PNG, bytes(range(32)))
+        seen = []
+
+        def runner(argv, input=None, capture_output=None, timeout=None):
+            seen.append((argv, input))
+            return subprocess.run(argv, input=input, capture_output=True, timeout=60)
+        mod = 'cryptography.hazmat.primitives.ciphers.aead'
+        old = sys.modules.get(mod, 'absent')
+        sys.modules[mod] = None
+        real = rp._crypto_pythons
+        rp._crypto_pythons = lambda drop: iter([sys.executable])
+        try:
+            ok = rp.drop_decrypt(wire, None, 'f' * 32, out, {'wrap_key': WK}, runner, v=2)
+        finally:
+            rp._crypto_pythons = real
+            if old == 'absent':
+                del sys.modules[mod]
+            else:
+                sys.modules[mod] = old
+        self.assertTrue(seen)
+        self.assertTrue(ok)
+        with open(out, 'rb') as fh:
+            self.assertEqual(fh.read(), PNG)
+        self.assertNotIn(WK, ' '.join(seen[0][0]), 'wrap key not in argv')
+
+
+class CtlWrap(unittest.TestCase):
+    def test_set_wrap_key_on_stdin_and_redacted(self):
+        m = fresh(tmpdir())
+        out = m.ctl.cmd_set_drop(wrap_key_stdin=True, stdin=io.StringIO(WK + '\n'))
+        self.assertEqual(out['set'], ['dropWrapKey'])
+        self.assertNotIn(WK, json.dumps(out))
+        cfg = m.rc.load_config()
+        self.assertEqual(cfg['dropWrapKey'], WK)
+        self.assertEqual(m.ctl.public_config(cfg)['dropWrapKey'], 'set')
+        with self.assertRaises(m.ctl.CtlError):
+            m.ctl.cmd_set_drop(wrap_key_stdin=True, stdin=io.StringIO('nope'))
+        with self.assertRaises(m.ctl.CtlError):
+            m.ctl.cmd_set_drop(url=DROP, key_stdin=True, wrap_key_stdin=True, stdin=io.StringIO(WK))
+        m.ctl.cmd_set_drop(off=True)
+        self.assertEqual(m.rc.load_config()['dropWrapKey'], '')
+
+    def test_not_settable_from_argv(self):
+        m = fresh(tmpdir())
+        with self.assertRaises(m.ctl.CtlError):
+            m.ctl.cmd_set('dropWrapKey', WK)
 
 
 if __name__ == '__main__':

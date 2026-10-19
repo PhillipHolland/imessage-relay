@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.4.7: the /test end-to-end check (runs inside the native host).
+iMessage Relay v1.4.8: the /test end-to-end check (runs inside the native host).
 
 The owner types "/test" (or "/test send") in the relay chat. The extension intercepts it before any
 reply routing and asks the host for {type:"test"}. The host then checks, each with its own timeout:

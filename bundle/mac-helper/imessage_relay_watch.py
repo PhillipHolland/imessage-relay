@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.7: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -739,7 +739,7 @@ class Watcher:
         if m.get('quiet'):
             p['quiet'] = True               # v1.4.6: same sender as the line just above -> no "Name:" prefix
         if m.get('media'):
-            # v1.4.7: photo metadata for relay_post (token, kind, mime, ext, size, sha256, url, key); no names
+            # v1.4.7/v1.4.8: photo metadata for relay_post (token, kind, mime, ext, size, sha256, and url+key or v:2); no names
             p['media'] = [dict(x) for x in m['media']]
         if m.get('unknown'):
             p['unknown'] = True             # v1.4.5 spamMode tag: posted as "⚠️ Unknown · <label>: <text>"

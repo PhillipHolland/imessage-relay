@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.7)
+# iMessage Relay: operator reference (v1.4.8)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -28,9 +28,9 @@ github.com/PhillipHolland/imessage-relay. It is one Python file that writes ever
 Mac helper, installer, tests) and checks each one against an embedded sha256 digest. Nothing is
 cloned or installed from the repo; you only download this one pinned file.
 
-**Pinned release (v1.4.7):**
-- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.7/build_bundle.py`
-- sha256: `12f37fe461398b4f56675e09abe8340529cc7725e5c63a746031bcd7ff5720fa`
+**Pinned release (v1.4.8):**
+- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.8/build_bundle.py`
+- sha256: `4f958809a75a6426ffab41490d5a22847d75e9b2debe94df09b241341959c7c0`
 
 **Always verify before running.** Download with `curl -fsSL`, check the sha256 against the pinned
 value above, and run the file only on an exact match. On a mismatch (or a failed download), **refuse**:
@@ -175,7 +175,7 @@ windows the checklist needs.
    machine Shell that reads it on **stdin**. Never put it on a command line.
 3. Run, with a perl alarm of 300 s:
    ```
-   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.7/build_bundle.py' && echo "12f37fe461398b4f56675e09abe8340529cc7725e5c63a746031bcd7ff5720fa  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
+   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.8/build_bundle.py' && echo "4f958809a75a6426ffab41490d5a22847d75e9b2debe94df09b241341959c7c0  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
    ```
 
 **Paste path (the owner runs it):** nothing to save or attach; the line downloads the pinned file to
@@ -184,7 +184,7 @@ line. When it asks for the webhook key,
 open grokbot://app/v1/sidebar?target=webhook-key&automation=<folder>, copy the key and paste it there
 (it stays hidden)."**
 ```
-cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.7/build_bundle.py' && echo "12f37fe461398b4f56675e09abe8340529cc7725e5c63a746031bcd7ff5720fa  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
+cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.8/build_bundle.py' && echo "4f958809a75a6426ffab41490d5a22847d75e9b2debe94df09b241341959c7c0  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
 ```
 
 **Read the output** (machine path: the JSON; paste path: ask "Did it end with "ok": true?"):
@@ -282,7 +282,7 @@ Settings > Privacy & Security > Automation > Google Chrome > Messages on.
 ### Step U. Existing install (upgrade in place)
 Ask nothing. Download the newest pinned build_bundle.py (the pinned release at the top of this skill)
 the same way, verify it, and run (perl alarm 300):
-`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.7/build_bundle.py' && echo "12f37fe461398b4f56675e09abe8340529cc7725e5c63a746031bcd7ff5720fa  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
+`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.8/build_bundle.py' && echo "4f958809a75a6426ffab41490d5a22847d75e9b2debe94df09b241341959c7c0  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
 A sha256 mismatch → refuse, exactly as in Step 5.
 The installer keeps config.json, roster.json and the watcher app with its Full Disk Access grant (it
 never rebuilds or re-signs it). The setup JSON shows what's already set. If a value is missing
@@ -595,7 +595,7 @@ Muting only stops the relay from forwarding that person (and drops them as a rep
 **not** block them in Messages — they can still text the owner's phone. In dry run, a confirmed block
 is previewed but config is not changed. (The admin CLI equivalents are `RC mute` / `RC unmute`.)
 
-### Photos into X Chat (v1.4.7, 1:1 chats, through the encrypted drop)
+### Photos into X Chat (v1.4.7, v1.4.8: 1:1 chats, through the encrypted drop)
 The routine **never touches the Mac** for photos. They travel through a small **drop** service the
 owner owns (`bundle/drop/`, deployed once on the owner's Vercel; Cloudflare is community-only):
 1. **Mac.** For each 1:1 photo the watcher makes a private copy (converted to JPEG and downsized to fit
@@ -603,8 +603,13 @@ owner owns (`bundle/drop/`, deployed once on the owner's Vercel; Cloudflare is c
    a notice like "📎 PDF file, 1.2 MB (not relayed — open Messages to see it)"), reads it into memory and
    **deletes the copy right away**, encrypts it with a **fresh random AES-256-GCM key** (macOS
    CommonCrypto; associated data `imr-drop-v1:<token>`; wire = nonce ‖ ciphertext ‖ tag) and PUTs only the
-   ciphertext to `<dropUrl>/d/<token>` with the drop's **put key**. The webhook line carries
-   `media:[{token,kind,mime,ext,size,sha256,url,key}]` (no filename, no path). Group photos stay "📷 Photo".
+   ciphertext to `<dropUrl>/d/<token>` with the drop's **put key**. **v1.4.8 (with `dropWrapKey` set):** the
+   per-photo key is itself sealed with the pre-shared **wrap key** (AES-256-GCM, associated data
+   `imr-drop-v2-key:<token>`) and stored inside the blob (wire = 0x02 ‖ wrap nonce ‖ wrapped key ‖ tag ‖
+   nonce ‖ ciphertext ‖ tag, data associated data `imr-drop-v2:<token>`), and the webhook line carries only
+   `media:[{token,kind,mime,ext,size,sha256,v:2}]`: no key and no URL, so nothing secret or fragile passes
+   through the routine. Without a wrap key (v1.4.7 format) it carries `media:[{token,kind,mime,ext,size,sha256,url,key}]`.
+   No filename, no path either way. Group photos stay "📷 Photo".
    A failed upload becomes "📷 Photo (couldn't be relayed)". Without a drop (`dropUrl`/`dropKey` unset) a
    1:1 photo arrives as "📷 Photo".
 2. **Drop.** Holds ciphertext only (no plaintext, no names, no metadata beyond size and expiry; the
@@ -612,8 +617,9 @@ owner owns (`bundle/drop/`, deployed once on the owner's Vercel; Cloudflare is c
    deletes anything unfetched after **10 minutes** (Vercel: private Blob + a per-minute cron sweep, so at
    most ~11 minutes; Cloudflare: KV `expirationTtl`). PUT/DELETE need the put key (Mac only), GET needs
    the **get key** (bot only); the deployment stores only their sha256.
-3. **relay_post.py (run 1).** Reads `~/.imessage-relay-routine/drop.json` (`{"url","get_key"}`, mode 600),
-   fetches each photo **only from that url** (`url` must be exactly `<drop url>/d/<token>`), checks the
+3. **relay_post.py (run 1).** Reads `~/.imessage-relay-routine/drop.json` (`{"url","get_key","wrap_key",
+   "media_upload"}`, mode 600), fetches each photo **only from `<drop url>/d/<token>`** (v1.4.8 derives it;
+   a v1.4.7 item's `url` must match it exactly), unseals the photo key with `wrap_key` (v2), checks the
    size, decrypts (in-process with `cryptography`, else through `/usr/bin/python3` with the key on stdin),
    checks the sha256, keeps it as a mode-600 temp file, runs the newer helper's `encrypt-media`
    (auto-located at `~/xchat/helper`, or `helper.media_python`/`helper.media_script`) and answers
@@ -632,15 +638,28 @@ owner owns (`bundle/drop/`, deployed once on the owner's Vercel; Cloudflare is c
 Attachment bytes are never stored: the Mac copy is deleted before the upload; the bot's decrypted copy, the
 upload parts and a tiny state file (mode 600) are deleted as soon as the send is built, on any error, or by a
 15-minute sweep. Nothing is logged except counts, sizes and kinds (never keys, URLs or hashes).
-relay_post.py fetches and uploads photos **only when the request carries `"media_upload": true`**, which
-only the prompt with the photo steps sets. Any other prompt keeps working unchanged: the text posts with
-the "couldn't be relayed" notice and the drop copy expires unfetched.
+relay_post.py fetches and uploads photos **only when the request carries `"media_upload": true`** (set by
+the prompt with the photo steps) **or drop.json has `"media_upload": true`** (v1.4.8; the operator sets it
+once the live prompt has the photo steps, so a rerun that forgets the flag still works). Otherwise the text
+posts with the "couldn't be relayed" notice and the drop copy expires unfetched.
+**Diagnosing a notice (v1.4.8).** Every photo run's output has `media_status` {code: count}, and relay_post
+appends one counts-only line (time, photos, bytes, codes; never tokens, keys, URLs, hashes or names) to
+`~/.imessage-relay-routine/media.log` (mode 600). Codes: `not_requested` (no media_upload anywhere),
+`routine_media_off` (the routine sent media_off after an upload call failed), `no_drop`, `no_key` (v1: the
+item's key didn't survive; v2: no wrap_key in drop.json), `bad_url`, `fetch_failed` (gone, expired or
+refused), `size_mismatch`, `decrypt_failed` (wrong wrap key), `sha_mismatch`, `no_media_helper`,
+`prepare_failed` (encrypt-media), `upload_ready`, `attached`, `missing_after_upload`. On the drop, its request
+log (`vercel logs requests`) shows whether the Mac's PUT arrived and whether anything fetched it.
 
-**Setting up the drop (once, by the bot):** generate the put key, get key and cron secret on the bot's
-computer (files, mode 600; never in chat or argv); deploy `bundle/drop` (see `bundle/drop/README.md`; only
-the keys' sha256 go into the deployment's env, on stdin); write `drop.json` on the bot's computer; then
-give the Mac its put key on stdin: `RC set-drop --url https://<drop> --key-stdin < <put key file>` (copy the
-file to the Mac first, then delete it there and on the bot's side). `RC set-drop --off` turns it off.
+**Setting up the drop (once, by the bot):** generate the put key, get key, cron secret and (v1.4.8) a
+32-byte **wrap key** (base64url, 43 characters) on the bot's computer (files, mode 600; never in chat or
+argv); deploy `bundle/drop` (see `bundle/drop/README.md`; only the put/get keys' sha256 go into the
+deployment's env, on stdin; the drop never gets the wrap key); write `drop.json` (`url`, `get_key`,
+`wrap_key`, and `"media_upload": true` once the live prompt has the photo steps) on the bot's computer;
+then give the Mac its keys on stdin, copying each file to the Mac first and deleting it there and on the
+bot's side afterwards: `RC set-drop --url https://<drop> --key-stdin < <put key file>` and
+`RC set-drop --wrap-key-stdin < <wrap key file>`. `RC set-drop --off` clears all three. **Order on an
+upgrade to v1.4.8:** bot side first (relay_post.py + `wrap_key` in drop.json), then the Mac.
 
 ### Your photos and files out to iMessage (v1.4.6)
 Photos the owner sends in the relay chat (with or without text) go out as iMessage attachments to the same
@@ -753,6 +772,7 @@ is removed right after it is read.
 | relay codes from short codes too | `RC set skipShortCodes off` (warn: verification codes) |
 | spam handling | `RC set spamMode tag` (tag only) / `off` (default `follow-messages`) |
 | no photos into X Chat | `RC set-drop --off` (photos then say "📷 Photo") |
+| why did a photo say "couldn't be relayed"? | read the counts-only `~/.imessage-relay-routine/media.log` on your computer (codes above) |
 | no photos out to iMessage | `RC set relayAttachments off` |
 | block a spammer from the chat | 🗑️ on their relayed text, then `yes` (or `RC mute <label>`) |
 | one webhook per text again | `RC set batchWebhooks off` (default on: texts waiting together share one) |
@@ -807,7 +827,7 @@ LaunchAgent pointing at whatever applet it already runs. An early app that runs
 **only if the extension changed in this version**, the owner clicks the reload icon on the extension
 card **and then refreshes any open x.com chat tab (Cmd+R)** — reloading the extension disconnects its
 content script from already-open tabs, so replies sent in them before the refresh are missed.
-**v1.4.7 does not change the extension**; **v1.4.6 changed it** (reactions, photos), **v1.4.5 changed it** (🗑️ to block), **v1.4.4 changed it** (native Reply quotes), **v1.4.3 changed it** (quote diagnostics, Copy page structure), **v1.4.2 changed it** (👍/👎 on a prompt), **v1.4.1 changed it** (a plain `yes`/`no` answers a reply prompt), **v1.4.0 changed it** (the popup
+**v1.4.7 and v1.4.8 do not change the extension**; **v1.4.6 changed it** (reactions, photos), **v1.4.5 changed it** (🗑️ to block), **v1.4.4 changed it** (native Reply quotes), **v1.4.3 changed it** (quote diagnostics, Copy page structure), **v1.4.2 changed it** (👍/👎 on a prompt), **v1.4.1 changed it** (a plain `yes`/`no` answers a reply prompt), **v1.4.0 changed it** (the popup
 wording for a Contacts confirmation), **v1.3.9 changed it**
 (X Chat's bubble times, now plain spans in the message text, are no
 longer appended to replies; the native host also strips them, so an old extension can't leak them), and
@@ -818,6 +838,11 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.8 does not change the extension** or the drop service, and needs no routine prompt change. It keeps the
+photo key out of the webhook (wrap key, see "Photos into X Chat") and adds `media_status` / `media.log`.
+**Bot side first:** rebuild `~/imr/bundle` and copy relay_post.py, add `wrap_key` (and `"media_upload": true`
+if the live prompt has the photo steps) to drop.json, then the Mac line, then `RC set-drop --wrap-key-stdin`.
+A v1.4.7 Mac keeps working with the v1.4.8 helper (v1 items are still accepted).
 **v1.4.7 does not change the extension** (no reload from v1.4.6). It adds the encrypted photo drop: **update
 your side FIRST** (relay_post.py v1.4.7 fetches from the drop), deploy the drop and write `drop.json`, update
 the routine prompt with the two photo steps, then the Mac line, then `RC set-drop`. The routine never runs

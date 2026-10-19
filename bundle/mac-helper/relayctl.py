@@ -21,6 +21,7 @@ Every command prints one JSON object. Message bodies are never printed or stored
                                           spamMode follow-messages|tag|off (v1.4.6 default follow-messages: mirror Messages' filtering)
                                           batchWebhooks on|off (v1.4.5: texts waiting together share one webhook)
   relayctl set-drop --url URL --key-stdin       v1.4.7 encrypted photo drop (key on stdin only); --off clears it
+  relayctl set-drop --wrap-key-stdin            v1.4.8 photo-key wrap key (stdin only; keeps keys out of the webhook)
   relayctl set-webhook --url URL --token-stdin   set webhookUrl + webhookToken together; the key is
                                           read from stdin so it never lands in argv or shell history
   relayctl contacts                       list opted-in contacts with their labels
@@ -118,6 +119,7 @@ def public_config(cfg):
     c = dict(cfg)
     c['webhookToken'] = 'set' if cfg.get('webhookToken') else ''
     c['dropKey'] = 'set' if cfg.get('dropKey') else ''
+    c['dropWrapKey'] = 'set' if cfg.get('dropWrapKey') else ''
     c['webhookUrl'] = 'set' if cfg.get('webhookUrl') else ''
     return c
 
@@ -169,12 +171,23 @@ def cmd_set_webhook(url, token_stdin=False, stdin=None):
     return {'ok': True, 'set': ['webhookUrl', 'webhookToken'], 'config': public_config(cfg)}
 
 
-def cmd_set_drop(url=None, key_stdin=False, off=False, stdin=None):
+def cmd_set_drop(url=None, key_stdin=False, off=False, stdin=None, wrap_key_stdin=False):
     """v1.4.7: the encrypted photo drop. The PUT key is ALWAYS read from stdin (never argv); `--off`
-    clears both, after which inbound photos arrive as "📷 Photo" again."""
+    clears all drop settings, after which inbound photos arrive as "📷 Photo" again.
+    v1.4.8: `--wrap-key-stdin` sets dropWrapKey (43-char base64url, 32 bytes) from stdin; with it the
+    per-photo key travels sealed inside the drop blob instead of in the webhook."""
     if off:
-        cfg = edit_config(lambda raw: raw.update({'dropUrl': '', 'dropKey': ''}))
-        return {'ok': True, 'set': ['dropUrl', 'dropKey'], 'photoDrop': False}
+        cfg = edit_config(lambda raw: raw.update({'dropUrl': '', 'dropKey': '', 'dropWrapKey': ''}))
+        return {'ok': True, 'set': ['dropUrl', 'dropKey', 'dropWrapKey'], 'photoDrop': False}
+    if wrap_key_stdin:
+        if url or key_stdin:
+            raise CtlError('set the wrap key on its own: relayctl set-drop --wrap-key-stdin < file')
+        wk = (stdin or sys.stdin).read().strip()
+        if not re.match(r'^[A-Za-z0-9_-]{43}$', wk):
+            raise CtlError('bad wrap key (expected 43 base64url characters)')
+        cfg = edit_config(lambda raw: raw.update({'dropWrapKey': wk}))
+        return {'ok': True, 'set': ['dropWrapKey'], 'photoDropWrapped': True,
+                'photoDrop': bool(str(cfg.get('dropUrl') or '').startswith('https://') and cfg.get('dropKey'))}
     url = (url or '').strip().rstrip('/')
     if not re.match(r'^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$', url):
         raise CtlError('dropUrl must be an https:// URL')
@@ -643,7 +656,8 @@ def cmd_status(runner=subprocess.run):
             'watcherApp': app,
             'launchAgentLoaded': launchagent_loaded(runner), 'hostManifests': host_manifests(),
             'messagesRunning': rc.messages_running(runner), 'extension': ext, 'problems': problems,
-            'photoDrop': bool(str(cfg.get('dropUrl') or '').startswith('https://') and cfg.get('dropKey'))}
+            'photoDrop': bool(str(cfg.get('dropUrl') or '').startswith('https://') and cfg.get('dropKey')),
+            'photoDropWrapped': bool(cfg.get('dropWrapKey'))}
 
 
 def main(argv=None):
@@ -659,7 +673,7 @@ def main(argv=None):
     a = sp.add_parser('roster'); a.add_argument('--days', type=int, default=0)
     a = sp.add_parser('quiet-hours'); a.add_argument('start'); a.add_argument('end', nargs='?'); a.add_argument('--tz', default='local')
     a = sp.add_parser('set'); a.add_argument('key'); a.add_argument('value')
-    a = sp.add_parser('set-drop'); a.add_argument('--url'); a.add_argument('--key-stdin', action='store_true'); a.add_argument('--off', action='store_true')
+    a = sp.add_parser('set-drop'); a.add_argument('--url'); a.add_argument('--key-stdin', action='store_true'); a.add_argument('--off', action='store_true'); a.add_argument('--wrap-key-stdin', action='store_true')
     a = sp.add_parser('set-webhook'); a.add_argument('--url', required=True); a.add_argument('--token-stdin', action='store_true')
     a = sp.add_parser('add-contact'); a.add_argument('--name', required=True); a.add_argument('--handle', required=True); a.add_argument('--label', default='')
     a = sp.add_parser('label'); a.add_argument('key'); a.add_argument('label')
@@ -703,7 +717,7 @@ def main(argv=None):
         elif c == 'set':
             out = cmd_set(args.key, args.value)
         elif c == 'set-drop':
-            out = cmd_set_drop(args.url, key_stdin=args.key_stdin, off=args.off)
+            out = cmd_set_drop(args.url, key_stdin=args.key_stdin, off=args.off, wrap_key_stdin=args.wrap_key_stdin)
         elif c == 'set-webhook':
             out = cmd_set_webhook(args.url, token_stdin=args.token_stdin)
         elif c == 'contacts':

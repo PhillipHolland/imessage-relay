@@ -1,4 +1,4 @@
-"""iMessage Relay v1.4.7 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
+"""iMessage Relay v1.4.8 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
 
 Inbound (iMessage -> X Chat). The watcher holds Full Disk Access, so it is the only process that can
 read ~/Library/Messages/Attachments. For a relayed message with photos it:

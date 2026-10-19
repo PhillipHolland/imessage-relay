@@ -3,7 +3,9 @@
 A tiny service that lets inbound 1:1 photos reach X Chat **without the bot ever touching the Mac**.
 
 - The Mac encrypts each photo with a **fresh random AES-256-GCM key** and PUTs only the ciphertext here.
-  The key travels only inside that one webhook body to the bot; this service never sees it.
+  v1.4.7: the key travels only inside that one webhook body to the bot. v1.4.8 (wrap key set): the key is
+  sealed with a wrap key only the Mac and the bot hold and stored inside the blob, so the webhook carries
+  no key at all. Either way this service never sees a usable key (it never has the wrap key).
 - It stores **ciphertext only**: no plaintext, no filenames, no sender, no metadata beyond size and expiry.
   The stored name is a hash of the URL token.
 - Each file is **served once** (deleted before the response is returned) and **deleted after 10 minutes**
@@ -38,7 +40,10 @@ files with no cron. Checked only with `wrangler deploy --dry-run` and `wrangler 
 by the maintainers. See the comments in `wrangler.toml` for the three commands.
 
 ## Wiring
-- Mac: `printf %s "$PUT_KEY" | ~/.imessage-relay/relayctl set-drop --url https://<your-drop> --key-stdin`
-  (or pipe it from a file; never argv). `relayctl set-drop --off` turns photos back into "📷 Photo".
-- Bot: `~/.imessage-relay-routine/drop.json` (mode 600): `{"url":"https://<your-drop>","get_key":"…"}`.
+- Mac (copy each key file over first, then delete it on both sides):
+  `~/.imessage-relay/relayctl set-drop --url https://<your-drop> --key-stdin < put_key` and (v1.4.8)
+  `~/.imessage-relay/relayctl set-drop --wrap-key-stdin < wrap_key`
+  Never argv. `relayctl set-drop --off` turns photos back into "📷 Photo".
+- Bot: `~/.imessage-relay-routine/drop.json` (mode 600): `{"url":"https://<your-drop>","get_key":"…",
+  "wrap_key":"…","media_upload":true}` (`media_upload` only once the live routine prompt has the photo steps).
   relay_post.py only ever fetches from that url.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.7 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.8 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -80,6 +80,13 @@ STDOUT (one JSON object):
   "media_off": true (an upload failed) posts the text with a clear "couldn't be relayed" notice; so does
   a photo the drop no longer has. Photos are only fetched and uploaded when the request has
   "media_upload": true (a routine prompt with the photo steps); without it the text posts with the notice.
+  v1.4.8: a v2 photo item carries no key and no url ({token, ext, size, sha256, v: 2}); the per-photo key is
+  sealed inside the drop blob with drop.json's "wrap_key", and the url is always drop.json's url + /d/<token>.
+  drop.json "media_upload": true (set by the operator once the live prompt has the photo steps) works like
+  the request flag. Every photo run reports "media_status" {code: count} (body-free) and appends one
+  counts-only line to <state dir>/media.log: not_requested, routine_media_off, no_drop, no_key, bad_url,
+  fetch_failed, size_mismatch, decrypt_failed, sha_mismatch, no_media_helper, prepare_failed,
+  upload_ready, attached, missing_after_upload.
   The routine never touches the Mac.
   Photos are in flight only: the copy, the parts and a tiny state file (mode 600) are deleted when the
   send is built, on any error, or by the sweep after 15 min. Nothing about them is logged.
@@ -151,6 +158,10 @@ DROP_CONFIG = '~/.imessage-relay-routine/drop.json'
 DROP_TIMEOUT_S = 30
 DROP_AAD = b'imr-drop-v1:'
 DROP_OVERHEAD = 12 + 16
+DROP_AAD_V2 = b'imr-drop-v2:'
+DROP_AAD_V2_KEY = b'imr-drop-v2-key:'
+DROP_V2_HEADER = 1 + 12 + 32 + 16                # 0x02 || wrap nonce || wrapped key || tag
+MEDIA_LOG_MAX = 256 * 1024
 
 
 def media_meta(items):
@@ -165,9 +176,12 @@ def media_meta(items):
         if (_HEX32.match(tok) and ext in MEDIA_EXTS and _HEX64.match(sha) and isinstance(size, int)
                 and not isinstance(size, bool) and 0 < size <= MEDIA_MAX_BYTES):
             it = {'token': tok, 'ext': ext, 'size': size, 'sha256': sha}
-            url, key = str(x.get('url') or ''), str(x.get('key') or '')
-            if url.startswith('https://') and len(url) <= 300 and _B64U_KEY.match(key):
-                it.update(url=url, key=key)
+            if x.get('v') == 2:
+                it['v'] = 2                    # v1.4.8: the key is sealed inside the drop blob (wrap key)
+            else:
+                url, key = str(x.get('url') or ''), str(x.get('key') or '')
+                if url.startswith('https://') and len(url) <= 300 and _B64U_KEY.match(key):
+                    it.update(url=url, key=key)
             out.append(it)
     return out
 
@@ -282,7 +296,12 @@ def load_drop(req, dedupe_path):
     url, key = str((d or {}).get('url') or '').rstrip('/'), str((d or {}).get('get_key') or '')
     if not url.startswith('https://') or len(key) < 16:
         return None
-    return {'url': url, 'get_key': key, 'crypto_python': str((d or {}).get('crypto_python') or '')}
+    wk = str((d or {}).get('wrap_key') or '')
+    return {'url': url, 'get_key': key, 'crypto_python': str((d or {}).get('crypto_python') or ''),
+            'wrap_key': wk if _B64U_KEY.match(wk) else '',
+            # v1.4.8: the operator turns this on once the live routine prompt has the photo steps, so the
+            # request no longer has to carry "media_upload": true on every rerun.
+            'media_upload': (d or {}).get('media_upload') is True}
 
 
 def _b64u_decode(s):
@@ -294,7 +313,7 @@ def drop_get(url, key, max_bytes, timeout=DROP_TIMEOUT_S):
     """GET one ciphertext (served once). bytes or None. Never logs anything."""
     import urllib.request
     import urllib.error
-    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'imessage-relay-post/1.4.7'})
+    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'imessage-relay-post/1.4.8'})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             if r.status != 200:
@@ -306,15 +325,33 @@ def drop_get(url, key, max_bytes, timeout=DROP_TIMEOUT_S):
 
 
 _DECRYPT_CHILD = (
-    "import json,sys,os\n"
+    "import json,sys,os,base64\n"
     "from cryptography.hazmat.primitives.ciphers.aead import AESGCM\n"
     "a=json.load(sys.stdin)\n"
     "w=open(a['in'],'rb').read()\n"
-    "import base64\n"
-    "k=base64.urlsafe_b64decode(a['key']+'='*(-len(a['key'])%4))\n"
-    "p=AESGCM(k).decrypt(w[:12],w[12:],a['aad'].encode())\n"
+    "d=lambda s:base64.urlsafe_b64decode(s+'='*(-len(s)%4))\n"
+    "t=a['token'].encode()\n"
+    "if a.get('v')==2:\n"
+    " k=AESGCM(d(a['wrap_key'])).decrypt(w[1:13],w[13:61],b'imr-drop-v2-key:'+t);w=w[61:];aad=b'imr-drop-v2:'+t\n"
+    "else:\n"
+    " k=d(a['key']);aad=b'imr-drop-v1:'+t\n"
+    "p=AESGCM(k).decrypt(w[:12],w[12:],aad)\n"
     "fd=os.open(a['out'],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
     "os.write(fd,p);os.close(fd)\n")
+
+
+def _open_wire(AESGCM, wire, token, key_b64u=None, wrap_b64u=None, v=1):
+    """Plaintext of one drop blob (raises on any bad tag). v1: nonce||ct||tag with the webhook's key.
+    v2: 0x02 || wrapped key || nonce||ct||tag; the per-photo key is unsealed with the wrap key."""
+    t = token.encode('ascii')
+    if v == 2:
+        if wire[:1] != b'\x02':
+            raise ValueError('not v2')
+        key = AESGCM(_b64u_decode(wrap_b64u)).decrypt(wire[1:13], wire[13:DROP_V2_HEADER], DROP_AAD_V2_KEY + t)
+        wire, aad = wire[DROP_V2_HEADER:], DROP_AAD_V2 + t
+    else:
+        key, aad = _b64u_decode(key_b64u), DROP_AAD + t
+    return AESGCM(key).decrypt(wire[:12], wire[12:], aad)
 
 
 def _crypto_pythons(drop):
@@ -326,17 +363,17 @@ def _crypto_pythons(drop):
             yield c
 
 
-def drop_decrypt(wire, key_b64u, token, out_path, drop, runner=subprocess.run):
-    """Decrypt nonce||ct||tag into out_path (mode 600). In-process with `cryptography` when this python
-    has it, else via a python that does (key on stdin, never argv). True/False."""
-    aad = DROP_AAD + token.encode('ascii')
+def drop_decrypt(wire, key_b64u, token, out_path, drop, runner=subprocess.run, v=1):
+    """Decrypt one drop blob (v1 or v2, see _open_wire) into out_path (mode 600). In-process with
+    `cryptography` when this python has it, else via a python that does (keys on stdin, never argv)."""
+    wrap = (drop or {}).get('wrap_key') or ''
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     except ImportError:
         AESGCM = None
     if AESGCM is not None:
         try:
-            plain = AESGCM(_b64u_decode(key_b64u)).decrypt(wire[:12], wire[12:], aad)
+            plain = _open_wire(AESGCM, wire, token, key_b64u, wrap, v)
         except Exception:
             return False
         fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -351,7 +388,8 @@ def drop_decrypt(wire, key_b64u, token, out_path, drop, runner=subprocess.run):
         for py in _crypto_pythons(drop):
             try:
                 r = runner([py, '-c', _DECRYPT_CHILD], input=json.dumps(
-                    {'in': wire_path, 'out': out_path, 'key': key_b64u, 'aad': aad.decode('ascii')}).encode(),
+                    {'in': wire_path, 'out': out_path, 'key': key_b64u, 'wrap_key': wrap, 'v': v,
+                     'token': token}).encode(),
                     capture_output=True, timeout=60)
             except Exception:
                 continue
@@ -363,34 +401,66 @@ def drop_decrypt(wire, key_b64u, token, out_path, drop, runner=subprocess.run):
         _rm(wire_path)
 
 
-def media_fetch(item, drop, media_dir=None, getter=drop_get, runner=subprocess.run):
-    """v1.4.7: bring one photo from the drop: GET once (only from OUR drop's url), check the size, decrypt,
-    check the sha256. Leaves <media_dir>/<token>.<ext> (mode 600) or nothing. True/False."""
-    if not drop or not item.get('url') or not item.get('key'):
-        return False
-    if item['url'] != drop['url'] + '/d/' + item['token']:
-        return False                                   # never fetch from anywhere else (and never send our key there)
+def media_fetch_status(item, drop, media_dir=None, getter=drop_get, runner=subprocess.run):
+    """v1.4.7/v1.4.8: bring one photo from the drop: GET once (only from OUR drop's url, derived from
+    drop.json + token; never from a url in the payload), check the size, decrypt, check the sha256.
+    Leaves <media_dir>/<token>.<ext> (mode 600) or nothing. Returns a body-free status code:
+    'ok', 'no_drop', 'no_key', 'bad_url', 'fetch_failed', 'size_mismatch', 'decrypt_failed', 'sha_mismatch'."""
+    if not drop:
+        return 'no_drop'
+    v = 2 if item.get('v') == 2 else 1
+    if v == 2 and not drop.get('wrap_key'):
+        return 'no_key'
+    if v == 1 and not item.get('key'):
+        return 'no_key'
+    url = drop['url'] + '/d/' + item['token']
+    if v == 1 and item.get('url') and item['url'] != url:
+        return 'bad_url'                               # never fetch from anywhere else (and never send our key there)
     d = os.path.expanduser(media_dir or MEDIA_DIR)
     os.makedirs(d, mode=0o700, exist_ok=True)
     out = media_box_path(item, media_dir)
     if os.path.exists(out):
-        return True
-    wire = getter(item['url'], drop['get_key'], item['size'] + DROP_OVERHEAD)
-    if not wire or len(wire) != item['size'] + DROP_OVERHEAD:
-        return False
+        return 'ok'
+    want = item['size'] + DROP_OVERHEAD + (DROP_V2_HEADER if v == 2 else 0)
+    wire = getter(url, drop['get_key'], want)
+    if not wire:
+        return 'fetch_failed'
+    if len(wire) != want:
+        return 'size_mismatch'
     try:
-        if not drop_decrypt(wire, item['key'], item['token'], out, drop, runner):
+        if not drop_decrypt(wire, item.get('key'), item['token'], out, drop, runner, v=v):
             _rm(out)
-            return False
+            return 'decrypt_failed'
     except OSError:
         _rm(out)
-        return False
+        return 'decrypt_failed'
     finally:
         wire = None
     if not media_verify(item, media_dir):
         _rm(out)
-        return False
-    return True
+        return 'sha_mismatch'
+    return 'ok'
+
+
+def media_fetch(item, drop, media_dir=None, getter=drop_get, runner=subprocess.run):
+    """True when media_fetch_status() is 'ok'."""
+    return media_fetch_status(item, drop, media_dir, getter, runner) == 'ok'
+
+
+def media_log(state_dir, status, photos, nbytes, now=None):
+    """v1.4.8: one counts-only line per photo run in <state dir>/media.log (mode 600): time, number of
+    photos, total bytes and status codes. Never tokens, keys, urls, hashes, names or text."""
+    try:
+        p = os.path.join(os.path.expanduser(state_dir), 'media.log')
+        if os.path.exists(p) and os.path.getsize(p) > MEDIA_LOG_MAX:
+            os.replace(p, p + '.1')
+        line = json.dumps({'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)), 'photos': int(photos),
+                           'bytes': int(nbytes), 'status': {str(k): int(v) for k, v in sorted(status.items())}})
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, 'a') as fh:
+            fh.write(line + '\n')
+    except (OSError, ValueError):
+        pass
 
 
 def media_failed_text(text, n):
@@ -919,10 +989,19 @@ def process(req, runner=None):
     all_media = [it for ln in lines for it in ln.get('media') or []]
     media_keys = req.get('media_keys') if isinstance(req.get('media_keys'), dict) else {}
     line_media = {}
-    if all_media and not req.get('media_upload'):
-        # v1.4.7: only a routine prompt with the photo steps sets "media_upload": true. Any other prompt gets
-        # the text with a notice (never an "upload" answer it doesn't know); the drop copy expires unfetched.
+    media_status = {}
+
+    def _st(code, n=1):
+        media_status[code] = media_status.get(code, 0) + n
+    drop = load_drop(req, dedupe_path) if all_media else None
+    if all_media and not (req.get('media_upload') or (drop or {}).get('media_upload')):
+        # v1.4.7: only a routine prompt with the photo steps sets "media_upload": true (v1.4.8: or drop.json's
+        # "media_upload": true, set by the operator once the prompt has them). Any other prompt gets the
+        # text with a notice (never an "upload" answer it doesn't know); the drop copy expires unfetched.
         req = dict(req, media_off=True)
+        _st('not_requested', len(all_media))
+    elif all_media and req.get('media_off'):
+        _st('routine_media_off', len(all_media))
     if all_media and req.get('media_off'):
         media_cleanup(all_media, media_dir)
         for ln in lines:
@@ -930,22 +1009,34 @@ def process(req, runner=None):
                 ln['text'] = media_failed_text(ln['text'], len(ln['media']))
     elif all_media and not media_keys:
         # v1.4.7: fetch each photo from the encrypted drop first (served once; the routine never touches the Mac)
-        drop = load_drop(req, dedupe_path)
+        ready = []
         if locate_media_helper(req.get('helper'))[0]:
             for it in all_media:
-                if not os.path.exists(media_box_path(it, media_dir)):
-                    try:
-                        media_fetch(it, drop, media_dir, getter=req.get('_drop_getter') or drop_get)
-                    except Exception:
-                        _rm(media_box_path(it, media_dir))
+                try:
+                    code = media_fetch_status(it, drop, media_dir, getter=req.get('_drop_getter') or drop_get)
+                except Exception:
+                    code = 'fetch_failed'
+                    _rm(media_box_path(it, media_dir))
+                if code == 'ok':
+                    ready.append(it)
+                else:
+                    _st(code)
+        else:
+            _st('no_media_helper', len(all_media))
         try:
             uploads, failed = media_prepare(conv, all_media, xchat, req.get('helper'), runner, media_dir)
         except Exception:
             media_cleanup(all_media, media_dir)
             uploads, failed = [], list(all_media)
+        nprep = len([f for f in failed if f in ready])
+        if nprep:
+            _st('prepare_failed', nprep)
         if uploads:
+            _st('upload_ready', len(uploads))
+            media_log(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', media_status, len(all_media),
+                      sum(it['size'] for it in all_media))
             return {'action': 'upload', 'uploads': uploads, 'posted_kind': ev['kind'],
-                    'failed': len(failed),
+                    'failed': len(failed), 'media_status': media_status,
                     'reason': 'upload each photo (chat_media_upload_initialize/append), then run again with the same '
                               'payload and media_keys {token: media_hash_key}'}
         media_keys = {}                              # nothing uploadable: text with notices
@@ -966,8 +1057,14 @@ def process(req, runner=None):
                     missing += 1
             if missing:
                 ln['text'] = media_failed_text(ln['text'], missing)
+                if media_keys:
+                    _st('missing_after_upload', missing)
             if entries:
                 line_media[ln['id']] = entries
+                _st('attached', len(entries))
+    if all_media:
+        media_log(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', media_status, len(all_media),
+                  sum(it['size'] for it in all_media))
 
     reply_to = payload.get('reply_to')          # item 1: X event id of the owner's reply (optional)
     if not xchat.get('events'):
@@ -1009,7 +1106,10 @@ def process(req, runner=None):
     ids = [ln['id'] for ln in lines]
     if not req.get('defer_commit'):
         dd.commit(ids)
-    return {'action': 'send', 'sends': sends, 'encrypted': True, 'posted_kind': ev['kind'], 'ack_ids': ids}
+    res = {'action': 'send', 'sends': sends, 'encrypted': True, 'posted_kind': ev['kind'], 'ack_ids': ids}
+    if media_status:
+        res['media_status'] = media_status       # v1.4.8: body-free photo outcome codes (counts only)
+    return res
 
 
 def ack(req):

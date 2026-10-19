@@ -1,4 +1,4 @@
-"""v1.4.7: fast, phone-visible feedback through the owner's own X tab (the browser extension).
+"""v1.4.8: fast, phone-visible feedback through the owner's own X tab (the browser extension).
 
 The watcher (chat.db) and the host (per-request, under Chrome) leave small BODY-FREE action records here;
 the extension polls the host for them and performs them in X Chat's web UI as the owner:
