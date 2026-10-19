@@ -32,22 +32,29 @@ class Formatting(unittest.TestCase):
         self.assertEqual(ln['text'], 'Family \u00b7 Sam: yo')
 
     def test_digest_header_and_per_person_grouping(self):
-        # item 7: a header line (no body/notify), then ONE line per person with their texts grouped.
+        # v1.4.6 (item 7): the overnight recap is ONE tidy post: a header, then each person once with their
+        # texts under them. It carries bodies, so it is a body line.
         ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [
             {'label': 'Alex', 'text': 'one'},
             {'id': 'x9', 'label': 'Sam', 'text': 'two', 'group': {'name': 'Crew'}},
             {'label': 'Alex', 'text': 'three'}]})
         self.assertEqual(ev['kind'], 'digest')
-        self.assertEqual([l['text'] for l in ev['lines']],
-                         ['\U0001f4ec 3 messages while you were away from 2 people.',
-                          'Alex: one\n\u2002three', 'Crew \u00b7 Sam: two'])
-        self.assertEqual([l['id'] for l in ev['lines']], ['d:header', 'digest:d#0+d#2', 'digest:x9'])
-        self.assertFalse(ev['lines'][0]['body'])          # header is a status line: should_notify false
-        self.assertTrue(ev['lines'][1]['body'] and ev['lines'][2]['body'])
+        self.assertEqual(len(ev['lines']), 1)
+        self.assertEqual(ev['lines'][0]['text'],
+                         '\U0001f319 Overnight: 3 messages from 2 people\n\n'
+                         'Alex:\n\u2002\u2022 one\n\u2002\u2022 three\n\n'
+                         'Crew \u00b7 Sam:\n\u2002\u2022 two')
+        self.assertEqual(ev['lines'][0]['id'], 'digest:d')
+        self.assertTrue(ev['lines'][0]['body'])
 
     def test_digest_single_message_header(self):
         ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [{'label': 'Alex', 'text': 'hi'}]})
-        self.assertEqual(ev['lines'][0]['text'], '\U0001f4ec 1 message while you were away.')
+        self.assertTrue(ev['lines'][0]['text'].startswith('\U0001f319 Overnight: 1 message\n\n'))
+
+    def test_digest_is_capped(self):
+        ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [{'label': 'Alex', 'text': 'x' * 3000}] * 5})
+        self.assertLessEqual(len(ev['lines'][0]['text']), rp.DIGEST_MAX_CHARS)
+        self.assertTrue(ev['lines'][0]['text'].endswith('(more in Messages)'))
 
     def test_sent_and_dry_run(self):
         # item 6: delivered -> double check, otherwise the ~20s "sent" fallback.

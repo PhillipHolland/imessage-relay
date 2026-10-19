@@ -1,4 +1,4 @@
-"""iMessage Relay v1.4.5 -- echo guard + bot-output detection.
+"""iMessage Relay v1.4.6 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
 these names lazily. Do not import relay_echo before relay_common."""
@@ -118,3 +118,71 @@ def is_echoed_inbound(text, prefix_stripped=None, at=None, path=None, handle='')
         if e.get('h') in hs and (not g or not e.get('g') or e.get('g') == g):
             return True
     return False
+
+
+# ---------- v1.4.6 quiet names: route a native quote of an UNPREFIXED relayed line ----------
+# X's quote preview may show the whole line or only its start, so a few keyed HMACs of the normalized
+# text's prefixes are stored (never the text). A quote matches when one of its own prefixes equals one.
+QUOTE_PREFIXES = (12, 20, 32, 48, 80)
+
+
+def _quote_norm(text):
+    s = re.sub(r'\s+', ' ', str(text or '')).strip().lower()
+    s = re.sub(r'(?:\u2026|\.\.\.)\s*$', '', s).rstrip()
+    return s
+
+
+def _quote_hashes(norm):
+    out = set()
+    for n in QUOTE_PREFIXES:
+        if len(norm) >= n:
+            out.add(hmac.new(_echo_secret(), ('q%d:' % n + norm[:n]).encode('utf-8'), hashlib.sha256).hexdigest()[:32])
+    if norm:
+        out.add(hmac.new(_echo_secret(), ('qall:' + norm).encode('utf-8'), hashlib.sha256).hexdigest()[:32])
+    return out
+
+
+def record_quote_keys(text, route, at=None, path=None):
+    norm = _quote_norm(text)
+    if len(norm) < 4 or not route:
+        return
+    at = time.time() if at is None else at
+    p = path or rc.QUOTE_KEYS_PATH
+    items = [e for e in (rc.read_json(p, {}) or {}).get('entries', [])
+             if isinstance(e, dict) and at - float(e.get('at', 0)) < rc.QUOTE_KEYS_TTL_S]
+    items.append({'k': sorted(_quote_hashes(norm)), 'r': str(route)[:140], 'at': float(at)})
+    rc.write_json_atomic(p, {'entries': items[-1000:]}, mode=0o600)
+
+
+def lookup_quote(quoted, cfg=None, at=None, path=None):
+    """Routes (handles / group keys) whose recorded quiet line matches the quote. The quote may start with
+    the bot account's name; that is dropped first, as in parse_quote."""
+    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()
+    sender = ((cfg or {}).get('senderXHandle') or '').lstrip('@')
+    for drop in ('@' + sender, sender):
+        if sender and q.lower().startswith(drop.lower()):
+            q = q[len(drop):].lstrip(' \u00b7-')
+            break
+    norm = _quote_norm(q)
+    if len(norm) < 4:
+        return set()
+    full = hmac.new(_echo_secret(), ('qall:' + norm).encode('utf-8'), hashlib.sha256).hexdigest()[:32]
+    pref = set()
+    for n in QUOTE_PREFIXES:
+        if len(norm) >= n:
+            pref.add(hmac.new(_echo_secret(), ('q%d:' % n + norm[:n]).encode('utf-8'), hashlib.sha256).hexdigest()[:32])
+    at = time.time() if at is None else at
+    entries = [e for e in (rc.read_json(path or rc.QUOTE_KEYS_PATH, {}) or {}).get('entries', [])
+               if isinstance(e, dict) and at - float(e.get('at', 0)) < rc.QUOTE_KEYS_TTL_S]
+    exact = {e['r'] for e in entries if full in set(e.get('k') or [])}
+    if exact:
+        return exact
+    # a truncated preview: the LONGEST shared prefix decides
+    for n in sorted(QUOTE_PREFIXES, reverse=True):
+        if len(norm) < n:
+            continue
+        h = hmac.new(_echo_secret(), ('q%d:' % n + norm[:n]).encode('utf-8'), hashlib.sha256).hexdigest()[:32]
+        hits = {e['r'] for e in entries if h in set(e.get('k') or [])}
+        if hits:
+            return hits
+    return set()

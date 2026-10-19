@@ -146,7 +146,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
     await fire({ word: 'block', quotedText: 'Sam: buy now', conversationId: '999-000', key: 'trash:b' });   // other chat
     await fire({ word: 'block', quotedText: '', conversationId: '111-222', key: 'trash:c' });
     const r = host.filter(m => m.type === 'reaction');
-    assert.deepStrictEqual(JSON.parse(JSON.stringify(r)), [{ type: 'reaction', word: 'block', quotedText: 'Sam: buy now', conversationId: '111-222' }]);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(r)), [{ type: 'reaction', word: 'block', quotedText: 'Sam: buy now', conversationId: '111-222', ui: true }]);   // v1.4.6: + boolean ui flag
     assert.ok(!host.some(m => m.type === 'send'), 'never a send');
     assert.ok(!JSON.stringify(bag).includes('buy now'), 'not stored');
   });

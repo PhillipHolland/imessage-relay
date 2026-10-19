@@ -251,6 +251,8 @@ class RelayPostTest(unittest.TestCase):
             golden = json.load(fh)
         self.assertGreaterEqual(len(golden), 30)
         for g in golden:
+            if g['payload'].get('type') == 'digest':
+                continue        # v1.4.6: the overnight recap is now ONE post (test_relay_post covers it)
             if 'error' in g:
                 with self.assertRaises(ValueError):
                     rp.format_event(g['payload'])

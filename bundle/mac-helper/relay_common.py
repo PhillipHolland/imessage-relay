@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.4.5: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.6: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -23,7 +23,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.5'
+VERSION = '1.4.6'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -44,6 +44,8 @@ def with_host_lock(fn):
         fcntl.flock(lock, fcntl.LOCK_EX)
         return fn()
 ECHO_STORE_PATH = os.path.join(APP_DIR, 'relayed_echo.json')   # HMACs of recently relayed inbound text; never bodies
+QUOTE_KEYS_PATH = os.path.join(APP_DIR, 'quote_keys.json')     # v1.4.6: HMACs of unprefixed (quiet) lines -> route; never bodies
+QUOTE_KEYS_TTL_S = 2 * 86400
 ECHO_TTL_S = 3600
 ECHO_MIN_LEN = 20   # only guard against bouncing back a substantial body; short replies ('ok') are never echoes
 PENDING_TTL_S = 600   # a pending send the watcher never confirms is dropped after ~10 min
@@ -73,6 +75,14 @@ DEFAULT_CONFIG = {
     'mute': [],
     'skipShortCodes': True,
     'batchWebhooks': True,         # v1.4.5: texts waiting together share one webhook (one routine run)
+    'uiReactions': True,           # v1.4.6: \u2705 / \U0001f440 / \u2753 / tapback mirrors done by the extension in the owner's X tab
+    'uiPrompts': True,             # v1.4.6: prompts shown by the extension first; the routine copy only if that fails
+    'readReceipts': True,          # v1.4.6: \u2705 -> \U0001f440 when a 1:1 reply shows read (only if they share receipts)
+    'mirrorTapbacks': True,        # v1.4.6: their tapback on a relayed reply -> that reaction on HIS X message
+    'quietNamesSeconds': 600,      # v1.4.6: "Name:" only when the sender changes within this window (0 = always)
+    'undoSeconds': 5,              # v1.4.6: \U0001f5d1\ufe0f on his own reply within this cancels it (0-10; 0 = off)
+    'stripOptOut': True,           # v1.4.6: drop "Reply STOP to opt out" footers on texts tagged spam / unknown
+    'relayAttachments': True,      # v1.4.6: 1:1 photos both ways (in-flight temp files only, never stored)
     'footer': '',
     'deliveryCheck': True,
     'maxSendsPerMinute': 6,
@@ -86,7 +96,7 @@ DEFAULT_CONFIG = {
     'autoReopenMessages': False,
     'pollSeconds': 10,
     'defaultCountryCode': '1',
-    'spamMode': 'tag',             # v1.4.5: tag (prefix "\u26a0\ufe0f Unknown \u00b7 ") | off. Never hides a text.
+    'spamMode': 'follow-messages', # v1.4.6: follow-messages (mirror Messages' own filtering) | tag (v1.4.5) | off
     'confirmNewContacts': 'exact-skip',   # v1.4.1: exact-skip (an exact full name, one card, one number: send) | always
 }
 
@@ -183,6 +193,17 @@ def owner_handle_set(cfg):
 
 
 # ---------- config ----------
+SPAM_MODES = ('follow-messages', 'tag', 'off')
+
+
+def _clamp_int(v, default, lo, hi):
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
 def truthy(v, default):
     if isinstance(v, bool):
         return v
@@ -264,10 +285,14 @@ def sanitize_config(user):
     cfg['relayAll'] = truthy(cfg.get('relayAll'), False)
     cfg['skipShortCodes'] = truthy(cfg.get('skipShortCodes'), True)
     cfg['batchWebhooks'] = truthy(cfg.get('batchWebhooks'), True)
+    for k in ('uiReactions', 'uiPrompts', 'readReceipts', 'mirrorTapbacks', 'stripOptOut', 'relayAttachments'):
+        cfg[k] = truthy(cfg.get(k), True)
+    cfg['quietNamesSeconds'] = _clamp_int(cfg.get('quietNamesSeconds'), 600, 0, 3600)
+    cfg['undoSeconds'] = _clamp_int(cfg.get('undoSeconds'), 5, 0, 10)
     cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
-    sm = str(cfg.get('spamMode') or 'tag').strip().lower()
-    cfg['spamMode'] = sm if sm in ('tag', 'off') else 'tag'
+    sm = str(cfg.get('spamMode') or 'follow-messages').strip().lower()
+    cfg['spamMode'] = sm if sm in SPAM_MODES else 'follow-messages'
     mute = []
     for m in cfg.get('mute') if isinstance(cfg.get('mute'), list) else []:
         if not isinstance(m, str) or not m.strip():
@@ -944,6 +969,15 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                       key=lambda e: -e['lastInboundAt'])
 
     q_handle, q_status = parse_quote(quoted, cfg, d)
+    if q_status == 'none' and re.sub(r'\s+', '', str(quoted or '')):
+        # v1.4.6 quiet names: a quoted line that carried no "Name:" (same sender as the line above it) is
+        # found by keyed HMACs of its text, recorded when it was relayed. Several people -> ambiguous.
+        import relay_echo
+        hits = {h for h in relay_echo.lookup_quote(quoted, cfg, now) if h in by_handle}
+        if len(hits) == 1:
+            q_handle, q_status = next(iter(hits)), 'match'
+        elif len(hits) > 1:
+            q_status = 'ambiguous'
     p_handle, rest, p_status = parse_prefix(text, cfg, d)
     # Conversational addressing (v1.3.5, item A): when there is no "<Name>:" colon prefix, try the
     # directive forms ("text Sam ...", "tell Sam: ...", "Sam, ...", "@Sam ..."). A resolved directive
@@ -1237,7 +1271,7 @@ _SEND_NAMES = ('DELIVERY_SQL', 'add_pending_send', 'load_pending', 'remove_pendi
 
 
 _DIRECTIVE_NAMES = ('parse_directive', 'DIRECTIVE_DICT_WORDS')
-_ECHO_NAMES = ('is_echoed_inbound', 'looks_like_bot_output', 'record_relayed_text', 'echo_hmac',
+_ECHO_NAMES = ('record_quote_keys', 'lookup_quote', 'is_echoed_inbound', 'looks_like_bot_output', 'record_relayed_text', 'echo_hmac',
                '_echo_secret', '_echo_norm', 'BOT_LINE_SIGILS', 'BOT_LINE_PHRASES', 'BOT_FORMAT_RE',
                'BOT_STRUCTURED_RE')
 

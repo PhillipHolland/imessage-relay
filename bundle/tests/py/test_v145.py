@@ -220,6 +220,7 @@ class Spam(test_watch.Base):
     def setUp(self):
         super().setUp()
         self.cfg['relayAll'] = True
+        self.cfg['spamMode'] = 'tag'      # v1.4.6: these are the v1.4.5 'tag' rules (follow-messages: test_v146)
         con = sqlite3.connect(self.db.path)
         con.execute('ALTER TABLE chat ADD COLUMN is_filtered INTEGER DEFAULT 0')
         con.execute('ALTER TABLE message ADD COLUMN is_spam INTEGER DEFAULT 0')
@@ -333,7 +334,6 @@ class Batching(test_watch.Base):
                          ['Test: one', '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: two'])
 
 
-del test_watch.Base   # not a test case of this module
 
 
 if __name__ == '__main__':

@@ -61,7 +61,7 @@ class GetConfig(Base):
         r = self.h.handle_request({'type': 'get_config'}, cfg=self.cfg(ownerXHandle='OwnerAcct', senderXHandle='SenderBot',
                                                                         ownerXUserId='99887766', webhookToken='tok'), now=self.clock.now)
         self.assertEqual(r['ok'], True)
-        self.assertEqual(r['version'], '1.4.5')
+        self.assertEqual(r['version'], self.m.rc.VERSION)
         self.assertEqual((r['paused'], r['dryRun']), (False, True))
         self.assertEqual(r['contacts'], [{'name': 'Test Contact', 'label': 'Test', 'handle': '+15555550123'}])
         self.assertEqual(r['relayConversationId'], CONV)
@@ -258,7 +258,8 @@ class RoutingAndWebhooks(Base):
     def test_refusals_do_not_confirm(self):
         self.req(text='Mike: a', paused=True)
         self.req(text='Mike: ', dryRun=False)
-        self.assertEqual(self.posts, [])
+        # v1.4.6: no confirmation, but he is always told why it was not sent
+        self.assertEqual([(p['type'], p['reason']) for p in self.posts], [('refused', 'not_sent')] * 2)
         self.assertEqual(self.req(text='Mike:   ')['error'], 'empty text after the name prefix')
 
 

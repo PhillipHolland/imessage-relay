@@ -32,6 +32,11 @@ def fresh(tmp):
     m.setup = importlib.reload(relay_setup)      # v1.3.8 guided setup
     import relay_contacts
     m.contacts = importlib.reload(relay_contacts)  # v1.4.0 Contacts lookup
+    import relay_ui
+    m.ui = importlib.reload(relay_ui)             # v1.4.6 UI queue (paths follow IMESSAGE_RELAY_HOME)
+    os.environ['IMESSAGE_RELAY_SEND_STAGE'] = os.path.join(tmp, 'send-stage')
+    import relay_media
+    m.media = importlib.reload(relay_media)       # v1.4.6 attachments (outbox / inflight / send stage)
     m.host = importlib.reload(imessage_relay_host)
     m.watch = importlib.reload(imessage_relay_watch)
     m.ctl = importlib.reload(relayctl)

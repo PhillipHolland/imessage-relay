@@ -408,6 +408,53 @@
       if (root && !isHiddenEl(root)) visit(root);
       return parts.join(' ').replace(/\s+/g, ' ').trim();
     }
+    // ---------- v1.4.6 shared post / link cards in HIS bubble ----------
+    // Sharing an X post (or a link) into the chat renders a card block (a link around a thumbnail) next to
+    // the typed text. It is not a reply quote: its canonical URL is what goes out as the iMessage text.
+    const STATUS_URL_RE = /^(?:https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com)?\/([A-Za-z0-9_]{1,15})\/status(?:es)?\/(\d{5,25})(?:[/?#]|$)/i;
+    function canonicalCardUrl(href) {
+      const h = String(href || '').trim();
+      const m = STATUS_URL_RE.exec(h);
+      if (m) return 'https://x.com/' + m[1] + '/status/' + m[2];
+      if (!/^https?:\/\//i.test(h)) return '';
+      try {
+        const u = new URL(h);
+        if (/^(?:www\.|mobile\.)?(?:x|twitter)\.com$/i.test(u.hostname)) return '';   // profile / chat links are not cards
+        return u.href;
+      } catch (e) { return ''; }
+    }
+    function cardInfo(entry) {
+      let body = bodyEl(entry);
+      const none = { urls: [], blocks: [] };
+      if (body === entry) return none;
+      if (repliedLabelQuote(entry, body)) return none;              // a native Reply preview is never a card
+      const typed = body ? extractText(body) : '';
+      if (!typed) body = body || null;                             // a card shared with no text of his own
+      const urls = [], blocks = [];
+      for (const a of safeAll(entry, 'a[href]')) {
+        if ((body && deepContains(body, a)) || isHiddenEl(a)) continue;   // links in his typed text stay text
+        const url = canonicalCardUrl(a.getAttribute('href'));
+        if (!url) continue;
+        // the block: climb while the parent does not also hold his text (or is the entry itself)
+        let blk = a;
+        for (let up = parentOf(blk); up && up !== entry && !(body && deepContains(up, body)); up = parentOf(up)) blk = up;
+        if (!blocks.includes(blk)) blocks.push(blk);
+        const sm = STATUS_URL_RE.exec(url);
+        if (sm ? typed.indexOf('/status/' + sm[2]) >= 0 : /https?:\/\//i.test(typed)) continue;   // he typed it already
+        if (!urls.includes(url)) urls.push(url);
+        if (urls.length >= 5) break;
+      }
+      return { urls, blocks };
+    }
+    function inCard(entry, el, info) {
+      return (info || cardInfo(entry)).blocks.some(b => deepContains(b, el));
+    }
+    function withCards(text, urls) {
+      const t = String(text || '').replace(/\s+$/, '');
+      if (!urls.length) return t;
+      return t ? t + (/:$/.test(t) || t.indexOf('\n') < 0 && t.length < 40 ? ' ' : '\n') + urls.join('\n') : urls.join('\n');
+    }
+
     function previewQuote(entry) {
       const body = bodyEl(entry);
       if (!body || body === entry) return '';
@@ -415,11 +462,13 @@
       for (let n = body; n && n !== entry; n = parentOf(n)) if (n.getAttribute && n.getAttribute('role') === 'article') { art = n; break; }
       const start = art || body;
       const parts = [];
+      const cards = cardInfo(entry);
       for (let n = start; n && n !== entry; n = parentOf(n)) {
         const sibs = [];
         for (let sib = n.previousElementSibling; sib; sib = sib.previousElementSibling) {
           if (isUuidEntry(sib) || safeAll(sib, cfg.uuidEntryPrefixSelector).some(isUuidEntry)) break;   // another message
           if (isHiddenEl(sib)) continue;
+          if (cards.blocks.some(b => deepContains(b, sib) || deepContains(sib, b))) continue;   // v1.4.6: a shared card, not a quote
           const t = visibleText(sib);
           if (t && !isChipText(t)) sibs.unshift(t);
         }
@@ -637,6 +686,7 @@
       return { up, down, trash };
     }
     function isPrompt(entry) {
+      if (isUiPrompt(uuidOf(entry))) return true;          // v1.4.6: the relay's ❓ on the owner's own message
       const tEl = bodyEl(entry);
       if (!tEl) return false;
       const t = String(tEl.textContent || '');
@@ -698,7 +748,7 @@
         if (now() - mk.at > PROMPT_WINDOW_MS) continue;
         const newer = Array.from(promptMarks.values()).some(o => o !== mk && o.at > mk.at);
         if (newer) continue;
-        if (analyze(e).direction === 'outbound') continue;   // the owner's own message is never a prompt
+        if (analyze(e).direction === 'outbound' && !isUiPrompt(u) && !UI_TAG_RE.test(entryText(e).text)) continue;   // the owner's own message is never a prompt (except a relay ❓ / 🤖 prompt)
         mk.fired = true;
         try { onReaction({ conversationId: conv, key: 'reaction:' + u, word, ts: new Date(now()).toISOString() }); } catch (err) { info('reaction emit failed', err); }
       }
@@ -744,7 +794,14 @@
       const topNewest = newestAtTop();
       for (const e of ordered) {
         const a = analyze(e);
-        if (!a.text) {
+        let cardUrls = [];
+        if (a.direction === 'outbound') {
+          // v1.4.6: a shared X post / link card goes out as its URL, after anything he typed ("Jordan:" + post)
+          try { cardUrls = cardInfo(e).urls; } catch (err) { cardUrls = []; }
+          if (cardUrls.length) a.text = withCards(a.text, cardUrls);
+        }
+        const media = a.direction === 'outbound' ? mediaOf(e) : [];
+        if (!a.text && !media.length || (a.direction === 'outbound' && mediaShell(e))) {
           const n = retryCounts.get(e) || 0;
           if (n < cfg.emptyTextRetries && !baselineReason) {
             retryCounts.set(e, n + 1);
@@ -756,6 +813,9 @@
         if (seenKeys.has(a.key)) { stats.skippedDup++; continue; }
         seenKeys.add(a.key);
         if (baselineReason) continue;
+        if (UI_TAG_RE.test(a.text)) {                 // v1.4.6: a prompt the relay itself typed: never input
+          seen.add(a.uuid); stats.skippedUi = (stats.skippedUi || 0) + 1; continue;
+        }
 
         // Freshness (item 1): a bubble whose time[datetime] is older than freshMs is history.
         let ts = new Date(now()).toISOString();
@@ -780,8 +840,9 @@
 
         const t = now();
         recentEmits = recentEmits.filter(r => t - r.t < cfg.dupWindowMs);
-        if (recentEmits.some(r => r.text === a.text && r.direction === a.direction)) { stats.skippedDup++; continue; }
-        recentEmits.push({ text: a.text, direction: a.direction, t });
+        const dupText = a.text + (media.length ? '\u0000' + media.join('|') : '');
+        if (recentEmits.some(r => r.text === dupText && r.direction === a.direction)) { stats.skippedDup++; continue; }
+        recentEmits.push({ text: dupText, direction: a.direction, t });
 
         lastEls[a.direction] = e;
         lastEls.any = e;
@@ -800,6 +861,12 @@
         const item = { ts, conversationId: conv, direction: a.direction, text: a.text, signals: a.signals, score: a.score, key: a.key, source };
         if (a.quotedText) item.quotedText = a.quotedText;
         if (a.direction !== 'inbound') { try { item.quoteProbe = structureOf(e); } catch (err) { /* diagnostics only */ } }
+        if (cardUrls.length) item.cards = cardUrls.length;
+        if (media.length) {             // v1.4.6: his photos ride along (bytes read only when the send goes ahead)
+          pruneMedia();
+          mediaRefs.set(String(a.uuid).toLowerCase(), { srcs: media, at: realNow() });
+          item.mediaCount = media.length;
+        }
         try { emit(item); } catch (err) { info('emit failed', err); }
       }
     }
@@ -993,6 +1060,334 @@
         ', roles=' + JSON.stringify(f.roles) + ', hasShadow=' + f.hasShadow + ', iframes=' + f.iframes + ', mode=' + f.mode + ', entries=' + f.entriesMatched);
     }
 
+    // ---------- v1.4.6: fast feedback, done in the owner's OWN tab as the owner ----------
+    // The extension now acts in X Chat's web UI, but only in these narrow ways, all requested by the Mac
+    // helper and all on the relay chat: (1) put ONE emoji reaction on ONE of the owner's own messages
+    // (found by its message-<uuid>), (2) type a relay prompt that starts with UI_TAG into an EMPTY
+    // composer and press send. Anything it typed, and every reaction it placed, is ignored as input.
+    const UI_TAG = '\u{1F916}';
+    const UI_TAG_RE = /^\s*\u{1F916}/u;
+    const realNow = () => Date.now();
+    const uiPromptUuids = new Map();         // uuid -> at: the owner's message carrying a relay ❓ (2 min)
+    const REACT_LABEL_RE = /\b(add\s+)?(react|reacts|reaction|reactions|emoji)\b/i;
+    const DANGER_RE = /delete|unsend|remove|report|copy|forward|edit|reply|pin|share|block|mute|leave|more|download|translate/i;
+    const VOCAB = ['react', 'reaction', 'emoji', 'reply', 'more', 'copy', 'delete', 'edit', 'add', 'search', 'pin',
+                   'forward', 'unsend', 'options', 'actions', 'close', 'menu', 'like', 'heart'];
+    const EMOJI_NAMES = {
+      '\u2705': ['check mark button', 'white heavy check mark', 'check mark', 'green check mark'],
+      '\u{1F440}': ['eyes'],
+      '\u2753': ['question mark', 'red question mark', 'red question mark ornament', 'black question mark ornament', 'question'],
+      '\u2764': ['red heart', 'heart', 'heavy black heart'],
+      '\u{1F44D}': ['thumbs up', 'thumbs up sign'],
+      '\u{1F44E}': ['thumbs down', 'thumbs down sign'],
+      '\u{1F602}': ['face with tears of joy'],
+      '\u203C': ['double exclamation mark'],
+      '\u26A0': ['warning', 'warning sign'],
+    };
+    const SEARCH_WORD = { '\u2705': 'check', '\u{1F440}': 'eyes', '\u2753': 'question', '\u2764': 'heart',
+                          '\u{1F44D}': 'thumbs up', '\u{1F44E}': 'thumbs down', '\u{1F602}': 'joy', '\u203C': 'exclamation', '\u26A0': 'warning' };
+    const OPTION_SEL = 'button,[role="button"],[role="menuitem"],[role="menuitemradio"],[role="option"],[role="gridcell"],[role="img"],img[alt]';
+    let uiChain = Promise.resolve();
+    function uiSerial(fn) { const p = uiChain.then(fn, fn); uiChain = p.catch(() => {}); return p; }
+    function ems(s) { return String(s || '').replace(/[\uFE0E\uFE0F\u200d]/g, '').trim(); }
+    function sleep(ms) { return new Promise(r => win.setTimeout(r, ms)); }
+    async function waitFor(fn, ms, step) {
+      const end = realNow() + ms;
+      for (;;) {
+        let v = null; try { v = fn(); } catch (e) { v = null; }
+        if (v) return v;
+        if (realNow() >= end) return null;
+        await sleep(step || 60);
+      }
+    }
+    function labelOf(el) { return String((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || ''); }
+    function entryByUuid(u) {
+      const want = String(u || '').toLowerCase();
+      if (!/^[0-9a-f-]{8,64}$/.test(want)) return null;
+      const all = allEntries();
+      return all.find(e => uuidOf(e) === want) || null;
+    }
+    function fire(el, types) {
+      const W = (el.ownerDocument && el.ownerDocument.defaultView) || win;
+      for (const t of types) {
+        let ev;
+        try {
+          ev = /^pointer/.test(t) && W.PointerEvent ? new W.PointerEvent(t, { bubbles: true, cancelable: true })
+             : new W.MouseEvent(t, { bubbles: true, cancelable: true });
+        } catch (e) { ev = new W.Event(t, { bubbles: true, cancelable: true }); }
+        try { el.dispatchEvent(ev); } catch (e) { /* detached */ }
+      }
+    }
+    function hover(entry) {
+      const b = bodyEl(entry) || entry;
+      for (const el of [entry, b]) fire(el, ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove']);
+    }
+    function press(el) { fire(el, ['pointerdown', 'mousedown', 'pointerup', 'mouseup']); try { el.click(); } catch (e) { fire(el, ['click']); } }
+    function escape() {
+      const W = doc.defaultView || win;
+      for (const t of [doc.activeElement, doc.body, doc]) {
+        if (!t) continue;
+        try { t.dispatchEvent(new W.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true })); } catch (e) { /* ignore */ }
+      }
+    }
+    function otherEntry(el, entry) { const e = closestEntry(el); return !!(e && e !== entry); }
+    function inBody(el, entry) { const b = bodyEl(entry); const q = findQuote(entry); return !!((b && deepContains(b, el)) || (q && deepContains(q, el))); }
+    function findReactButton(entry) {
+      const scopes = [entry];
+      for (let a = parentOf(entry), i = 0; a && i < 3; a = parentOf(a), i++) scopes.push(a);
+      const seenEls = new Set();
+      const pick = list => list.find(el => {
+        if (seenEls.has(el)) return false; seenEls.add(el);
+        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el)) return false;
+        const lab = labelOf(el), tid = String(el.getAttribute('data-testid') || '');
+        if (DANGER_RE.test(lab) || DANGER_RE.test(tid)) return false;
+        return REACT_LABEL_RE.test(lab) || /react|emoji/i.test(tid);
+      });
+      for (const s of scopes) { const b = pick(safeAll(s, 'button,[role="button"]')); if (b) return b; }
+      return pick(safeAll(doc, '[role="toolbar"] button,[role="toolbar"] [role="button"],[role="menu"] [role="menuitem"]'));
+    }
+    function matchesEmoji(el, emoji) {
+      const want = ems(emoji), names = EMOJI_NAMES[want] || [];
+      const lab = ems(labelOf(el)).toLowerCase();
+      if (lab && (lab === want || names.includes(lab))) return true;
+      if (el.tagName === 'IMG' && ems(el.getAttribute('alt')) === want) return true;
+      const own = ems(el.textContent || '');
+      return own === want;
+    }
+    function findEmojiOption(entry, emoji, exclude) {
+      const list = safeAll(doc, OPTION_SEL);
+      for (const el of list) {
+        if (exclude && exclude.has(el)) continue;
+        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el)) continue;
+        if (!matchesEmoji(el, emoji)) continue;
+        const btn = el.tagName === 'IMG' || el.getAttribute('role') === 'img'
+          ? (el.closest ? el.closest('button,[role="button"],[role="menuitem"],[role="option"],[role="gridcell"]') : null) || el : el;
+        return btn;
+      }
+      return null;
+    }
+    function reactionCount(entry, emoji) {
+      const want = ems(emoji);
+      let n = 0;
+      walkElements(entry, el => {
+        if (inBody(el, entry)) return;
+        if (el.closest && el.closest('[role="menu"],[role="menuitem"],[role="dialog"],[role="toolbar"],[role="tooltip"],[role="listbox"],button[aria-haspopup]')) return;
+        for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType === 3 && ems(c.nodeValue).includes(want)) n++;
+        if (ems(el.getAttribute('alt')) === want) n++;
+      });
+      return n;
+    }
+    function vocabSeen(entry) {
+      const words = new Set();
+      const els = [entry];
+      for (let a = parentOf(entry), i = 0; a && i < 3; a = parentOf(a), i++) els.push(a);
+      for (const s of els) for (const el of safeAll(s, 'button,[role="button"],[role="menuitem"]').slice(0, 60)) {
+        if (inBody(el, entry) || otherEntry(el, entry)) continue;
+        const toks = tokens(labelOf(el) + ' ' + (el.getAttribute('data-testid') || ''));
+        for (const w of VOCAB) if (toks.includes(w)) words.add(w);
+      }
+      return Array.from(words).sort();
+    }
+    function setNativeValue(el, value) {
+      const W = (el.ownerDocument && el.ownerDocument.defaultView) || win;
+      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+        const proto = el.tagName === 'TEXTAREA' ? W.HTMLTextAreaElement.prototype : W.HTMLInputElement.prototype;
+        const d = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (d && d.set) d.set.call(el, value); else el.value = value;
+        el.dispatchEvent(new W.Event('input', { bubbles: true }));
+        el.dispatchEvent(new W.Event('change', { bubbles: true }));
+        return;
+      }
+      try { el.focus(); } catch (e) { /* ignore */ }
+      let done = false;
+      try { if (doc.execCommand) { doc.execCommand('selectAll', false, null); done = doc.execCommand('insertText', false, value); } } catch (e) { done = false; }
+      if (!done) {
+        el.textContent = value;
+        try { el.dispatchEvent(new W.InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' })); }
+        catch (e) { el.dispatchEvent(new W.Event('input', { bubbles: true })); }
+      }
+    }
+    function composerValue(el) { return (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') ? String(el.value || '') : String(el.textContent || ''); }
+
+    async function uiReactNow(uuid, emoji, opt) {
+      const t0 = realNow();
+      const out = (ok, step, extra) => Object.assign({ ok, step, ms: realNow() - t0 }, extra || {});
+      const entry = entryByUuid(uuid);
+      if (!entry) return out(false, 'no-entry');
+      const a = analyze(entry);
+      if (a.direction !== 'outbound') return out(false, 'not-mine');     // only ever the owner's own message
+      const want = ems(emoji);
+      if (!want) return out(false, 'bad-emoji');
+      if (want !== ems('\u2753')) clearPrompt(uuid);     // a sent / read / mirrored message is no longer a prompt
+      const before = reactionCount(entry, want);
+      if (before > 0) { if (opt && opt.prompt) watchPrompt(uuid, entry); return out(true, 'already'); }
+      hover(entry);
+      const btn = await waitFor(() => findReactButton(entry), 1200);
+      if (!btn) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
+      const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));   // e.g. an existing pill
+      press(btn);
+      let option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
+      if (!option) {
+        const search = safeAll(doc, 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"]')
+          .find(el => !otherEntry(el, entry) && !/composer/i.test(String(el.getAttribute('data-testid') || '')) && !(el.closest && el.closest('[data-testid*="omposer"]')));
+        if (search) {
+          setNativeValue(search, SEARCH_WORD[want] || '');
+          option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
+        }
+      }
+      if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry) }); }
+      press(option);
+      const ok = await waitFor(() => reactionCount(entry, want) > before, 2500, 80);
+      if (!ok) { escape(); return out(false, 'not-placed'); }
+      if (opt && opt.prompt) watchPrompt(uuid, entry);
+      return out(true, 'placed');
+    }
+
+    async function uiTypeNow(text) {
+      const t0 = realNow();
+      const out = (ok, step) => ({ ok, step, ms: realNow() - t0 });
+      const s = String(text || '');
+      if (!UI_TAG_RE.test(s) || s.length > 600) return out(false, 'untagged');      // only relay prompts, ever
+      const box = safeAll(doc, '[data-testid="dm-composer-textarea"]')[0];
+      if (!box) return out(false, 'no-composer');
+      if (composerValue(box).trim()) return out(false, 'composer-busy');            // never touch his draft
+      const norm = v => normSpaces(v).replace(/\s+/g, ' ').trim();
+      const countMine = () => allEntries().filter(e => norm(entryText(e).text) === norm(s)).length;
+      const before = countMine();
+      setNativeValue(box, s);
+      const btn = await waitFor(() => {
+        const b = safeAll(doc, '[data-testid="dm-composer-send-button"]')[0];
+        return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' ? b : null;
+      }, 1500);
+      if (!btn || norm(composerValue(box)) !== norm(s)) {
+        if (norm(composerValue(box)) === norm(s)) setNativeValue(box, '');
+        return out(false, btn ? 'composer-changed' : 'no-send-button');
+      }
+      press(btn);
+      const ok = await waitFor(() => countMine() > before, 5000, 100);
+      if (ok) return out(true, 'sent');
+      if (!composerValue(box).trim()) return out(true, 'cleared');                 // X took it; bubble not seen yet
+      if (norm(composerValue(box)) === norm(s)) setNativeValue(box, '');
+      return out(false, 'not-sent');
+    }
+
+    // ---------- v1.4.6 attachments the owner sends (photos/files in HIS outbound bubbles) ----------
+    // Only image elements inside his own bubble; the bytes are read in-page from the image the X client
+    // already decrypted and shown, in 512 KiB chunks the service worker forwards to the Mac. Nothing is
+    // stored: the buffer is released as soon as the send is built (or after MEDIA_HOLD_MS).
+    const MEDIA_MAX_BYTES = 25 * 1024 * 1024, MEDIA_CHUNK = 512 * 1024, MEDIA_MAX = 10, MEDIA_HOLD_MS = 5 * 60 * 1000;
+    const mediaRefs = new Map();       // uuid -> {srcs, at}
+    const mediaBufs = new Map();       // uuid#i -> {bytes, mime, at}
+    const MEDIA_SRC_RE = /^(blob:|data:image\/|https:\/\/(ton|pbs)\.twimg\.com\/)/i;
+    function isEmojiImg(img) {
+      const src = String(img.getAttribute('src') || '');
+      const alt = String(img.getAttribute('alt') || '');
+      if (/\/emoji\/|twemoji|abs(-\d)?\.twimg\.com\/(emoji|hashflags)|profile_images|\/avatar/i.test(src)) return true;
+      if (alt && alt.length <= 4 && !/[A-Za-z0-9]/.test(alt)) return true;   // an emoji glyph image
+      const w = Number(img.getAttribute('width') || img.naturalWidth || 0);
+      return w > 0 && w < 40;
+    }
+    function mediaOf(entry) {
+      const out = [];
+      let q = null;
+      try { q = findQuote(entry); } catch (e) { q = null; }
+      const cards = cardInfo(entry);
+      for (const img of safeAll(entry, 'img')) {
+        const src = String(img.getAttribute('src') || '');
+        if (!src || !MEDIA_SRC_RE.test(src) || isEmojiImg(img) || isExcluded(img)) continue;
+        if (q && deepContains(q, img)) continue;      // a photo in the quoted message is theirs, never re-sent
+        if (inCard(entry, img, cards)) continue;      // a shared post / link thumbnail: the URL goes instead
+        if (!out.includes(src)) out.push(src);
+        if (out.length >= MEDIA_MAX) break;
+      }
+      return out;
+    }
+    function mediaShell(entry) {        // a photo bubble whose image has not loaded yet
+      if (mediaOf(entry).length) return false;
+      return safeAll(entry, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i],[aria-label*="image" i],[aria-label*="photo" i]').length > 0;
+    }
+    function pruneMedia() {
+      const t = realNow();
+      for (const [k, v] of mediaRefs) if (t - v.at > MEDIA_HOLD_MS) mediaRefs.delete(k);
+      for (const [k, v] of mediaBufs) if (t - v.at > MEDIA_HOLD_MS) mediaBufs.delete(k);
+    }
+    function hex(buf) { return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join(''); }
+    function b64(bytes) {
+      let s = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      return (win.btoa || btoa)(s);
+    }
+    function sniffMime(b) {
+      if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+      if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+      if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'image/gif';
+      if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45) return 'image/webp';
+      return '';
+    }
+    async function uiMediaInfo(uuid, index) {
+      pruneMedia();
+      const ref = mediaRefs.get(String(uuid).toLowerCase());
+      const src = ref && ref.srcs[Number(index) || 0];
+      if (!src) return { ok: false, step: 'no-media' };
+      try {
+        const f = win.fetch || (typeof fetch !== 'undefined' ? fetch : null);
+        const r = await f(src, { credentials: 'include' });
+        if (!r || !r.ok) return { ok: false, step: 'fetch-failed' };
+        const len = Number((r.headers && r.headers.get && r.headers.get('content-length')) || 0);
+        if (len > MEDIA_MAX_BYTES) return { ok: false, step: 'too-large', size: len };
+        const buf = await r.arrayBuffer();
+        if (buf.byteLength > MEDIA_MAX_BYTES) return { ok: false, step: 'too-large', size: buf.byteLength };
+        if (!buf.byteLength) return { ok: false, step: 'empty' };
+        const bytes = new Uint8Array(buf);
+        const mime = sniffMime(bytes) || String((r.headers && r.headers.get && r.headers.get('content-type')) || '').split(';')[0].slice(0, 60);
+        const sub = (win.crypto && win.crypto.subtle) || (typeof crypto !== 'undefined' && crypto.subtle);
+        const sha256 = hex(await sub.digest('SHA-256', bytes));
+        mediaBufs.set(String(uuid).toLowerCase() + '#' + index, { bytes, mime, at: realNow() });
+        const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' }[mime] || '';
+        return { ok: true, size: bytes.length, mime, sha256, name: (mime.indexOf('image/') === 0 ? 'photo' : 'attachment') + (ext ? '.' + ext : ''),
+                 chunks: Math.ceil(bytes.length / MEDIA_CHUNK) };
+      } catch (e) { return { ok: false, step: 'read-failed' }; }
+    }
+    function uiMediaChunk(uuid, index, seq) {
+      const b = mediaBufs.get(String(uuid).toLowerCase() + '#' + index);
+      if (!b) return { ok: false, step: 'expired' };
+      const start = (Number(seq) || 0) * MEDIA_CHUNK;
+      if (start >= b.bytes.length) return { ok: false, step: 'past-end' };
+      return { ok: true, data: b64(b.bytes.subarray(start, start + MEDIA_CHUNK)) };
+    }
+    function uiMediaRelease(uuid) {
+      const u = String(uuid).toLowerCase();
+      mediaRefs.delete(u);
+      for (const k of Array.from(mediaBufs.keys())) if (k.indexOf(u + '#') === 0) mediaBufs.delete(k);
+      return { ok: true };
+    }
+
+    async function uiAwaitUndoNow(uuid, ms) {
+      const end = realNow() + Math.max(0, Math.min(10000, Number(ms) || 0));
+      for (;;) {
+        const e = entryByUuid(uuid);
+        if (e && analyze(e).direction === 'outbound' && reactionState(e).trash) return { trashed: true };
+        if (realNow() >= end) return { trashed: false, seen: !!e };
+        await sleep(150);
+      }
+    }
+    function watchPrompt(uuid, entry) {
+      const u = String(uuid).toLowerCase();
+      uiPromptUuids.set(u, now());
+      const st = reactionState(entry);
+      promptMarks.set(u, { at: now(), up: st.up, down: st.down, fired: false });
+    }
+    function clearPrompt(uuid) {
+      const u = String(uuid || '').toLowerCase();
+      if (uiPromptUuids.delete(u)) { const mk = promptMarks.get(u); if (mk) mk.fired = true; }
+    }
+    function isUiPrompt(u) {
+      const at = uiPromptUuids.get(u);
+      if (at === undefined) return false;
+      if (now() - at > PROMPT_WINDOW_MS) { uiPromptUuids.delete(u); return false; }
+      return true;
+    }
+
     const OBS_OPTS = { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'alt'] };
     return {
       config: cfg,
@@ -1024,6 +1419,14 @@
       structureOf,
       status() { return { conversationId: conversationId(), mode, chatRoot: chatRoot().selector, entriesOnPage: allEntries().length, ownerConfirmed: !!ownerCheck(), stats: Object.assign({}, stats) }; },
       _analyze: analyze,
+      uiReact: (uuid, emoji, opt) => uiSerial(() => uiReactNow(uuid, emoji, opt)),   // v1.4.6
+      uiType: text => uiSerial(() => uiTypeNow(text)),
+      uiAwaitUndo: (uuid, ms) => uiAwaitUndoNow(uuid, ms),
+      uiClearPrompt: clearPrompt,
+      uiMediaInfo, uiMediaChunk, uiMediaRelease,  // v1.4.6 attachments
+      _mediaOf: mediaOf,
+      _cardInfo: cardInfo,
+      _canonicalCardUrl: canonicalCardUrl,
     };
   }
 
@@ -1175,6 +1578,11 @@
     const tick = () => { if (isChatPath(here())) startMain(); };   // frame polls the top URL like the top frame (item 7)
     tick();
     setInterval(tick, 1000);
+    // v1.4.6: while the relay chat is open, nudge the background every 15 s so queued UI actions (a
+    // mirrored tapback, a read receipt's 👀) are picked up. Ids only travel this way, never text.
+    setInterval(() => {
+      if (mainDetector && !state.paused && mainDetector.hasEntries()) send({ type: 'relay-ui-tick' });
+    }, 15000);
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -1193,6 +1601,21 @@
       if (!mainDetector || !mainDetector.hasEntries()) return false;
       try { sendResponse({ ok: true, from: role, structure: mainDetector.pageStructure() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
       return false;
+    }
+    if (msg && msg.type === 'relay-ui') {                 // v1.4.6: background asks for one UI action
+      if (!mainDetector || !mainDetector.hasEntries()) return false;
+      if (state.paused) { sendResponse({ ok: false, step: 'paused' }); return false; }
+      let p;
+      if (msg.action === 'react') p = mainDetector.uiReact(String(msg.uuid || ''), String(msg.emoji || ''), { prompt: !!msg.prompt });
+      else if (msg.action === 'type') p = mainDetector.uiType(String(msg.text || ''));
+      else if (msg.action === 'await-undo') p = mainDetector.uiAwaitUndo(String(msg.uuid || ''), Number(msg.ms) || 0);
+      else if (msg.action === 'clear-prompt') { mainDetector.uiClearPrompt(String(msg.uuid || '')); sendResponse({ ok: true }); return false; }
+      else if (msg.action === 'media-info') p = mainDetector.uiMediaInfo(String(msg.uuid || ''), Number(msg.index) || 0);
+      else if (msg.action === 'media-chunk') { sendResponse(mainDetector.uiMediaChunk(String(msg.uuid || ''), Number(msg.index) || 0, Number(msg.seq) || 0)); return false; }
+      else if (msg.action === 'media-release') { sendResponse(mainDetector.uiMediaRelease(String(msg.uuid || ''))); return false; }
+      else { sendResponse({ ok: false, step: 'unknown-action' }); return false; }
+      p.then(r => sendResponse(r)).catch(e => sendResponse({ ok: false, step: 'error' }));
+      return true;
     }
     if (!msg || msg.type !== 'relay-debug') return false;
     if (!mainDetector || !mainDetector.hasEntries()) return false;

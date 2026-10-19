@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.5.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.6.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -43,6 +43,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc  # noqa: E402
 import relay_test  # noqa: E402  (v1.3.8: the /test end-to-end check)
+import relay_ui  # noqa: E402  (v1.4.6: fast feedback in the owner's X tab)
+import relay_media  # noqa: E402  (v1.4.6: attachments the owner sends from X Chat)
 import uuid  # noqa: E402
 
 STATE_PATH = os.path.join(rc.APP_DIR, 'host_state.json')
@@ -148,13 +150,70 @@ def handle_get_config(cfg, now=time.time):
         'senderXHandle': cfg.get('senderXHandle', ''),
         'pendingSelfTest': pending_selftest(now),
         'configError': cfg.get('_configError', ''),
+        'uiReactions': bool(cfg.get('uiReactions', True)), 'undoSeconds': int(cfg.get('undoSeconds', 5)),   # v1.4.6
+        'relayAttachments': bool(cfg.get('relayAttachments', True)),
     }
+
+
+# v1.4.6: per-request UI context. When the extension says it can act in the owner's X tab (`ui: true`),
+# a confirm prompt becomes a ❓ reaction on HIS message and a "Who's this for?" is typed by the extension
+# (tagged UI_TAG, never relayed). The routine copy of that prompt is DEFERRED by UI_FALLBACK_S and only
+# posted if the extension does not ack, so a UI miss still reaches the phone the old way.
+UI_TAG = '\U0001f916'          # every relay-authored message the extension types starts with this
+UI_DEFER_TYPES = ('needs_confirm', 'needs_target')
+_UI = {'on': False, 'uuid': '', 'react': [], 'type': []}
+
+
+def _ui_reset(msg=None):
+    on = bool(isinstance(msg, dict) and msg.get('ui') is True and msg.get('type') in ('send', 'reaction', 'signal'))
+    u = str((msg or {}).get('xUuid') or '') if isinstance(msg, dict) else ''
+    _UI.update(on=on, uuid=u if relay_ui.valid_uuid(u) else '', react=[], type=[])
+
+
+def _ui_out():
+    out = {}
+    if _UI['react']:
+        out['react'] = list(_UI['react'])
+    if _UI['type']:
+        out['type'] = list(_UI['type'])
+    return out
+
+
+def _defer_to_ui(cfg, payload, now=time.time):
+    """Queue the routine copy for later and hand the prompt to the extension instead. Returns True if
+    deferred (the caller then posts nothing now)."""
+    t = payload.get('type')
+    if not _UI['on'] or t not in UI_DEFER_TYPES or not cfg.get('uiPrompts', True):
+        return False
+    detail = str(payload.get('detail') or '').strip()
+    if t == 'needs_confirm':
+        if not _UI['uuid']:
+            return False
+        action = {'emoji': '\u2753', 'uuid': _UI['uuid']}
+    else:
+        if not detail:
+            return False
+        action = {'text': UI_TAG + ' ' + detail[:400]}
+    rc.ensure_event_id(payload)
+    note = uuid.uuid4().hex
+    try:
+        rc.write_json_atomic(os.path.join(NOTIFY_RETRY_DIR, note + '.json'),
+                             {'queuedAt': now(), 'notBefore': now() + relay_ui.UI_FALLBACK_S, 'ui': True,
+                              'payload': payload}, mode=0o600)
+    except OSError:
+        return False
+    action['noteId'] = note
+    (_UI['react'] if 'emoji' in action else _UI['type']).append(action)
+    rc.log_event('notify', type=t, ok=True, ui=True)
+    return True
 
 
 def notify(cfg, poster, payload):
     """Body-free status event to the bot's webhook (sent confirmations, "who is this for?")."""
     if not cfg.get('webhookUrl'):
         return False
+    if _defer_to_ui(cfg, payload):
+        return True
     rc.ensure_event_id(payload)   # every status event gets a unique id so a retried webhook dedupes (item B)
     ok = bool(poster(cfg['webhookUrl'], payload, cfg.get('webhookToken', ''), timeout=NOTIFY_TIMEOUT_S))
     queued = False
@@ -918,6 +977,16 @@ def _short_mask(handle):
     return m.split(' ', 1)[1] if m.startswith('+') and ' ' in m else m
 
 
+_UI_PROMPT_RE = re.compile(r'reply yes within 2 min|^\s*who\u2019?\'?s this for\?', re.I)
+
+
+def is_relay_ui_text(text):
+    """True for anything the relay itself authored in the owner's name: the UI_TAG prefix, or (belt and
+    braces) the exact prompt phrasing the relay uses."""
+    s = str(text or '').lstrip()
+    return s.startswith(UI_TAG) or bool(_UI_PROMPT_RE.search(s[:300]))
+
+
 def handle_send(msg, cfg, runner, sleeper, now, poster):
     text = msg.get('text')
     quoted = msg.get('quotedText') if isinstance(msg.get('quotedText'), str) else ''
@@ -925,16 +994,35 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     dry = cfg['dryRun']
     base = {'dryRun': dry}
 
-    def refuse(reason, **f):
+    def refuse(reason, label='', **f):
         rc.log_event('refused', reason=reason, **f)
+        _discard_attachments(msg.get('attachments'))     # v1.4.6: a refused reply keeps no upload
+        _tell_refusal(reason, label, cfg, poster, now)   # v1.4.6: he always hears why (text + \u26a0\ufe0f)
         return dict(base, ok=False, error=reason)
 
     if not cfg['relayConversationId']:
         return refuse('relayConversationId not set in config')
     if conv != cfg['relayConversationId']:
         return refuse('not the relay conversation')
-    if not isinstance(text, str) or not text.strip():
+    skipped_n = msg.get('attachmentsSkipped')
+    skipped_n = skipped_n if isinstance(skipped_n, int) and not isinstance(skipped_n, bool) and 0 < skipped_n <= 10 else 0
+    atts, att_err = _parse_attachments(msg.get('attachments'))
+    if att_err:
+        _discard_attachments(msg.get('attachments'))
+        return refuse(att_err)
+    if text is None and (atts or skipped_n):
+        text = ''
+    if isinstance(text, str) and not text.strip() and not atts and skipped_n and not cfg['paused']:
+        # v1.4.6: only photos, and none could be read from X: say so (counts only), send nothing
+        notify(cfg, poster, {'type': 'refused', 'reason': 'attachment', 'count': skipped_n, 'sentText': False,
+                             'at': rc.iso_utc(now())})
+        return refuse('attachments could not be read', attachments=skipped_n)
+    if not isinstance(text, str) or (not text.strip() and not atts):
         return refuse('empty text')
+    if is_relay_ui_text(text):
+        # v1.4.6: a prompt the extension typed as the owner (tagged). Never a reply, never a command.
+        rc.log_event('ui_text_ignored', textLength=len(text))
+        return dict(base, ok=True, skipped='relay prompt')
     # v1.3.9: drop X Chat time/status chips an older extension may have appended ("hi\n9:07 AM\n\n9:07 AM").
     text = rc.strip_trailing_chips(text)
     quoted = rc.strip_trailing_chips(quoted)
@@ -971,7 +1059,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         # sanitized test ids, attribute NAMES, 'Replied to' yes/no flags). Never any message text.
         rc.log_event('quote_probe', quoteSeen=bool(quoted.strip()), quoteResolved=route.get('by') == 'quote',
                      routedBy=route.get('by') or '', needsTarget=bool(route.get('needsTarget')),
-                     confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe))
+                     confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe),
+                     cards=msg.get('cards') if isinstance(msg.get('cards'), int) and 0 < msg.get('cards') <= 5 else 0)
     confirmed = bool(msg.get('confirmed'))
     hint = msg.get('handle')
     if hint and str(hint).startswith('group:'):
@@ -1058,8 +1147,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         handle = contact['handle']
         if hint_norm and hint_norm != handle:
             return refuse('the routed recipient does not match the handle the extension reported', handle=handle)
-        if not body.strip():
-            return refuse('empty text after the name prefix', handle=handle)
+        if not body.strip() and not atts:
+            return refuse('empty text after the name prefix', label=contact.get('label', ''), handle=handle)
         if contact.get('kind') == 'group':
             # v1.4.5: a reply to a group (exact name or a quote of its message) is ALWAYS confirmed first.
             guid = group_guid_lookup(handle, sleeper, now)
@@ -1105,7 +1194,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                                  'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, needsConfirm=True, guess=True, label=contact['label'],
                         handle=handle, reason='guessed', contact=contact['label'], routedBy=by)
-    if not body.strip():
+    if not body.strip() and not atts:
         return refuse('empty text', handle=handle)
     # Echo guard: never send one of the bot's own relay-chat posts, nor a relayed inbound message
     # bounced straight back (compared via per-install HMAC; see relay_common).
@@ -1126,34 +1215,54 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         t = now()
         recent = {k: v for k, v in (state.get('recent') or {}).items() if t - v < DEDUPE_WINDOW_S}
         window = [x for x in (state.get('sends') or []) if t - x < 60]
-        fp = fingerprint(handle, body)
+        fp = fingerprint(handle, body + ''.join('\n#' + a['sha256'] for a in atts))
         if fp in recent:
             rc.log_event('duplicate_dropped', handle=handle, textLength=len(body), dryRun=dry)
+            _discard_attachments(msg.get('attachments'))
             return dict(base, ok=True, skipped='duplicate within 60s', **who)
         if len(window) >= cfg['maxSendsPerMinute']:
             rc.log_event('rate_limited', handle=handle, textLength=len(body), limit=cfg['maxSendsPerMinute'])
+            _discard_attachments(msg.get('attachments'))
             return dict(base, ok=False, error='rate limited (%d per minute)' % cfg['maxSendsPerMinute'], **who)
-        outgoing = body + ('\n' + cfg['footer'] if cfg.get('footer') else '')
+        outgoing = (body + ('\n' + cfg['footer'] if cfg.get('footer') else '')) if body.strip() else ''
         recent[fp] = t
         window.append(t)
         state.update(recent=recent, sends=window)
         ok, err = True, ''
+        pending_id = ''
         is_group = contact.get('kind') == 'group'
-        if not dry:
-            if is_group:        # v1.4.5: to the group chat itself, by its Messages chat id
-                ok, err = rc.send_imessage(outgoing, contact['guid'], runner=runner, sleeper=sleeper, target='chat')
-            else:
-                ok, err = rc.send_imessage(outgoing, handle, runner=runner, sleeper=sleeper)
+        pending_ids = []
+        ui_on = bool(_UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True))
+        dest, tgt = (contact['guid'], 'chat') if is_group else (handle, 'participant')
+        staged = []
+        if not dry and atts:
+            staged, err = _stage_attachments(atts)
+            ok = err == ''
+        if not dry and ok and outgoing:
+            ok, err = rc.send_imessage(outgoing, dest, runner=runner, sleeper=sleeper, target=tgt)
             if not ok:
-                if err != 'timeout':        # a clear failure: allow an immediate manual retry
+                for p in staged:
+                    relay_media.remove_staged(p)
+            if ok and cfg.get('deliveryCheck', True):
+                pending_ids.append(rc.add_pending_send(handle, t, len(outgoing), label=contact['label'],
+                                   note=('new contact, ' + _short_mask(handle)) if new_contact else '',
+                                   chat_guid=contact['guid'] if is_group else '', x_uuid=_UI['uuid'], ui=ui_on))
+        if not dry and ok and atts:
+            # v1.4.6: each attachment is its own Messages send (file mode), after the text, same target
+            sent_files, err = _send_attachments(atts, staged, dest, tgt, handle, contact, t, cfg, runner, sleeper,
+                                               ui_on, pending_ids)
+            ok = err == ''
+            if not ok and (outgoing or sent_files):
+                err = 'attachment_failed'       # part of the reply went out: never resend (keep the fingerprint)
+        if not dry:
+            if not ok:
+                if err not in ('timeout', 'attachment_failed'):   # a clear failure: allow an immediate manual retry
                     recent.pop(fp, None)
                     window.pop()
                 # a timeout is ambiguous (it may actually have sent): keep the fingerprint, no double-send
-            elif cfg.get('deliveryCheck', True):
-                rc.add_pending_send(handle, t, len(outgoing), label=contact['label'],   # record inside the lock
-                                    note=('new contact, ' + _short_mask(handle)) if new_contact else '',
-                                    chat_guid=contact['guid'] if is_group else '')
+            pending_id = pending_ids[0] if pending_ids else ''
         rc.write_json_atomic(STATE_PATH, state)
+    _discard_attachments(msg.get('attachments'))      # dry run / failure / leftovers: no upload outlives the request
     if new_contact and ok and not dry:
         try:
             _finish_new_contact(handle, new_contact['name'], cfg)
@@ -1163,18 +1272,20 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if note:
         who['note'] = note
     if dry:
-        rc.log_event('dry_run', handle=handle, contact=contact['label'], routedBy=by, textLength=len(body), outgoingLength=len(outgoing))
+        rc.log_event('dry_run', handle=handle, contact=contact['label'], routedBy=by, textLength=len(body), outgoingLength=len(outgoing),
+                     attachments=len(atts))
         if cfg['confirmSends']:
             notify(cfg, poster, {'type': 'sent', 'label': contact['label'], 'contactName': contact['name'], 'dryRun': True,
                                  'delivered': None, 'routedBy': by, 'at': rc.iso_utc(t)})
         who.pop('note', None)
         return dict({'ok': True, 'dryRun': True, 'textLength': len(body)}, **who)
     if not ok:
-        rc.log_event('send_failed', textLength=len(body), error=err)      # err is a fixed code, never raw text
+        rc.log_event('send_failed', textLength=len(body), error=err, attachments=len(atts))      # err is a fixed code, never raw text
         return dict({'ok': False, 'dryRun': False, 'error': rc.error_message(err), 'errorCode': err}, **who)
     # Delivery proof is verified by the watcher (it holds Full Disk Access); the host recorded a
     # body-free pending entry inside its lock above. The host never confirms delivery itself.
-    rc.log_event('sent', routedBy=by, textLength=len(body), delivered=None, deliveryNote='pending')
+    rc.log_event('sent', routedBy=by, textLength=len(body), delivered=None, deliveryNote='pending', attachments=len(atts),
+                 attachmentBytes=sum(a['size'] for a in atts))
     # item 6: when deliveryCheck is on, the WATCHER posts the single confirmation (✓✓ delivered, or ✓ sent
     # after ~20s). The host only confirms here when delivery checking is off, so the owner still hears back.
     if cfg['confirmSends'] and not cfg.get('deliveryCheck', True):
@@ -1183,7 +1294,127 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if note:
             p['note'] = note
         notify(cfg, poster, p)
-    return dict({'ok': True, 'dryRun': False, 'sent': True, 'delivered': None, 'deliveryCheck': 'pending'}, **who)
+    res = dict({'ok': True, 'dryRun': False, 'sent': True, 'delivered': None, 'deliveryCheck': 'pending'}, **who)
+    if skipped_n:
+        notify(cfg, poster, {'type': 'refused', 'reason': 'attachment', 'count': skipped_n, 'label': contact['label'],
+                             'sentText': True, 'at': rc.iso_utc(t)})
+        res['attachmentsSkipped'] = skipped_n
+    if pending_id and _UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True):
+        # v1.4.6: \u2705 on HIS message right now (Messages accepted it); the watcher then skips the text line.
+        r = {'emoji': '\u2705', 'uuid': _UI['uuid'], 'pendingId': pending_id}
+        if len(pending_ids) > 1:
+            r['pendingIds'] = list(pending_ids)     # text + attachments: one \u2705 covers them all
+        _UI['react'].append(r)
+        res['pendingId'] = pending_id
+    if atts:
+        res['attachments'] = len(atts)
+    return res
+
+
+# v1.4.6: every refusal on the reply path tells him why (fixed, body-free wording). A few already say so
+# their own way, or are not about one of his replies at all.
+_REFUSAL_SILENT = {'relayConversationId not set in config', 'not the relay conversation', 'attachments could not be read',
+                   'refusing to echo a relayed message back to its sender', 'refusing to send one of my own relay messages'}
+_REFUSAL_TEXT = {
+    'empty text': 'That message had nothing I could send as an iMessage.',
+    'empty text after the name prefix': 'There was nothing after the name to send. Type the message after "{label}:".',
+    'text too long': 'It is too long to relay (limit %d characters).' % MAX_TEXT,
+    'paused': 'The relay is paused, so nothing was sent. /resume turns it back on.',
+    'no contacts in config': 'No contacts are set up yet, so nothing was sent (/add Name +1 \u2026).',
+    'confirmed reply without a target handle': 'That yes no longer matched a waiting reply. Send the reply again.',
+    'confirmed group send without a pending group prompt': 'That yes no longer matched a waiting group reply. Send it again.',
+    'confirmed handle is not a current recipient': 'That yes no longer matched a waiting reply. Send the reply again.',
+    'confirmed group send no longer names that group': 'That reply no longer names the group. Send it again.',
+    'the routed recipient does not match the handle the extension reported': 'The recipient changed while sending. Send it again.',
+    'refusing to relay to the owner handle': 'That would text your own number. Use /test send for a self-test.',
+    'bad attachment': 'An attachment was damaged on the way to the Mac. Attach it again.',
+}
+
+
+def _tell_refusal(reason, label, cfg, poster, now):
+    if reason in _REFUSAL_SILENT:
+        return
+    detail = _REFUSAL_TEXT.get(reason)
+    if detail is None:
+        detail = ('An attachment is over the limit. ' if reason.startswith(('too many attachments', 'attachment too large')) else '') + \
+                 'It was not sent (%s).' % reason[:80]
+    detail = detail.replace('{label}', rc.clean_label(label) or 'Name')
+    if _UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True):
+        _UI['react'].append({'emoji': '\u26a0\ufe0f', 'uuid': _UI['uuid']})    # instant, on his own message
+    try:
+        notify(cfg, poster, {'type': 'refused', 'reason': 'not_sent', 'detail': detail, 'at': rc.iso_utc(now())})
+    except Exception:
+        pass
+
+
+def _parse_attachments(raw):
+    """v1.4.6: validate the attachment list the extension sends with a reply (metadata only; the bytes
+    already arrived as attach_chunk uploads). Returns (list, error)."""
+    if raw is None:
+        return [], ''
+    if not isinstance(raw, list) or len(raw) > relay_media.MAX_OUTBOUND_FILES:
+        return [], 'too many attachments (limit %d)' % relay_media.MAX_OUTBOUND_FILES
+    out = []
+    for a in raw:
+        if not isinstance(a, dict) or not relay_media.valid_upload_id(a.get('uploadId')):
+            return [], 'bad attachment'
+        size = a.get('size')
+        if not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= relay_media.MAX_OUTBOUND_BYTES:
+            return [], 'attachment too large (limit %s)' % relay_media.fmt_size(relay_media.MAX_OUTBOUND_BYTES)
+        sha = str(a.get('sha256') or '').lower()
+        if not relay_media.SHA_RE.match(sha):
+            return [], 'bad attachment'
+        mime = str(a.get('mime') or '')[:80]
+        out.append({'uploadId': a['uploadId'], 'size': size, 'sha256': sha, 'mime': mime,
+                    'name': relay_media.safe_name(a.get('name'), mime)})
+    return out, ''
+
+
+def _discard_attachments(raw):
+    for a in raw if isinstance(raw, list) else []:
+        if isinstance(a, dict):
+            relay_media.discard_upload(a.get('uploadId'))
+
+
+def _stage_attachments(atts):
+    """Verify every upload (size + sha256) and move it to the Messages-readable stage BEFORE anything is
+    sent, so a bad attachment sends nothing at all. Returns (staged_paths, errcode)."""
+    staged = []
+    for a in atts:
+        try:
+            staged.append(relay_media.stage_for_send(relay_media.take_upload(a['uploadId'], a['size'], a['sha256']), a['name']))
+        except (ValueError, OSError):
+            for p in staged:
+                relay_media.remove_staged(p)
+            rc.log_event('attachment_rejected', size=a['size'], mime=a['mime'].split('/')[0])
+            return [], 'attachment_unavailable'
+    return staged, ''
+
+
+def _send_attachments(atts, staged, dest, tgt, handle, contact, t, cfg, runner, sleeper, ui_on, pending_ids):
+    """Send each staged file as one Messages file send. Returns (files_sent, errcode). A staged copy is
+    deleted on failure right away, else by the watcher once delivery resolves (or by the sweep)."""
+    sent = 0
+    for i, path in enumerate(staged):
+        ok, err = rc.send_imessage(path, dest, runner=runner, sleeper=sleeper, target=tgt, mode='file')
+        if not ok:
+            for p in staged[i:]:
+                relay_media.remove_staged(p)
+            return sent, err
+        sent += 1
+        if cfg.get('deliveryCheck', True):
+            pending_ids.append(rc.add_pending_send(handle, t, 0, label=contact['label'],
+                               chat_guid=contact['guid'] if contact.get('kind') == 'group' else '',
+                               x_uuid=_UI['uuid'], ui=ui_on, part='file', staged_path=path))
+        # deliveryCheck off: no watcher record; the sweep removes the staged copy after SEND_STAGE_TTL_S
+    return sent, ''
+
+
+def handle_attach_chunk(msg, cfg, now):
+    """v1.4.6: one in-order chunk of an attachment the owner sent in the relay chat (bytes only; never logged)."""
+    if cfg['paused'] or not cfg.get('relayAttachments', True):
+        return {'ok': False, 'error': 'attachments are off'}
+    return relay_media.stage_chunk(msg.get('uploadId'), msg.get('seq'), msg.get('data'), now=now())
 
 
 def handle_selftest(msg, cfg, runner, sleeper, now):
@@ -1231,6 +1462,9 @@ def handle_signal(msg, cfg, now, poster):
         ep_id = ('wrong_account:' + at) if at else 'wrong_account'
         notify(cfg, poster, {'type': 'wrong_account', 'id': ep_id, 'at': rc.iso_utc(now())})
         return {'ok': True}
+    if status == 'undo_cancelled':
+        rc.log_event('signal', status='undo_cancelled')    # v1.4.6: 🗑️ inside the undo window; nothing was sent
+        return {'ok': True}
     if status == 'guess_cancelled':
         # v1.4.1: the owner answered a reply prompt with "no" / "cancel" (the extension dropped the text)
         label = str(msg.get('label') or '').strip()
@@ -1250,12 +1484,71 @@ def handle_signal(msg, cfg, now, poster):
     return {'ok': False, 'error': 'unknown signal'}
 
 
+def handle_ui_ack(msg, cfg, now, poster):
+    """v1.4.6: the extension reports whether a UI action worked. ok=False on a prompt posts the routine
+    copy right away; ok=False on a \u2705 leaves the watcher's normal text confirmation in place."""
+    ok = msg.get('ok') is True
+    step = re.sub(r'[^a-z_-]', '', str(msg.get('step') or ''))[:30]
+    pid = re.sub(r'[^0-9a-f]', '', str(msg.get('pendingId') or ''))[:32]
+    note = re.sub(r'[^0-9a-f]', '', str(msg.get('noteId') or ''))[:32]
+    aid = re.sub(r'[^0-9a-f]', '', str(msg.get('actionId') or ''))[:32]
+    lat = msg.get('latencyMs')
+    lat = int(lat) if isinstance(lat, (int, float)) and 0 <= lat < 600000 else None
+    more = msg.get('pendingIds') if isinstance(msg.get('pendingIds'), list) else []
+    for extra in more[:12]:
+        e = re.sub(r'[^0-9a-f]', '', str(extra or ''))[:32]
+        if e and e != pid:
+            rc.update_pending(e, uiConfirmed=ok, uiFailed=not ok)
+    if pid:
+        rc.update_pending(pid, uiConfirmed=ok, uiFailed=not ok)
+        rc.log_event('ui_confirm', ok=ok, step=step, **({'latencyMs': lat} if lat is not None else {}))
+    if note:
+        path = os.path.join(NOTIFY_RETRY_DIR, note + '.json')
+        item = rc.read_json(path, {}) or {}
+        payload = item.get('payload') if isinstance(item.get('payload'), dict) else None
+        if not ok and payload is not None and not cfg['paused']:
+            notify(cfg, poster, payload)          # _UI is off here, so this posts (or queues a retry)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        rc.log_event('ui_prompt', ok=ok, step=step, type=(payload or {}).get('type'),
+                     **({'latencyMs': lat} if lat is not None else {}))
+    if aid:
+        relay_ui.ack(aid, ok, step)
+    return {'ok': True}
+
+
 def handle_request(msg, cfg=None, runner=subprocess.run, sleeper=time.sleep, now=time.time,
                    poster=rc.post_json):
+    _ui_reset(msg)
+    try:
+        res = _handle_request(msg, cfg, runner, sleeper, now, poster)
+        if isinstance(res, dict) and _UI['on']:
+            u = _ui_out()
+            if u:
+                res['ui'] = u
+        return res
+    finally:
+        _ui_reset(None)
+
+
+def _handle_request(msg, cfg, runner, sleeper, now, poster):
     cfg = cfg if cfg is not None else rc.load_config()
     if not isinstance(msg, dict):
         return {'ok': False, 'error': 'bad request'}
     typ = msg.get('type')
+    if typ == 'ui_ack':
+        return handle_ui_ack(msg, cfg, now, poster)
+    if typ == 'attach_chunk':
+        return handle_attach_chunk(msg, cfg, now)
+    if typ == 'attach_discard':
+        relay_media.discard_upload(msg.get('uploadId'))
+        return {'ok': True}
+    if typ == 'ui_poll':
+        if cfg['paused'] or not cfg.get('uiReactions', True):
+            return {'ok': True, 'actions': []}
+        return {'ok': True, 'actions': relay_ui.take(limit=5)}
     if typ == 'get_config':
         note_extension(msg, now)
         return handle_get_config(cfg, now)

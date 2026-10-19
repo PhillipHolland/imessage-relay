@@ -18,7 +18,7 @@ Every command prints one JSON object. Message bodies are never printed or stored
                                           pollSeconds, defaultCountryCode, replyWindowMinutes,
                                           ambiguousSeconds, confirmSends, rosterDays, skipShortCodes,
                                           confirmNewContacts exact-skip|always (v1.4.1)
-                                          spamMode tag|off (v1.4.5: "⚠️ Unknown · " on texts not in Contacts)
+                                          spamMode follow-messages|tag|off (v1.4.6 default follow-messages: mirror Messages' filtering)
                                           batchWebhooks on|off (v1.4.5: texts waiting together share one webhook)
   relayctl set-webhook --url URL --token-stdin   set webhookUrl + webhookToken together; the key is
                                           read from stdin so it never lands in argv or shell history
@@ -63,8 +63,10 @@ SETTABLE = {
     'defaultCountryCode': str, 'relayConversationId': str, 'replyWindowMinutes': int, 'ambiguousSeconds': int,
     'confirmSends': 'bool', 'rosterDays': int, 'skipShortCodes': 'bool', 'redactCodes': 'bool',
     'confirmNewContacts': ('exact-skip', 'always'),   # v1.4.1
-    'spamMode': ('tag', 'off'),                       # v1.4.5
+    'spamMode': ('follow-messages', 'tag', 'off'),    # v1.4.5; v1.4.6 follow-messages (default)
     'batchWebhooks': 'bool',                          # v1.4.5
+    'uiReactions': 'bool', 'uiPrompts': 'bool', 'readReceipts': 'bool', 'mirrorTapbacks': 'bool',   # v1.4.6
+    'stripOptOut': 'bool', 'relayAttachments': 'bool', 'quietNamesSeconds': int, 'undoSeconds': int,                            # v1.4.6
 }
 
 

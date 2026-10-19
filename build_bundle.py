@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.5, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.6, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=fa5962bc7bb7a98083a5d106ed77abd65d492ab9c0852dfd791261bd39171c6e nl=1
-# iMessage Relay v1.4.5
+@@@@ FILE README.md mode=644 sha256=9f3cc8173d721f8f0538089b2b6cf13f5efd733380584b3860c7543742cddb08 nl=1
+# iMessage Relay v1.4.6
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -30,8 +30,35 @@ iMessage from an opted-in contact
   -> bot posts "Alex: running late" into ONE relay chat (sender <-> you)
 Your reply in the relay chat (x.com in Chrome)
   -> extension sees your own bubble -> native host picks the contact -> Messages.app -> iMessage
-  -> bot posts "→ Alex ✓"
+  -> ✅ appears on your own X message (v1.4.6; a text line only if something fails)
 ```
+v1.4.6 makes the relay feel native in X Chat:
+- **✅ on your reply** as soon as Messages accepts it, placed by the extension in your X tab (seconds, not
+  a routine round trip). The "→ Alex ✓" text line is only posted when the reaction can't be placed;
+  failures are always posted (⚠️). It becomes **👀** when they read it (1:1 chats with read receipts).
+- **Their tapbacks** (❤️ 👍 😂 …) on a reply you sent through the relay show up as real reactions on your
+  X message (an id map only: iMessage guid ↔ X message id, 7 days, no text). Others stay text lines.
+- **Prompts are reactions**: "Reply to Jordan?" is a ❓ on your own message; answer 👍/👎 or yes/no. Only
+  "Who's this for?" is still text, typed by the extension and tagged 🤖. The relay ignores its own ✅ / 👀 /
+  ❓ / 🤖 output; only your 👍/👎/🗑️ on relay prompts and your yes/no count.
+- **Undo**: 🗑️ on your own message within `undoSeconds` (5, 0–10) cancels it before it goes out.
+- **Quiet names**: "Name:" appears only when the sender changes (`quietNamesSeconds`, 600). Replying to an
+  unprefixed bubble with X's native Reply still routes to its sender (keyed hashes of the text, no text).
+- **Spam follows Messages** (`spamMode follow-messages`, the default): texts Messages files under Junk
+  are held (counts only, an hourly "🚫 N spam texts held" line); Unknown Senders show "⚠️ Unknown · ",
+  Promotions "🏷️ Promo · ", Transactions "🧾 ". If you turned screening or the spam filter off in Messages,
+  the relay does the same; if this Mac can't tell, it falls back to `tag` (v1.4.5). "Reply STOP to opt out"
+  footers are dropped from tagged texts. Read-only: Messages settings are never changed.
+- **Photos both ways (1:1)**: their photos arrive as images in X Chat; your photos and files in the relay
+  chat go out as iMessage attachments, with the same routing and confirmations (a group only after yes).
+  Limits: 5 MB per photo into X Chat (bigger ones are downsized), 25 MB per attachment out, 10 per message;
+  anything skipped gets a clear notice. Attachment bytes are never stored. Only in-flight temp files
+  (mode 600), deleted right after use, including on error. Nothing is logged except counts, sizes and types.
+- **Overnight recap**: quiet hours end with ONE tidy post grouped by person.
+- **Shared posts and links**: sharing an X post (or a link card) into the relay chat sends its URL
+  (`https://x.com/<user>/status/<id>`), after anything you typed: "Jordan:" + a post texts Jordan the link.
+  A card is never mistaken for a reply quote, and its thumbnail is never sent as a photo.
+- **Every refusal says why**: a ⚠️ on your message right away, plus a short "⚠️ Not sent: …" line.
 - Every contact shares the one relay chat. A reply goes to the contact of the message you
   replied to (X Chat reply-quote, best effort), else the one named at the start ("Alex: on my
   way", stripped before sending), else whoever wrote last within `replyWindowMinutes` (120).
@@ -81,7 +108,7 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.5)
+## Limits (v1.4.6)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -91,15 +118,18 @@ Your reply in the relay chat (x.com in Chrome)
   reply never goes to a group.
 - 🗑️ on a relayed text asks "Block …?"; yes (or 👍, or `/block yes`) mutes that sender here only
   (Messages is not changed). Texts from numbers not in Contacts, or flagged by Messages, show
-  "⚠️ Unknown · " first (`relayctl set spamMode off` to stop); nothing is hidden.
-  No attachments are sent (incoming ones arrive as "[attachment]").
+  "⚠️ Unknown · " first (`relayctl set spamMode tag|off`; default `follow-messages`, see above).
+- Photos: 1:1 chats only for incoming (group photos stay "📷 Photo"); videos, voice notes and files that
+  arrive show a type/size notice ("open Messages to see it"). Typing indicators are not relayed (they are
+  not in chat.db). Your own tapbacks in X are not sent to iMessage (no supported way without UI scripting).
 
 ## Files
 - `extension/`: Chrome MV3 extension (content script, service worker, status popup). Fixed
   key, so the ID is always `gpnjllicnleeogdmgpjekgflakdiifee`.
 - `mac-helper/`: `imessage_relay_host.py` (native host `com.imessage_relay.host`),
   `imessage_relay_watch.py` (watcher), `watch_launcher.py` (run by the watcher app), `typedstream.py` (attributedBody decoder),
-  `relayctl.py` (operations), `relay_common.py`, `send_imessage.applescript`, templates,
+  `relayctl.py` (operations), `relay_common.py`, `relay_ui.py` (v1.4.6 reaction queue + id map),
+  `relay_media.py` (v1.4.6 in-flight attachments), `relay_echo.py`, `send_imessage.applescript`, templates,
   `config.example.json`.
 - `install.sh` / `uninstall.sh`: idempotent, per-user, no sudo. Install target `~/.imessage-relay/`
   plus `~/Applications/iMessage Relay Watcher.app`.
@@ -131,8 +161,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.5 changes the extension: 🗑️ to block;
-v1.4.4, v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
+reload the extension card in chrome://extensions (v1.4.6 changes the extension: ✅/❓/👀 reactions,
+🤖 prompts, undo, photos; v1.4.5 changed it too (🗑️ to block); v1.4.4, v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations
@@ -171,21 +201,27 @@ In the relay chat: `/test` (end-to-end check), `/test send` (also texts your own
   "senderXHandle": "",
   "autoReopenMessages": false,
   "pollSeconds": 10,
-  "defaultCountryCode": "1"
+  "defaultCountryCode": "1",
+  "spamMode": "follow-messages",
+  "uiReactions": true, "uiPrompts": true, "readReceipts": true, "mirrorTapbacks": true,
+  "stripOptOut": true, "relayAttachments": true, "quietNamesSeconds": 600, "undoSeconds": 5
 }
 ```
 Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component re-reads it.
 
 ## Webhook payloads (Mac -> bot)
-- `{"type":"message","contactName","label","handle","text","receivedAt","untrusted":true}`
+- `{"type":"message","contactName","label","handle","text","receivedAt","untrusted":true}`, plus optional
+  `tag`, `unknown`, `quiet`, `reaction` and (v1.4.6) `media:[{token,kind,mime,ext,size,sha256,macPath}]`
+  (metadata only; the routine copies the file from the Mac, see SKILL.md)
+- `{"type":"batch","messages":[...]}` (several texts from one tick)
 - `{"type":"digest","count","quietHours","messages":[...],"untrusted":true}`
 - `{"type":"sent","label","contactName","dryRun","delivered","routedBy","at"}` (host, after a reply; no body)
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing","detail","at"}` (no message body)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=f9c6fb032754e5fa7ab51ca30b66bde29ac2435734fe5510d67f0d67ff8f5d02 nl=1
+@@@@ FILE install.sh mode=755 sha256=2cc436021cddbff8228ba8e136c1d4184e7b4cf899ca051c4123db99bfd5d224 nl=1
 #!/bin/bash
-# iMessage Relay v1.4.5 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
+# iMessage Relay v1.4.6 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
 # roster.json, and the existing "iMessage Relay Watcher" app (never rebuilt or re-signed, so
 # its Full Disk Access grant survives), and keeps the LaunchAgent pointing at that app.
@@ -614,7 +650,7 @@ cat <<NEXT
 Log (counts only, never message text): $LOGS/imessage-relay.log
 NEXT
 @@@@ END
-@@@@ FILE run_tests.sh mode=755 sha256=6867bc5d853c9aea879c9d71c173463205583110f00f9fc184c1ca9ed235ea7b nl=1
+@@@@ FILE run_tests.sh mode=755 sha256=22de6a84f66414dcf15367998d8080b5940c4cc3e57420c9421557e66ec4fffd nl=1
 #!/bin/bash
 # Runs every test. Needs python3 (3.9+); the JS tests also need node and jsdom
 # (NODE_PATH pointing at a node_modules with jsdom, or `npm i jsdom` here).
@@ -634,7 +670,7 @@ if command -v node >/dev/null 2>&1 && ! node -e "require('jsdom')" >/dev/null 2>
   _gr="$(npm root -g 2>/dev/null)"; [[ -n "$_gr" ]] && export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gr"
 fi
 if command -v node >/dev/null 2>&1 && node -e "require('jsdom')" >/dev/null 2>&1; then
-  for t in detect frames owner native guess yes reaction quote probe xreply trash e2etest chips smoke-chrome; do
+  for t in detect frames owner native guess yes reaction quote probe xreply trash ui bgui media cards e2etest chips smoke-chrome; do
     echo "== JS: $t =="
     node "tests/js/$t.test.js" 2>&1 | grep -E 'passed|FAIL|PASS chrome' ; [[ ${PIPESTATUS[0]} -eq 0 ]] || fail=1
   done
@@ -730,9 +766,9 @@ Also, by hand if you like:
   - System Settings > Privacy & Security > Automation -> turn off Messages for Google Chrome
 DONE
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=512d6ebdca208da339c9eb0dd3d6343ecc980e8f354160137a0ebaf3f095dc76 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=87a4d3ffe24b96427ff81fc199122431ef6b05ea629f82a3a2dbc99c616817b5 nl=1
 /*
- * iMessage Relay v1.4.5: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -833,6 +869,8 @@ async function fetchConfig() {
     ownerNames: res.ownerXHandle ? [String(res.ownerXHandle).replace(/^@/, '')] : [],
     senderNames: res.senderXHandle ? [String(res.senderXHandle).replace(/^@/, '')] : [],
     ownerXUserId: String(res.ownerXUserId || ''),
+    relayAttachments: res.relayAttachments !== false,   // v1.4.6
+    uiReactions: res.uiReactions !== false, undoSeconds: Number.isFinite(Number(res.undoSeconds)) ? Number(res.undoSeconds) : 0,   // v1.4.6
     fetchedAt: Date.now(),
   };
   const prevStatus = (await chrome.storage.local.get('status')).status || {};
@@ -912,7 +950,7 @@ function decide(item, cfg) {
   if (!cfg.relayAll && !(cfg.contacts || []).some(c => validHandle(c.handle))) return Object.assign(base, { skip: 'no contacts in config' });
   const age = Date.now() - (Date.parse(item.ts) || 0);
   if (!(age >= -5000 && age <= MAX_ITEM_AGE_MS)) return Object.assign(base, { skip: 'stale item' });
-  if (!item.text || item.text === '[no text]') return Object.assign(base, { skip: 'empty text' });
+  if ((!item.text || item.text === '[no text]') && !(Number(item.mediaCount) > 0)) return Object.assign(base, { skip: 'empty text' });
   return base;
 }
 
@@ -961,11 +999,16 @@ async function clearPendingGuess() {
 // so the host skips the guess check. The raw "/yes" is never forwarded to the host.
 async function handleCancel(item, g) {
   await clearPendingGuess();
+  if (g && g.xUuid && uiSrc) await tabUi(uiSrc, { action: 'clear-prompt', uuid: String(g.xUuid) });   // v1.4.6
+  for (const a of (g && Array.isArray(g.attachments) ? g.attachments : [])) {   // v1.4.6: drop his staged photos now
+    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId: String(a.uploadId || '') }); } catch (e) { /* host down */ }
+  }
   await addEvent({ kind: 'reply', key: item.key, contactName: g.label || '', status: 'skipped', detail: 'cancelled' });
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_cancelled', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }
 
-async function handleYes(item, nameArg) {
+async function handleYes(item, nameArg, src) {
+  const seenAt = Date.now();
   const g = await getPendingGuess();
   if (!g || Date.now() - (g.at || 0) > GUESS_WINDOW_MS) {
     await clearPendingGuess();
@@ -979,6 +1022,9 @@ async function handleYes(item, nameArg) {
   }
   await clearPendingGuess();
   const payload = { type: 'send', text: g.text, quotedText: g.quotedText || '', conversationId: g.conversationId, ts: item.ts, confirmed: true, handle: g.handle || '' };
+  const useSrc = src || uiSrc;
+  if (g.xUuid && useSrc) { payload.ui = true; payload.xUuid = String(g.xUuid); }   // ✅ goes on the ORIGINAL reply
+  if (Array.isArray(g.attachments) && g.attachments.length) payload.attachments = g.attachments;   // v1.4.6: still on the Mac
   const ev = { kind: 'reply', key: item.key, contactName: g.label || '', textLength: (g.text || '').length, status: 'sending' };
   await addEvent(ev);
   let res, status, detail;
@@ -992,7 +1038,68 @@ async function handleYes(item, nameArg) {
   const patch = { status, detail };
   if (res && res.contact) { patch.contactName = String(res.contact).slice(0, 40); patch.routedBy = String(res.routedBy || ''); }
   await updateEvent(item.key, patch);
+  if (res && res.ui) await applyUi(res, useSrc, seenAt);
+  if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
 }
+
+// ─── v1.4.6: fast feedback in the owner's own tab ───
+// The host answers a send with `ui` directives: ✅ on HIS message once Messages accepted it, ❓ on HIS
+// message for "send to …?", or a 🤖-tagged prompt to type. Each is done by the content script in the tab
+// that reported the message, then acked to the host (which cancels the routine's slower copy, or posts it
+// at once on a miss). Text typed here always starts with UI_TAG and is never relayed.
+const UI_TAG = '\u{1F916}';
+const UI_TAG_RE = /^\s*\u{1F916}/u;
+const UI_TIMEOUT_MS = 12000;
+let uiSrc = null;                    // last tab/frame showing the relay chat (ids only)
+let uiArmedUntil = 0, uiPollTimer = null, uiPolling = false;
+function uuidFromKey(key) { const m = /id:uuid=([0-9a-f-]{8,64})$/i.exec(String(key || '')); return m ? m[1].toLowerCase() : ''; }
+async function tabUi(src, msg) {
+  if (!src || typeof src.tabId !== 'number' || !chrome.tabs || !chrome.tabs.sendMessage) return null;
+  const opts = typeof src.frameId === 'number' ? { frameId: src.frameId } : undefined;
+  try { return await withTimeout(chrome.tabs.sendMessage(src.tabId, Object.assign({ type: 'relay-ui' }, msg), opts), UI_TIMEOUT_MS); }
+  catch (e) { return null; }
+}
+async function hostAck(ack) { try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({ type: 'ui_ack' }, ack)); } catch (e) { /* host down */ } }
+async function applyUi(res, src, seenAt) {
+  const ui = res && res.ui;
+  if (!ui) return;
+  for (const r of (ui.react || []).slice(0, 4)) {
+    const out = await tabUi(src, { action: 'react', uuid: String(r.uuid || ''), emoji: String(r.emoji || ''), prompt: r.emoji === '\u2753' });
+    const ack = { ok: !!(out && out.ok), step: (out && out.step) || 'no-tab', latencyMs: Math.max(0, Date.now() - (seenAt || Date.now())) };
+    if (r.pendingId) ack.pendingId = String(r.pendingId);
+    if (r.noteId) ack.noteId = String(r.noteId);
+    await hostAck(ack);
+  }
+  for (const t of (ui.type || []).slice(0, 2)) {
+    const text = String(t.text || '');
+    const out = UI_TAG_RE.test(text) ? await tabUi(src, { action: 'type', text }) : { ok: false, step: 'untagged' };
+    await hostAck({ noteId: String(t.noteId || ''), ok: !!(out && out.ok), step: (out && out.step) || 'no-tab',
+                    latencyMs: Math.max(0, Date.now() - (seenAt || Date.now())) });
+  }
+}
+function armUiPoll(ms) {
+  uiArmedUntil = Math.max(uiArmedUntil, Date.now() + ms);
+  if (!uiPollTimer) uiPollTimer = setTimeout(uiPollLoop, 3000);
+}
+async function uiPollOnce() {
+  if (uiPolling || !uiSrc) return;
+  uiPolling = true;
+  try {
+    let res = null;
+    try { res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'ui_poll' }); } catch (e) { res = null; }
+    for (const a of ((res && res.actions) || []).slice(0, 5)) {
+      if (a.action !== 'react') continue;
+      const out = await tabUi(uiSrc, { action: 'react', uuid: String(a.uuid || ''), emoji: String(a.emoji || '') });
+      await hostAck({ actionId: String(a.id || ''), ok: !!(out && out.ok), step: (out && out.step) || 'no-tab' });
+    }
+  } finally { uiPolling = false; }
+}
+async function uiPollLoop() {
+  uiPollTimer = null;
+  await uiPollOnce();
+  if (Date.now() < uiArmedUntil) uiPollTimer = setTimeout(uiPollLoop, 3000);   // fast for a while after a send
+}
+let lastSendAt = 0;
 
 // ─── v1.3.8 /test ───
 let pendingTestMem = null;
@@ -1020,6 +1127,41 @@ function withTimeout(p, ms) {
   return Promise.race([p, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timed out after ' + Math.round(ms / 1000) + 's')), ms); })])
     .finally(() => clearTimeout(timer));
 }
+// v1.4.6: read his photos from the tab (the image X already shows) and stream them to the Mac in
+// in-order chunks. Bytes pass through memory only; nothing is stored or logged here.
+function randomUploadId() {
+  const b = new Uint8Array(16);
+  try { crypto.getRandomValues(b); } catch (e) { for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256); }
+  return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+}
+async function uploadMedia(uuid, count, src) {
+  const atts = [];
+  let skipped = 0;
+  const n = Math.max(0, Math.min(10, Number(count) || 0));
+  for (let i = 0; i < n; i++) {
+    const info = await tabUi(src, { action: 'media-info', uuid, index: i });
+    if (!info || !info.ok || !(info.size > 0) || !/^[0-9a-f]{64}$/.test(String(info.sha256 || ''))) { skipped++; continue; }
+    const uploadId = randomUploadId();
+    let ok = true;
+    const chunks = Math.max(1, Number(info.chunks) || 1);
+    for (let seq = 0; seq < chunks && ok; seq++) {
+      const c = await tabUi(src, { action: 'media-chunk', uuid, index: i, seq });
+      if (!c || !c.ok || !c.data) { ok = false; break; }
+      let r = null;
+      try { r = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_chunk', uploadId, seq, data: c.data }); } catch (e) { r = null; }
+      if (!r || !r.ok) ok = false;
+    }
+    if (!ok) {
+      skipped++;
+      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId }); } catch (e) { /* host down */ }
+      continue;
+    }
+    atts.push({ uploadId, size: info.size, sha256: info.sha256, mime: String(info.mime || ''), name: String(info.name || '') });
+  }
+  await tabUi(src, { action: 'media-release', uuid });
+  return { atts, skipped };
+}
+
 function randomTestId() {
   const b = new Uint8Array(6);
   try { crypto.getRandomValues(b); } catch (e) { for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256); }
@@ -1091,7 +1233,10 @@ async function onTestExpiry() {
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'test_unseen', testId: t.testId }); } catch (e) { /* host may be down */ }
 }
 
-async function handleItem(item) {
+async function handleItem(item, src) {
+  if (src) uiSrc = src;
+  const seenAt = Date.now();
+  if (UI_TAG_RE.test(String(item.text || ''))) return;   // v1.4.6: a prompt the relay typed itself, never a reply
   if (item.refuse) { await handleRefusal(item); return; }
   if (item.direction !== 'outbound') { await maybeTestReport(item); return; }
   const tm = TEST_RE.exec(String(item.text || ''));
@@ -1106,7 +1251,7 @@ async function handleItem(item) {
     const g = await getPendingGuess();
     if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
       if (await isDuplicate(item.key)) return;
-      if (bw === 'yes') await handleYes(item, '');
+      if (bw === 'yes') await handleYes(item, '', src);
       else await handleCancel(item, g);
       return;
     }                                         // nothing pending here: the host checks its own prompts
@@ -1114,7 +1259,7 @@ async function handleItem(item) {
   const ym = YES_RE.exec(String(item.text || ''));
   if (ym) {                                   // "/yes [Name]" confirms a pending guessed reply (item 3)
     if (await isDuplicate(item.key)) return;
-    await handleYes(item, ym[1]);
+    await handleYes(item, ym[1], src);
     return;
   }
   const cfg = await getConfig(false);
@@ -1123,17 +1268,42 @@ async function handleItem(item) {
   if (await isDuplicate(item.key)) return;
   const ev = { kind: 'reply', key: item.key, contactName: d.contactName, textLength: (item.text || '').length };
   if (d.skip) { await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip })); return; }
-  await addEvent(Object.assign(ev, { status: 'sending' }));
-  const payload = { type: 'send', text: item.text, quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  const xUuid = uuidFromKey(item.key);
+  const undoMs = Math.max(0, Math.min(10, Number(cfg.undoSeconds) || 0)) * 1000;
+  if (undoMs && xUuid && src && !/^\s*(\/|relay:)/i.test(String(item.text || ''))) {
+    // v1.4.6 undo window: a 🗑️ on his own message within undoSeconds cancels it before it goes out.
+    await addEvent(Object.assign({}, ev, { status: 'waiting', detail: 'undo window' }));
+    const u = await tabUi(src, { action: 'await-undo', uuid: xUuid, ms: undoMs });
+    if (u && u.trashed) {
+      await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
+      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
+      return;
+    }
+    await updateEvent(item.key, { status: 'sending' });
+  } else {
+    await addEvent(Object.assign(ev, { status: 'sending' }));
+  }
+  const payload = { type: 'send', text: item.text || '', quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
+  if (Number(item.mediaCount) > 0) {
+    if (cfg.relayAttachments !== false && xUuid && src) {
+      const up = await uploadMedia(xUuid, item.mediaCount, src);
+      if (up.atts.length) payload.attachments = up.atts;
+      if (up.skipped) payload.attachmentsSkipped = up.skipped;
+    } else payload.attachmentsSkipped = Math.min(10, Number(item.mediaCount));
+  }
   if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
-  console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: item.text.length, quoted: !!item.quotedText });
+  if (item.cards) payload.cards = item.cards;
+  console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
+                                                      attachments: (payload.attachments || []).length });
   let res, status, detail;
   try {
     res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
     if (!res) { status = 'error'; detail = 'no response'; }
     else if (res.needsConfirm && res.handle) {  // item 3 / W1: hold the text in session; confirm with /yes
       await setPendingGuess({ text: item.text, label: String(res.label || ''), handle: String(res.handle || ''),
-                              conversationId: item.conversationId, quotedText: item.quotedText || '', at: Date.now() });
+                              conversationId: item.conversationId, quotedText: item.quotedText || '', at: Date.now(),
+                              xUuid: payload.xUuid || '', attachments: payload.attachments || null });
       try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: 2 }); } catch (e) { /* tests */ }
       status = 'needs-confirm';
       detail = (res.reason === 'new_contact')
@@ -1154,6 +1324,8 @@ async function handleItem(item) {
   const patch = { status, detail };
   if (res && res.contact) { patch.contactName = String(res.contact).slice(0, 40); patch.routedBy = String(res.routedBy || ''); }
   await updateEvent(item.key, patch);
+  if (res && res.ui) await applyUi(res, src, seenAt);
+  if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
 }
 
 // v1.4.2: the owner put a thumbs-up / thumbs-down on the newest pending prompt (content.js checks the
@@ -1170,17 +1342,21 @@ async function handleReaction(r) {
     // v1.4.5: a wastebasket on a relayed message -> the Mac asks "Block <label>?" (nothing is muted yet)
     const quotedText = String(r.quotedText || '').slice(0, 500);
     if (!quotedText) return;
-    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, quotedText, conversationId: cfg.relayConversationId }); } catch (e) { /* host down */ }
+    let res = null;
+    try { res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, quotedText, conversationId: cfg.relayConversationId, ui: cfg.uiReactions !== false && !!uiSrc }); } catch (e) { /* host down */ }
+    if (res && res.ui) await applyUi(res, uiSrc, Date.now());
     return;
   }
   const item = { key, conversationId: cfg.relayConversationId, ts: String(r.ts || new Date().toISOString()), text: '' };
   const g = await getPendingGuess();
   if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
-    if (word === 'yes') await handleYes(item, '');
+    if (word === 'yes') await handleYes(item, '', uiSrc);
     else await handleCancel(item, g);
     return;
   }
-  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, conversationId: cfg.relayConversationId }); } catch (e) { /* host down */ }
+  let res = null;
+  try { res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, conversationId: cfg.relayConversationId, ui: cfg.uiReactions !== false && !!uiSrc }); } catch (e) { /* host down */ }
+  if (res && res.ui) await applyUi(res, uiSrc, Date.now());
 }
 
 function sanitizeItem(raw) {
@@ -1199,6 +1375,10 @@ function sanitizeItem(raw) {
     // v1.4.3: text-free structure only; closed character set, capped
     out.quoteProbe = raw.quoteProbe.replace(/[^A-Za-z0-9#@\[\]{},.:;<>|_\-!+=/ ()]/g, '').slice(0, 4000);
   }
+  const cc = Number(raw.cards);
+  if (Number.isInteger(cc) && cc > 0) out.cards = Math.min(5, cc);           // v1.4.6: shared post / link cards (count)
+  const mc = Number(raw.mediaCount);
+  if (Number.isInteger(mc) && mc > 0) out.mediaCount = Math.min(10, mc);   // v1.4.6: how many photos, nothing else
   if (raw.refuse) { out.refuse = String(raw.refuse).slice(0, 40); out.textLength = Number(raw.textLength) || 0; out.limit = Number(raw.limit) || 4000; }
   return out;
 }
@@ -1228,7 +1408,7 @@ async function setWrongAccount(on) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || sender.id !== chrome.runtime.id) return false;
   if (msg.type === 'relay-log' && msg.item && sender.tab) {
-    handleItem(sanitizeItem(msg.item)).catch(e => console.warn(LOG_PREFIX, 'reply handling failed', e));
+    handleItem(sanitizeItem(msg.item), { tabId: sender.tab.id, frameId: sender.frameId }).catch(e => console.warn(LOG_PREFIX, 'reply handling failed', e));
     return false;
   }
   if (msg.type === 'relay-signal' && msg.signal && sender.tab) {
@@ -1236,7 +1416,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     else if (msg.signal.status === 'account_ok') setWrongAccount(false).catch(() => {});
     return false;
   }
+  if (msg.type === 'relay-ui-tick' && sender.tab) {   // v1.4.6: pick up queued reactions (ids only)
+    uiSrc = { tabId: sender.tab.id, frameId: sender.frameId };
+    getConfig(false).then(c => { if (c.ok && !c.paused && c.uiReactions !== false) return uiPollOnce(); }).catch(() => {});
+    return false;
+  }
   if (msg.type === 'relay-reaction' && msg.item && sender.tab) {
+    uiSrc = { tabId: sender.tab.id, frameId: sender.frameId };
     handleReaction(msg.item).catch(e => console.warn(LOG_PREFIX, 'reaction handling failed', e));
     return false;
   }
@@ -1278,7 +1464,7 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=d39f794f008fd064ef53b2e9167b695e187ac495c21393c78038e65642ec3e85 nl=1
+@@@@ FILE extension/content.js mode=644 sha256=7835a064e0eea993f02fdf21c53c186d10d93185f083a838d792bbdb7920c3cd nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -1689,6 +1875,53 @@ chrome.runtime.onStartup.addListener(boot);
       if (root && !isHiddenEl(root)) visit(root);
       return parts.join(' ').replace(/\s+/g, ' ').trim();
     }
+    // ---------- v1.4.6 shared post / link cards in HIS bubble ----------
+    // Sharing an X post (or a link) into the chat renders a card block (a link around a thumbnail) next to
+    // the typed text. It is not a reply quote: its canonical URL is what goes out as the iMessage text.
+    const STATUS_URL_RE = /^(?:https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com)?\/([A-Za-z0-9_]{1,15})\/status(?:es)?\/(\d{5,25})(?:[/?#]|$)/i;
+    function canonicalCardUrl(href) {
+      const h = String(href || '').trim();
+      const m = STATUS_URL_RE.exec(h);
+      if (m) return 'https://x.com/' + m[1] + '/status/' + m[2];
+      if (!/^https?:\/\//i.test(h)) return '';
+      try {
+        const u = new URL(h);
+        if (/^(?:www\.|mobile\.)?(?:x|twitter)\.com$/i.test(u.hostname)) return '';   // profile / chat links are not cards
+        return u.href;
+      } catch (e) { return ''; }
+    }
+    function cardInfo(entry) {
+      let body = bodyEl(entry);
+      const none = { urls: [], blocks: [] };
+      if (body === entry) return none;
+      if (repliedLabelQuote(entry, body)) return none;              // a native Reply preview is never a card
+      const typed = body ? extractText(body) : '';
+      if (!typed) body = body || null;                             // a card shared with no text of his own
+      const urls = [], blocks = [];
+      for (const a of safeAll(entry, 'a[href]')) {
+        if ((body && deepContains(body, a)) || isHiddenEl(a)) continue;   // links in his typed text stay text
+        const url = canonicalCardUrl(a.getAttribute('href'));
+        if (!url) continue;
+        // the block: climb while the parent does not also hold his text (or is the entry itself)
+        let blk = a;
+        for (let up = parentOf(blk); up && up !== entry && !(body && deepContains(up, body)); up = parentOf(up)) blk = up;
+        if (!blocks.includes(blk)) blocks.push(blk);
+        const sm = STATUS_URL_RE.exec(url);
+        if (sm ? typed.indexOf('/status/' + sm[2]) >= 0 : /https?:\/\//i.test(typed)) continue;   // he typed it already
+        if (!urls.includes(url)) urls.push(url);
+        if (urls.length >= 5) break;
+      }
+      return { urls, blocks };
+    }
+    function inCard(entry, el, info) {
+      return (info || cardInfo(entry)).blocks.some(b => deepContains(b, el));
+    }
+    function withCards(text, urls) {
+      const t = String(text || '').replace(/\s+$/, '');
+      if (!urls.length) return t;
+      return t ? t + (/:$/.test(t) || t.indexOf('\n') < 0 && t.length < 40 ? ' ' : '\n') + urls.join('\n') : urls.join('\n');
+    }
+
     function previewQuote(entry) {
       const body = bodyEl(entry);
       if (!body || body === entry) return '';
@@ -1696,11 +1929,13 @@ chrome.runtime.onStartup.addListener(boot);
       for (let n = body; n && n !== entry; n = parentOf(n)) if (n.getAttribute && n.getAttribute('role') === 'article') { art = n; break; }
       const start = art || body;
       const parts = [];
+      const cards = cardInfo(entry);
       for (let n = start; n && n !== entry; n = parentOf(n)) {
         const sibs = [];
         for (let sib = n.previousElementSibling; sib; sib = sib.previousElementSibling) {
           if (isUuidEntry(sib) || safeAll(sib, cfg.uuidEntryPrefixSelector).some(isUuidEntry)) break;   // another message
           if (isHiddenEl(sib)) continue;
+          if (cards.blocks.some(b => deepContains(b, sib) || deepContains(sib, b))) continue;   // v1.4.6: a shared card, not a quote
           const t = visibleText(sib);
           if (t && !isChipText(t)) sibs.unshift(t);
         }
@@ -1918,6 +2153,7 @@ chrome.runtime.onStartup.addListener(boot);
       return { up, down, trash };
     }
     function isPrompt(entry) {
+      if (isUiPrompt(uuidOf(entry))) return true;          // v1.4.6: the relay's ❓ on the owner's own message
       const tEl = bodyEl(entry);
       if (!tEl) return false;
       const t = String(tEl.textContent || '');
@@ -1979,7 +2215,7 @@ chrome.runtime.onStartup.addListener(boot);
         if (now() - mk.at > PROMPT_WINDOW_MS) continue;
         const newer = Array.from(promptMarks.values()).some(o => o !== mk && o.at > mk.at);
         if (newer) continue;
-        if (analyze(e).direction === 'outbound') continue;   // the owner's own message is never a prompt
+        if (analyze(e).direction === 'outbound' && !isUiPrompt(u) && !UI_TAG_RE.test(entryText(e).text)) continue;   // the owner's own message is never a prompt (except a relay ❓ / 🤖 prompt)
         mk.fired = true;
         try { onReaction({ conversationId: conv, key: 'reaction:' + u, word, ts: new Date(now()).toISOString() }); } catch (err) { info('reaction emit failed', err); }
       }
@@ -2025,7 +2261,14 @@ chrome.runtime.onStartup.addListener(boot);
       const topNewest = newestAtTop();
       for (const e of ordered) {
         const a = analyze(e);
-        if (!a.text) {
+        let cardUrls = [];
+        if (a.direction === 'outbound') {
+          // v1.4.6: a shared X post / link card goes out as its URL, after anything he typed ("Jordan:" + post)
+          try { cardUrls = cardInfo(e).urls; } catch (err) { cardUrls = []; }
+          if (cardUrls.length) a.text = withCards(a.text, cardUrls);
+        }
+        const media = a.direction === 'outbound' ? mediaOf(e) : [];
+        if (!a.text && !media.length || (a.direction === 'outbound' && mediaShell(e))) {
           const n = retryCounts.get(e) || 0;
           if (n < cfg.emptyTextRetries && !baselineReason) {
             retryCounts.set(e, n + 1);
@@ -2037,6 +2280,9 @@ chrome.runtime.onStartup.addListener(boot);
         if (seenKeys.has(a.key)) { stats.skippedDup++; continue; }
         seenKeys.add(a.key);
         if (baselineReason) continue;
+        if (UI_TAG_RE.test(a.text)) {                 // v1.4.6: a prompt the relay itself typed: never input
+          seen.add(a.uuid); stats.skippedUi = (stats.skippedUi || 0) + 1; continue;
+        }
 
         // Freshness (item 1): a bubble whose time[datetime] is older than freshMs is history.
         let ts = new Date(now()).toISOString();
@@ -2061,8 +2307,9 @@ chrome.runtime.onStartup.addListener(boot);
 
         const t = now();
         recentEmits = recentEmits.filter(r => t - r.t < cfg.dupWindowMs);
-        if (recentEmits.some(r => r.text === a.text && r.direction === a.direction)) { stats.skippedDup++; continue; }
-        recentEmits.push({ text: a.text, direction: a.direction, t });
+        const dupText = a.text + (media.length ? '\u0000' + media.join('|') : '');
+        if (recentEmits.some(r => r.text === dupText && r.direction === a.direction)) { stats.skippedDup++; continue; }
+        recentEmits.push({ text: dupText, direction: a.direction, t });
 
         lastEls[a.direction] = e;
         lastEls.any = e;
@@ -2081,6 +2328,12 @@ chrome.runtime.onStartup.addListener(boot);
         const item = { ts, conversationId: conv, direction: a.direction, text: a.text, signals: a.signals, score: a.score, key: a.key, source };
         if (a.quotedText) item.quotedText = a.quotedText;
         if (a.direction !== 'inbound') { try { item.quoteProbe = structureOf(e); } catch (err) { /* diagnostics only */ } }
+        if (cardUrls.length) item.cards = cardUrls.length;
+        if (media.length) {             // v1.4.6: his photos ride along (bytes read only when the send goes ahead)
+          pruneMedia();
+          mediaRefs.set(String(a.uuid).toLowerCase(), { srcs: media, at: realNow() });
+          item.mediaCount = media.length;
+        }
         try { emit(item); } catch (err) { info('emit failed', err); }
       }
     }
@@ -2274,6 +2527,334 @@ chrome.runtime.onStartup.addListener(boot);
         ', roles=' + JSON.stringify(f.roles) + ', hasShadow=' + f.hasShadow + ', iframes=' + f.iframes + ', mode=' + f.mode + ', entries=' + f.entriesMatched);
     }
 
+    // ---------- v1.4.6: fast feedback, done in the owner's OWN tab as the owner ----------
+    // The extension now acts in X Chat's web UI, but only in these narrow ways, all requested by the Mac
+    // helper and all on the relay chat: (1) put ONE emoji reaction on ONE of the owner's own messages
+    // (found by its message-<uuid>), (2) type a relay prompt that starts with UI_TAG into an EMPTY
+    // composer and press send. Anything it typed, and every reaction it placed, is ignored as input.
+    const UI_TAG = '\u{1F916}';
+    const UI_TAG_RE = /^\s*\u{1F916}/u;
+    const realNow = () => Date.now();
+    const uiPromptUuids = new Map();         // uuid -> at: the owner's message carrying a relay ❓ (2 min)
+    const REACT_LABEL_RE = /\b(add\s+)?(react|reacts|reaction|reactions|emoji)\b/i;
+    const DANGER_RE = /delete|unsend|remove|report|copy|forward|edit|reply|pin|share|block|mute|leave|more|download|translate/i;
+    const VOCAB = ['react', 'reaction', 'emoji', 'reply', 'more', 'copy', 'delete', 'edit', 'add', 'search', 'pin',
+                   'forward', 'unsend', 'options', 'actions', 'close', 'menu', 'like', 'heart'];
+    const EMOJI_NAMES = {
+      '\u2705': ['check mark button', 'white heavy check mark', 'check mark', 'green check mark'],
+      '\u{1F440}': ['eyes'],
+      '\u2753': ['question mark', 'red question mark', 'red question mark ornament', 'black question mark ornament', 'question'],
+      '\u2764': ['red heart', 'heart', 'heavy black heart'],
+      '\u{1F44D}': ['thumbs up', 'thumbs up sign'],
+      '\u{1F44E}': ['thumbs down', 'thumbs down sign'],
+      '\u{1F602}': ['face with tears of joy'],
+      '\u203C': ['double exclamation mark'],
+      '\u26A0': ['warning', 'warning sign'],
+    };
+    const SEARCH_WORD = { '\u2705': 'check', '\u{1F440}': 'eyes', '\u2753': 'question', '\u2764': 'heart',
+                          '\u{1F44D}': 'thumbs up', '\u{1F44E}': 'thumbs down', '\u{1F602}': 'joy', '\u203C': 'exclamation', '\u26A0': 'warning' };
+    const OPTION_SEL = 'button,[role="button"],[role="menuitem"],[role="menuitemradio"],[role="option"],[role="gridcell"],[role="img"],img[alt]';
+    let uiChain = Promise.resolve();
+    function uiSerial(fn) { const p = uiChain.then(fn, fn); uiChain = p.catch(() => {}); return p; }
+    function ems(s) { return String(s || '').replace(/[\uFE0E\uFE0F\u200d]/g, '').trim(); }
+    function sleep(ms) { return new Promise(r => win.setTimeout(r, ms)); }
+    async function waitFor(fn, ms, step) {
+      const end = realNow() + ms;
+      for (;;) {
+        let v = null; try { v = fn(); } catch (e) { v = null; }
+        if (v) return v;
+        if (realNow() >= end) return null;
+        await sleep(step || 60);
+      }
+    }
+    function labelOf(el) { return String((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || ''); }
+    function entryByUuid(u) {
+      const want = String(u || '').toLowerCase();
+      if (!/^[0-9a-f-]{8,64}$/.test(want)) return null;
+      const all = allEntries();
+      return all.find(e => uuidOf(e) === want) || null;
+    }
+    function fire(el, types) {
+      const W = (el.ownerDocument && el.ownerDocument.defaultView) || win;
+      for (const t of types) {
+        let ev;
+        try {
+          ev = /^pointer/.test(t) && W.PointerEvent ? new W.PointerEvent(t, { bubbles: true, cancelable: true })
+             : new W.MouseEvent(t, { bubbles: true, cancelable: true });
+        } catch (e) { ev = new W.Event(t, { bubbles: true, cancelable: true }); }
+        try { el.dispatchEvent(ev); } catch (e) { /* detached */ }
+      }
+    }
+    function hover(entry) {
+      const b = bodyEl(entry) || entry;
+      for (const el of [entry, b]) fire(el, ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove']);
+    }
+    function press(el) { fire(el, ['pointerdown', 'mousedown', 'pointerup', 'mouseup']); try { el.click(); } catch (e) { fire(el, ['click']); } }
+    function escape() {
+      const W = doc.defaultView || win;
+      for (const t of [doc.activeElement, doc.body, doc]) {
+        if (!t) continue;
+        try { t.dispatchEvent(new W.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true })); } catch (e) { /* ignore */ }
+      }
+    }
+    function otherEntry(el, entry) { const e = closestEntry(el); return !!(e && e !== entry); }
+    function inBody(el, entry) { const b = bodyEl(entry); const q = findQuote(entry); return !!((b && deepContains(b, el)) || (q && deepContains(q, el))); }
+    function findReactButton(entry) {
+      const scopes = [entry];
+      for (let a = parentOf(entry), i = 0; a && i < 3; a = parentOf(a), i++) scopes.push(a);
+      const seenEls = new Set();
+      const pick = list => list.find(el => {
+        if (seenEls.has(el)) return false; seenEls.add(el);
+        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el)) return false;
+        const lab = labelOf(el), tid = String(el.getAttribute('data-testid') || '');
+        if (DANGER_RE.test(lab) || DANGER_RE.test(tid)) return false;
+        return REACT_LABEL_RE.test(lab) || /react|emoji/i.test(tid);
+      });
+      for (const s of scopes) { const b = pick(safeAll(s, 'button,[role="button"]')); if (b) return b; }
+      return pick(safeAll(doc, '[role="toolbar"] button,[role="toolbar"] [role="button"],[role="menu"] [role="menuitem"]'));
+    }
+    function matchesEmoji(el, emoji) {
+      const want = ems(emoji), names = EMOJI_NAMES[want] || [];
+      const lab = ems(labelOf(el)).toLowerCase();
+      if (lab && (lab === want || names.includes(lab))) return true;
+      if (el.tagName === 'IMG' && ems(el.getAttribute('alt')) === want) return true;
+      const own = ems(el.textContent || '');
+      return own === want;
+    }
+    function findEmojiOption(entry, emoji, exclude) {
+      const list = safeAll(doc, OPTION_SEL);
+      for (const el of list) {
+        if (exclude && exclude.has(el)) continue;
+        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el)) continue;
+        if (!matchesEmoji(el, emoji)) continue;
+        const btn = el.tagName === 'IMG' || el.getAttribute('role') === 'img'
+          ? (el.closest ? el.closest('button,[role="button"],[role="menuitem"],[role="option"],[role="gridcell"]') : null) || el : el;
+        return btn;
+      }
+      return null;
+    }
+    function reactionCount(entry, emoji) {
+      const want = ems(emoji);
+      let n = 0;
+      walkElements(entry, el => {
+        if (inBody(el, entry)) return;
+        if (el.closest && el.closest('[role="menu"],[role="menuitem"],[role="dialog"],[role="toolbar"],[role="tooltip"],[role="listbox"],button[aria-haspopup]')) return;
+        for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType === 3 && ems(c.nodeValue).includes(want)) n++;
+        if (ems(el.getAttribute('alt')) === want) n++;
+      });
+      return n;
+    }
+    function vocabSeen(entry) {
+      const words = new Set();
+      const els = [entry];
+      for (let a = parentOf(entry), i = 0; a && i < 3; a = parentOf(a), i++) els.push(a);
+      for (const s of els) for (const el of safeAll(s, 'button,[role="button"],[role="menuitem"]').slice(0, 60)) {
+        if (inBody(el, entry) || otherEntry(el, entry)) continue;
+        const toks = tokens(labelOf(el) + ' ' + (el.getAttribute('data-testid') || ''));
+        for (const w of VOCAB) if (toks.includes(w)) words.add(w);
+      }
+      return Array.from(words).sort();
+    }
+    function setNativeValue(el, value) {
+      const W = (el.ownerDocument && el.ownerDocument.defaultView) || win;
+      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+        const proto = el.tagName === 'TEXTAREA' ? W.HTMLTextAreaElement.prototype : W.HTMLInputElement.prototype;
+        const d = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (d && d.set) d.set.call(el, value); else el.value = value;
+        el.dispatchEvent(new W.Event('input', { bubbles: true }));
+        el.dispatchEvent(new W.Event('change', { bubbles: true }));
+        return;
+      }
+      try { el.focus(); } catch (e) { /* ignore */ }
+      let done = false;
+      try { if (doc.execCommand) { doc.execCommand('selectAll', false, null); done = doc.execCommand('insertText', false, value); } } catch (e) { done = false; }
+      if (!done) {
+        el.textContent = value;
+        try { el.dispatchEvent(new W.InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' })); }
+        catch (e) { el.dispatchEvent(new W.Event('input', { bubbles: true })); }
+      }
+    }
+    function composerValue(el) { return (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') ? String(el.value || '') : String(el.textContent || ''); }
+
+    async function uiReactNow(uuid, emoji, opt) {
+      const t0 = realNow();
+      const out = (ok, step, extra) => Object.assign({ ok, step, ms: realNow() - t0 }, extra || {});
+      const entry = entryByUuid(uuid);
+      if (!entry) return out(false, 'no-entry');
+      const a = analyze(entry);
+      if (a.direction !== 'outbound') return out(false, 'not-mine');     // only ever the owner's own message
+      const want = ems(emoji);
+      if (!want) return out(false, 'bad-emoji');
+      if (want !== ems('\u2753')) clearPrompt(uuid);     // a sent / read / mirrored message is no longer a prompt
+      const before = reactionCount(entry, want);
+      if (before > 0) { if (opt && opt.prompt) watchPrompt(uuid, entry); return out(true, 'already'); }
+      hover(entry);
+      const btn = await waitFor(() => findReactButton(entry), 1200);
+      if (!btn) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
+      const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));   // e.g. an existing pill
+      press(btn);
+      let option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
+      if (!option) {
+        const search = safeAll(doc, 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"]')
+          .find(el => !otherEntry(el, entry) && !/composer/i.test(String(el.getAttribute('data-testid') || '')) && !(el.closest && el.closest('[data-testid*="omposer"]')));
+        if (search) {
+          setNativeValue(search, SEARCH_WORD[want] || '');
+          option = await waitFor(() => findEmojiOption(entry, want, stale), 1200);
+        }
+      }
+      if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry) }); }
+      press(option);
+      const ok = await waitFor(() => reactionCount(entry, want) > before, 2500, 80);
+      if (!ok) { escape(); return out(false, 'not-placed'); }
+      if (opt && opt.prompt) watchPrompt(uuid, entry);
+      return out(true, 'placed');
+    }
+
+    async function uiTypeNow(text) {
+      const t0 = realNow();
+      const out = (ok, step) => ({ ok, step, ms: realNow() - t0 });
+      const s = String(text || '');
+      if (!UI_TAG_RE.test(s) || s.length > 600) return out(false, 'untagged');      // only relay prompts, ever
+      const box = safeAll(doc, '[data-testid="dm-composer-textarea"]')[0];
+      if (!box) return out(false, 'no-composer');
+      if (composerValue(box).trim()) return out(false, 'composer-busy');            // never touch his draft
+      const norm = v => normSpaces(v).replace(/\s+/g, ' ').trim();
+      const countMine = () => allEntries().filter(e => norm(entryText(e).text) === norm(s)).length;
+      const before = countMine();
+      setNativeValue(box, s);
+      const btn = await waitFor(() => {
+        const b = safeAll(doc, '[data-testid="dm-composer-send-button"]')[0];
+        return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' ? b : null;
+      }, 1500);
+      if (!btn || norm(composerValue(box)) !== norm(s)) {
+        if (norm(composerValue(box)) === norm(s)) setNativeValue(box, '');
+        return out(false, btn ? 'composer-changed' : 'no-send-button');
+      }
+      press(btn);
+      const ok = await waitFor(() => countMine() > before, 5000, 100);
+      if (ok) return out(true, 'sent');
+      if (!composerValue(box).trim()) return out(true, 'cleared');                 // X took it; bubble not seen yet
+      if (norm(composerValue(box)) === norm(s)) setNativeValue(box, '');
+      return out(false, 'not-sent');
+    }
+
+    // ---------- v1.4.6 attachments the owner sends (photos/files in HIS outbound bubbles) ----------
+    // Only image elements inside his own bubble; the bytes are read in-page from the image the X client
+    // already decrypted and shown, in 512 KiB chunks the service worker forwards to the Mac. Nothing is
+    // stored: the buffer is released as soon as the send is built (or after MEDIA_HOLD_MS).
+    const MEDIA_MAX_BYTES = 25 * 1024 * 1024, MEDIA_CHUNK = 512 * 1024, MEDIA_MAX = 10, MEDIA_HOLD_MS = 5 * 60 * 1000;
+    const mediaRefs = new Map();       // uuid -> {srcs, at}
+    const mediaBufs = new Map();       // uuid#i -> {bytes, mime, at}
+    const MEDIA_SRC_RE = /^(blob:|data:image\/|https:\/\/(ton|pbs)\.twimg\.com\/)/i;
+    function isEmojiImg(img) {
+      const src = String(img.getAttribute('src') || '');
+      const alt = String(img.getAttribute('alt') || '');
+      if (/\/emoji\/|twemoji|abs(-\d)?\.twimg\.com\/(emoji|hashflags)|profile_images|\/avatar/i.test(src)) return true;
+      if (alt && alt.length <= 4 && !/[A-Za-z0-9]/.test(alt)) return true;   // an emoji glyph image
+      const w = Number(img.getAttribute('width') || img.naturalWidth || 0);
+      return w > 0 && w < 40;
+    }
+    function mediaOf(entry) {
+      const out = [];
+      let q = null;
+      try { q = findQuote(entry); } catch (e) { q = null; }
+      const cards = cardInfo(entry);
+      for (const img of safeAll(entry, 'img')) {
+        const src = String(img.getAttribute('src') || '');
+        if (!src || !MEDIA_SRC_RE.test(src) || isEmojiImg(img) || isExcluded(img)) continue;
+        if (q && deepContains(q, img)) continue;      // a photo in the quoted message is theirs, never re-sent
+        if (inCard(entry, img, cards)) continue;      // a shared post / link thumbnail: the URL goes instead
+        if (!out.includes(src)) out.push(src);
+        if (out.length >= MEDIA_MAX) break;
+      }
+      return out;
+    }
+    function mediaShell(entry) {        // a photo bubble whose image has not loaded yet
+      if (mediaOf(entry).length) return false;
+      return safeAll(entry, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i],[aria-label*="image" i],[aria-label*="photo" i]').length > 0;
+    }
+    function pruneMedia() {
+      const t = realNow();
+      for (const [k, v] of mediaRefs) if (t - v.at > MEDIA_HOLD_MS) mediaRefs.delete(k);
+      for (const [k, v] of mediaBufs) if (t - v.at > MEDIA_HOLD_MS) mediaBufs.delete(k);
+    }
+    function hex(buf) { return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join(''); }
+    function b64(bytes) {
+      let s = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      return (win.btoa || btoa)(s);
+    }
+    function sniffMime(b) {
+      if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+      if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+      if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'image/gif';
+      if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45) return 'image/webp';
+      return '';
+    }
+    async function uiMediaInfo(uuid, index) {
+      pruneMedia();
+      const ref = mediaRefs.get(String(uuid).toLowerCase());
+      const src = ref && ref.srcs[Number(index) || 0];
+      if (!src) return { ok: false, step: 'no-media' };
+      try {
+        const f = win.fetch || (typeof fetch !== 'undefined' ? fetch : null);
+        const r = await f(src, { credentials: 'include' });
+        if (!r || !r.ok) return { ok: false, step: 'fetch-failed' };
+        const len = Number((r.headers && r.headers.get && r.headers.get('content-length')) || 0);
+        if (len > MEDIA_MAX_BYTES) return { ok: false, step: 'too-large', size: len };
+        const buf = await r.arrayBuffer();
+        if (buf.byteLength > MEDIA_MAX_BYTES) return { ok: false, step: 'too-large', size: buf.byteLength };
+        if (!buf.byteLength) return { ok: false, step: 'empty' };
+        const bytes = new Uint8Array(buf);
+        const mime = sniffMime(bytes) || String((r.headers && r.headers.get && r.headers.get('content-type')) || '').split(';')[0].slice(0, 60);
+        const sub = (win.crypto && win.crypto.subtle) || (typeof crypto !== 'undefined' && crypto.subtle);
+        const sha256 = hex(await sub.digest('SHA-256', bytes));
+        mediaBufs.set(String(uuid).toLowerCase() + '#' + index, { bytes, mime, at: realNow() });
+        const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' }[mime] || '';
+        return { ok: true, size: bytes.length, mime, sha256, name: (mime.indexOf('image/') === 0 ? 'photo' : 'attachment') + (ext ? '.' + ext : ''),
+                 chunks: Math.ceil(bytes.length / MEDIA_CHUNK) };
+      } catch (e) { return { ok: false, step: 'read-failed' }; }
+    }
+    function uiMediaChunk(uuid, index, seq) {
+      const b = mediaBufs.get(String(uuid).toLowerCase() + '#' + index);
+      if (!b) return { ok: false, step: 'expired' };
+      const start = (Number(seq) || 0) * MEDIA_CHUNK;
+      if (start >= b.bytes.length) return { ok: false, step: 'past-end' };
+      return { ok: true, data: b64(b.bytes.subarray(start, start + MEDIA_CHUNK)) };
+    }
+    function uiMediaRelease(uuid) {
+      const u = String(uuid).toLowerCase();
+      mediaRefs.delete(u);
+      for (const k of Array.from(mediaBufs.keys())) if (k.indexOf(u + '#') === 0) mediaBufs.delete(k);
+      return { ok: true };
+    }
+
+    async function uiAwaitUndoNow(uuid, ms) {
+      const end = realNow() + Math.max(0, Math.min(10000, Number(ms) || 0));
+      for (;;) {
+        const e = entryByUuid(uuid);
+        if (e && analyze(e).direction === 'outbound' && reactionState(e).trash) return { trashed: true };
+        if (realNow() >= end) return { trashed: false, seen: !!e };
+        await sleep(150);
+      }
+    }
+    function watchPrompt(uuid, entry) {
+      const u = String(uuid).toLowerCase();
+      uiPromptUuids.set(u, now());
+      const st = reactionState(entry);
+      promptMarks.set(u, { at: now(), up: st.up, down: st.down, fired: false });
+    }
+    function clearPrompt(uuid) {
+      const u = String(uuid || '').toLowerCase();
+      if (uiPromptUuids.delete(u)) { const mk = promptMarks.get(u); if (mk) mk.fired = true; }
+    }
+    function isUiPrompt(u) {
+      const at = uiPromptUuids.get(u);
+      if (at === undefined) return false;
+      if (now() - at > PROMPT_WINDOW_MS) { uiPromptUuids.delete(u); return false; }
+      return true;
+    }
+
     const OBS_OPTS = { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'alt'] };
     return {
       config: cfg,
@@ -2305,6 +2886,14 @@ chrome.runtime.onStartup.addListener(boot);
       structureOf,
       status() { return { conversationId: conversationId(), mode, chatRoot: chatRoot().selector, entriesOnPage: allEntries().length, ownerConfirmed: !!ownerCheck(), stats: Object.assign({}, stats) }; },
       _analyze: analyze,
+      uiReact: (uuid, emoji, opt) => uiSerial(() => uiReactNow(uuid, emoji, opt)),   // v1.4.6
+      uiType: text => uiSerial(() => uiTypeNow(text)),
+      uiAwaitUndo: (uuid, ms) => uiAwaitUndoNow(uuid, ms),
+      uiClearPrompt: clearPrompt,
+      uiMediaInfo, uiMediaChunk, uiMediaRelease,  // v1.4.6 attachments
+      _mediaOf: mediaOf,
+      _cardInfo: cardInfo,
+      _canonicalCardUrl: canonicalCardUrl,
     };
   }
 
@@ -2456,6 +3045,11 @@ chrome.runtime.onStartup.addListener(boot);
     const tick = () => { if (isChatPath(here())) startMain(); };   // frame polls the top URL like the top frame (item 7)
     tick();
     setInterval(tick, 1000);
+    // v1.4.6: while the relay chat is open, nudge the background every 15 s so queued UI actions (a
+    // mirrored tapback, a read receipt's 👀) are picked up. Ids only travel this way, never text.
+    setInterval(() => {
+      if (mainDetector && !state.paused && mainDetector.hasEntries()) send({ type: 'relay-ui-tick' });
+    }, 15000);
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -2475,6 +3069,21 @@ chrome.runtime.onStartup.addListener(boot);
       try { sendResponse({ ok: true, from: role, structure: mainDetector.pageStructure() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
       return false;
     }
+    if (msg && msg.type === 'relay-ui') {                 // v1.4.6: background asks for one UI action
+      if (!mainDetector || !mainDetector.hasEntries()) return false;
+      if (state.paused) { sendResponse({ ok: false, step: 'paused' }); return false; }
+      let p;
+      if (msg.action === 'react') p = mainDetector.uiReact(String(msg.uuid || ''), String(msg.emoji || ''), { prompt: !!msg.prompt });
+      else if (msg.action === 'type') p = mainDetector.uiType(String(msg.text || ''));
+      else if (msg.action === 'await-undo') p = mainDetector.uiAwaitUndo(String(msg.uuid || ''), Number(msg.ms) || 0);
+      else if (msg.action === 'clear-prompt') { mainDetector.uiClearPrompt(String(msg.uuid || '')); sendResponse({ ok: true }); return false; }
+      else if (msg.action === 'media-info') p = mainDetector.uiMediaInfo(String(msg.uuid || ''), Number(msg.index) || 0);
+      else if (msg.action === 'media-chunk') { sendResponse(mainDetector.uiMediaChunk(String(msg.uuid || ''), Number(msg.index) || 0, Number(msg.seq) || 0)); return false; }
+      else if (msg.action === 'media-release') { sendResponse(mainDetector.uiMediaRelease(String(msg.uuid || ''))); return false; }
+      else { sendResponse({ ok: false, step: 'unknown-action' }); return false; }
+      p.then(r => sendResponse(r)).catch(e => sendResponse({ ok: false, step: 'error' }));
+      return true;
+    }
     if (!msg || msg.type !== 'relay-debug') return false;
     if (!mainDetector || !mainDetector.hasEntries()) return false;
     try { sendResponse({ ok: true, from: role, snapshot: mainDetector.debugSnapshot() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
@@ -2482,12 +3091,12 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=b6cf38665fe8e2b84b07a4a58519f5bebcc607745e910abd1934cc3da29a1e2c nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=34d718e7d534cfd6b05c7580a30662bfea3686869cdbcb7999153d92f1fdfd5e nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.5",
-  "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open chat page only; never posts, types, or calls any X API.",
+  "version": "1.4.6",
+  "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
     "storage",
@@ -2695,10 +3304,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=95dae4957670af026b5896716a248f7522e6f8034533563bf6c7f15d37cc8d79 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=9bb3f12df5e92dd02fb3f72e79a138f282389a967c29941f4a19040eeec25f78 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.5.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.6.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -2741,6 +3350,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc  # noqa: E402
 import relay_test  # noqa: E402  (v1.3.8: the /test end-to-end check)
+import relay_ui  # noqa: E402  (v1.4.6: fast feedback in the owner's X tab)
+import relay_media  # noqa: E402  (v1.4.6: attachments the owner sends from X Chat)
 import uuid  # noqa: E402
 
 STATE_PATH = os.path.join(rc.APP_DIR, 'host_state.json')
@@ -2846,13 +3457,70 @@ def handle_get_config(cfg, now=time.time):
         'senderXHandle': cfg.get('senderXHandle', ''),
         'pendingSelfTest': pending_selftest(now),
         'configError': cfg.get('_configError', ''),
+        'uiReactions': bool(cfg.get('uiReactions', True)), 'undoSeconds': int(cfg.get('undoSeconds', 5)),   # v1.4.6
+        'relayAttachments': bool(cfg.get('relayAttachments', True)),
     }
+
+
+# v1.4.6: per-request UI context. When the extension says it can act in the owner's X tab (`ui: true`),
+# a confirm prompt becomes a ❓ reaction on HIS message and a "Who's this for?" is typed by the extension
+# (tagged UI_TAG, never relayed). The routine copy of that prompt is DEFERRED by UI_FALLBACK_S and only
+# posted if the extension does not ack, so a UI miss still reaches the phone the old way.
+UI_TAG = '\U0001f916'          # every relay-authored message the extension types starts with this
+UI_DEFER_TYPES = ('needs_confirm', 'needs_target')
+_UI = {'on': False, 'uuid': '', 'react': [], 'type': []}
+
+
+def _ui_reset(msg=None):
+    on = bool(isinstance(msg, dict) and msg.get('ui') is True and msg.get('type') in ('send', 'reaction', 'signal'))
+    u = str((msg or {}).get('xUuid') or '') if isinstance(msg, dict) else ''
+    _UI.update(on=on, uuid=u if relay_ui.valid_uuid(u) else '', react=[], type=[])
+
+
+def _ui_out():
+    out = {}
+    if _UI['react']:
+        out['react'] = list(_UI['react'])
+    if _UI['type']:
+        out['type'] = list(_UI['type'])
+    return out
+
+
+def _defer_to_ui(cfg, payload, now=time.time):
+    """Queue the routine copy for later and hand the prompt to the extension instead. Returns True if
+    deferred (the caller then posts nothing now)."""
+    t = payload.get('type')
+    if not _UI['on'] or t not in UI_DEFER_TYPES or not cfg.get('uiPrompts', True):
+        return False
+    detail = str(payload.get('detail') or '').strip()
+    if t == 'needs_confirm':
+        if not _UI['uuid']:
+            return False
+        action = {'emoji': '\u2753', 'uuid': _UI['uuid']}
+    else:
+        if not detail:
+            return False
+        action = {'text': UI_TAG + ' ' + detail[:400]}
+    rc.ensure_event_id(payload)
+    note = uuid.uuid4().hex
+    try:
+        rc.write_json_atomic(os.path.join(NOTIFY_RETRY_DIR, note + '.json'),
+                             {'queuedAt': now(), 'notBefore': now() + relay_ui.UI_FALLBACK_S, 'ui': True,
+                              'payload': payload}, mode=0o600)
+    except OSError:
+        return False
+    action['noteId'] = note
+    (_UI['react'] if 'emoji' in action else _UI['type']).append(action)
+    rc.log_event('notify', type=t, ok=True, ui=True)
+    return True
 
 
 def notify(cfg, poster, payload):
     """Body-free status event to the bot's webhook (sent confirmations, "who is this for?")."""
     if not cfg.get('webhookUrl'):
         return False
+    if _defer_to_ui(cfg, payload):
+        return True
     rc.ensure_event_id(payload)   # every status event gets a unique id so a retried webhook dedupes (item B)
     ok = bool(poster(cfg['webhookUrl'], payload, cfg.get('webhookToken', ''), timeout=NOTIFY_TIMEOUT_S))
     queued = False
@@ -3616,6 +4284,16 @@ def _short_mask(handle):
     return m.split(' ', 1)[1] if m.startswith('+') and ' ' in m else m
 
 
+_UI_PROMPT_RE = re.compile(r'reply yes within 2 min|^\s*who\u2019?\'?s this for\?', re.I)
+
+
+def is_relay_ui_text(text):
+    """True for anything the relay itself authored in the owner's name: the UI_TAG prefix, or (belt and
+    braces) the exact prompt phrasing the relay uses."""
+    s = str(text or '').lstrip()
+    return s.startswith(UI_TAG) or bool(_UI_PROMPT_RE.search(s[:300]))
+
+
 def handle_send(msg, cfg, runner, sleeper, now, poster):
     text = msg.get('text')
     quoted = msg.get('quotedText') if isinstance(msg.get('quotedText'), str) else ''
@@ -3623,16 +4301,35 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     dry = cfg['dryRun']
     base = {'dryRun': dry}
 
-    def refuse(reason, **f):
+    def refuse(reason, label='', **f):
         rc.log_event('refused', reason=reason, **f)
+        _discard_attachments(msg.get('attachments'))     # v1.4.6: a refused reply keeps no upload
+        _tell_refusal(reason, label, cfg, poster, now)   # v1.4.6: he always hears why (text + \u26a0\ufe0f)
         return dict(base, ok=False, error=reason)
 
     if not cfg['relayConversationId']:
         return refuse('relayConversationId not set in config')
     if conv != cfg['relayConversationId']:
         return refuse('not the relay conversation')
-    if not isinstance(text, str) or not text.strip():
+    skipped_n = msg.get('attachmentsSkipped')
+    skipped_n = skipped_n if isinstance(skipped_n, int) and not isinstance(skipped_n, bool) and 0 < skipped_n <= 10 else 0
+    atts, att_err = _parse_attachments(msg.get('attachments'))
+    if att_err:
+        _discard_attachments(msg.get('attachments'))
+        return refuse(att_err)
+    if text is None and (atts or skipped_n):
+        text = ''
+    if isinstance(text, str) and not text.strip() and not atts and skipped_n and not cfg['paused']:
+        # v1.4.6: only photos, and none could be read from X: say so (counts only), send nothing
+        notify(cfg, poster, {'type': 'refused', 'reason': 'attachment', 'count': skipped_n, 'sentText': False,
+                             'at': rc.iso_utc(now())})
+        return refuse('attachments could not be read', attachments=skipped_n)
+    if not isinstance(text, str) or (not text.strip() and not atts):
         return refuse('empty text')
+    if is_relay_ui_text(text):
+        # v1.4.6: a prompt the extension typed as the owner (tagged). Never a reply, never a command.
+        rc.log_event('ui_text_ignored', textLength=len(text))
+        return dict(base, ok=True, skipped='relay prompt')
     # v1.3.9: drop X Chat time/status chips an older extension may have appended ("hi\n9:07 AM\n\n9:07 AM").
     text = rc.strip_trailing_chips(text)
     quoted = rc.strip_trailing_chips(quoted)
@@ -3669,7 +4366,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         # sanitized test ids, attribute NAMES, 'Replied to' yes/no flags). Never any message text.
         rc.log_event('quote_probe', quoteSeen=bool(quoted.strip()), quoteResolved=route.get('by') == 'quote',
                      routedBy=route.get('by') or '', needsTarget=bool(route.get('needsTarget')),
-                     confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe))
+                     confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe),
+                     cards=msg.get('cards') if isinstance(msg.get('cards'), int) and 0 < msg.get('cards') <= 5 else 0)
     confirmed = bool(msg.get('confirmed'))
     hint = msg.get('handle')
     if hint and str(hint).startswith('group:'):
@@ -3756,8 +4454,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         handle = contact['handle']
         if hint_norm and hint_norm != handle:
             return refuse('the routed recipient does not match the handle the extension reported', handle=handle)
-        if not body.strip():
-            return refuse('empty text after the name prefix', handle=handle)
+        if not body.strip() and not atts:
+            return refuse('empty text after the name prefix', label=contact.get('label', ''), handle=handle)
         if contact.get('kind') == 'group':
             # v1.4.5: a reply to a group (exact name or a quote of its message) is ALWAYS confirmed first.
             guid = group_guid_lookup(handle, sleeper, now)
@@ -3803,7 +4501,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                                  'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, needsConfirm=True, guess=True, label=contact['label'],
                         handle=handle, reason='guessed', contact=contact['label'], routedBy=by)
-    if not body.strip():
+    if not body.strip() and not atts:
         return refuse('empty text', handle=handle)
     # Echo guard: never send one of the bot's own relay-chat posts, nor a relayed inbound message
     # bounced straight back (compared via per-install HMAC; see relay_common).
@@ -3824,34 +4522,54 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         t = now()
         recent = {k: v for k, v in (state.get('recent') or {}).items() if t - v < DEDUPE_WINDOW_S}
         window = [x for x in (state.get('sends') or []) if t - x < 60]
-        fp = fingerprint(handle, body)
+        fp = fingerprint(handle, body + ''.join('\n#' + a['sha256'] for a in atts))
         if fp in recent:
             rc.log_event('duplicate_dropped', handle=handle, textLength=len(body), dryRun=dry)
+            _discard_attachments(msg.get('attachments'))
             return dict(base, ok=True, skipped='duplicate within 60s', **who)
         if len(window) >= cfg['maxSendsPerMinute']:
             rc.log_event('rate_limited', handle=handle, textLength=len(body), limit=cfg['maxSendsPerMinute'])
+            _discard_attachments(msg.get('attachments'))
             return dict(base, ok=False, error='rate limited (%d per minute)' % cfg['maxSendsPerMinute'], **who)
-        outgoing = body + ('\n' + cfg['footer'] if cfg.get('footer') else '')
+        outgoing = (body + ('\n' + cfg['footer'] if cfg.get('footer') else '')) if body.strip() else ''
         recent[fp] = t
         window.append(t)
         state.update(recent=recent, sends=window)
         ok, err = True, ''
+        pending_id = ''
         is_group = contact.get('kind') == 'group'
-        if not dry:
-            if is_group:        # v1.4.5: to the group chat itself, by its Messages chat id
-                ok, err = rc.send_imessage(outgoing, contact['guid'], runner=runner, sleeper=sleeper, target='chat')
-            else:
-                ok, err = rc.send_imessage(outgoing, handle, runner=runner, sleeper=sleeper)
+        pending_ids = []
+        ui_on = bool(_UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True))
+        dest, tgt = (contact['guid'], 'chat') if is_group else (handle, 'participant')
+        staged = []
+        if not dry and atts:
+            staged, err = _stage_attachments(atts)
+            ok = err == ''
+        if not dry and ok and outgoing:
+            ok, err = rc.send_imessage(outgoing, dest, runner=runner, sleeper=sleeper, target=tgt)
             if not ok:
-                if err != 'timeout':        # a clear failure: allow an immediate manual retry
+                for p in staged:
+                    relay_media.remove_staged(p)
+            if ok and cfg.get('deliveryCheck', True):
+                pending_ids.append(rc.add_pending_send(handle, t, len(outgoing), label=contact['label'],
+                                   note=('new contact, ' + _short_mask(handle)) if new_contact else '',
+                                   chat_guid=contact['guid'] if is_group else '', x_uuid=_UI['uuid'], ui=ui_on))
+        if not dry and ok and atts:
+            # v1.4.6: each attachment is its own Messages send (file mode), after the text, same target
+            sent_files, err = _send_attachments(atts, staged, dest, tgt, handle, contact, t, cfg, runner, sleeper,
+                                               ui_on, pending_ids)
+            ok = err == ''
+            if not ok and (outgoing or sent_files):
+                err = 'attachment_failed'       # part of the reply went out: never resend (keep the fingerprint)
+        if not dry:
+            if not ok:
+                if err not in ('timeout', 'attachment_failed'):   # a clear failure: allow an immediate manual retry
                     recent.pop(fp, None)
                     window.pop()
                 # a timeout is ambiguous (it may actually have sent): keep the fingerprint, no double-send
-            elif cfg.get('deliveryCheck', True):
-                rc.add_pending_send(handle, t, len(outgoing), label=contact['label'],   # record inside the lock
-                                    note=('new contact, ' + _short_mask(handle)) if new_contact else '',
-                                    chat_guid=contact['guid'] if is_group else '')
+            pending_id = pending_ids[0] if pending_ids else ''
         rc.write_json_atomic(STATE_PATH, state)
+    _discard_attachments(msg.get('attachments'))      # dry run / failure / leftovers: no upload outlives the request
     if new_contact and ok and not dry:
         try:
             _finish_new_contact(handle, new_contact['name'], cfg)
@@ -3861,18 +4579,20 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if note:
         who['note'] = note
     if dry:
-        rc.log_event('dry_run', handle=handle, contact=contact['label'], routedBy=by, textLength=len(body), outgoingLength=len(outgoing))
+        rc.log_event('dry_run', handle=handle, contact=contact['label'], routedBy=by, textLength=len(body), outgoingLength=len(outgoing),
+                     attachments=len(atts))
         if cfg['confirmSends']:
             notify(cfg, poster, {'type': 'sent', 'label': contact['label'], 'contactName': contact['name'], 'dryRun': True,
                                  'delivered': None, 'routedBy': by, 'at': rc.iso_utc(t)})
         who.pop('note', None)
         return dict({'ok': True, 'dryRun': True, 'textLength': len(body)}, **who)
     if not ok:
-        rc.log_event('send_failed', textLength=len(body), error=err)      # err is a fixed code, never raw text
+        rc.log_event('send_failed', textLength=len(body), error=err, attachments=len(atts))      # err is a fixed code, never raw text
         return dict({'ok': False, 'dryRun': False, 'error': rc.error_message(err), 'errorCode': err}, **who)
     # Delivery proof is verified by the watcher (it holds Full Disk Access); the host recorded a
     # body-free pending entry inside its lock above. The host never confirms delivery itself.
-    rc.log_event('sent', routedBy=by, textLength=len(body), delivered=None, deliveryNote='pending')
+    rc.log_event('sent', routedBy=by, textLength=len(body), delivered=None, deliveryNote='pending', attachments=len(atts),
+                 attachmentBytes=sum(a['size'] for a in atts))
     # item 6: when deliveryCheck is on, the WATCHER posts the single confirmation (✓✓ delivered, or ✓ sent
     # after ~20s). The host only confirms here when delivery checking is off, so the owner still hears back.
     if cfg['confirmSends'] and not cfg.get('deliveryCheck', True):
@@ -3881,7 +4601,127 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if note:
             p['note'] = note
         notify(cfg, poster, p)
-    return dict({'ok': True, 'dryRun': False, 'sent': True, 'delivered': None, 'deliveryCheck': 'pending'}, **who)
+    res = dict({'ok': True, 'dryRun': False, 'sent': True, 'delivered': None, 'deliveryCheck': 'pending'}, **who)
+    if skipped_n:
+        notify(cfg, poster, {'type': 'refused', 'reason': 'attachment', 'count': skipped_n, 'label': contact['label'],
+                             'sentText': True, 'at': rc.iso_utc(t)})
+        res['attachmentsSkipped'] = skipped_n
+    if pending_id and _UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True):
+        # v1.4.6: \u2705 on HIS message right now (Messages accepted it); the watcher then skips the text line.
+        r = {'emoji': '\u2705', 'uuid': _UI['uuid'], 'pendingId': pending_id}
+        if len(pending_ids) > 1:
+            r['pendingIds'] = list(pending_ids)     # text + attachments: one \u2705 covers them all
+        _UI['react'].append(r)
+        res['pendingId'] = pending_id
+    if atts:
+        res['attachments'] = len(atts)
+    return res
+
+
+# v1.4.6: every refusal on the reply path tells him why (fixed, body-free wording). A few already say so
+# their own way, or are not about one of his replies at all.
+_REFUSAL_SILENT = {'relayConversationId not set in config', 'not the relay conversation', 'attachments could not be read',
+                   'refusing to echo a relayed message back to its sender', 'refusing to send one of my own relay messages'}
+_REFUSAL_TEXT = {
+    'empty text': 'That message had nothing I could send as an iMessage.',
+    'empty text after the name prefix': 'There was nothing after the name to send. Type the message after "{label}:".',
+    'text too long': 'It is too long to relay (limit %d characters).' % MAX_TEXT,
+    'paused': 'The relay is paused, so nothing was sent. /resume turns it back on.',
+    'no contacts in config': 'No contacts are set up yet, so nothing was sent (/add Name +1 \u2026).',
+    'confirmed reply without a target handle': 'That yes no longer matched a waiting reply. Send the reply again.',
+    'confirmed group send without a pending group prompt': 'That yes no longer matched a waiting group reply. Send it again.',
+    'confirmed handle is not a current recipient': 'That yes no longer matched a waiting reply. Send the reply again.',
+    'confirmed group send no longer names that group': 'That reply no longer names the group. Send it again.',
+    'the routed recipient does not match the handle the extension reported': 'The recipient changed while sending. Send it again.',
+    'refusing to relay to the owner handle': 'That would text your own number. Use /test send for a self-test.',
+    'bad attachment': 'An attachment was damaged on the way to the Mac. Attach it again.',
+}
+
+
+def _tell_refusal(reason, label, cfg, poster, now):
+    if reason in _REFUSAL_SILENT:
+        return
+    detail = _REFUSAL_TEXT.get(reason)
+    if detail is None:
+        detail = ('An attachment is over the limit. ' if reason.startswith(('too many attachments', 'attachment too large')) else '') + \
+                 'It was not sent (%s).' % reason[:80]
+    detail = detail.replace('{label}', rc.clean_label(label) or 'Name')
+    if _UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True):
+        _UI['react'].append({'emoji': '\u26a0\ufe0f', 'uuid': _UI['uuid']})    # instant, on his own message
+    try:
+        notify(cfg, poster, {'type': 'refused', 'reason': 'not_sent', 'detail': detail, 'at': rc.iso_utc(now())})
+    except Exception:
+        pass
+
+
+def _parse_attachments(raw):
+    """v1.4.6: validate the attachment list the extension sends with a reply (metadata only; the bytes
+    already arrived as attach_chunk uploads). Returns (list, error)."""
+    if raw is None:
+        return [], ''
+    if not isinstance(raw, list) or len(raw) > relay_media.MAX_OUTBOUND_FILES:
+        return [], 'too many attachments (limit %d)' % relay_media.MAX_OUTBOUND_FILES
+    out = []
+    for a in raw:
+        if not isinstance(a, dict) or not relay_media.valid_upload_id(a.get('uploadId')):
+            return [], 'bad attachment'
+        size = a.get('size')
+        if not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= relay_media.MAX_OUTBOUND_BYTES:
+            return [], 'attachment too large (limit %s)' % relay_media.fmt_size(relay_media.MAX_OUTBOUND_BYTES)
+        sha = str(a.get('sha256') or '').lower()
+        if not relay_media.SHA_RE.match(sha):
+            return [], 'bad attachment'
+        mime = str(a.get('mime') or '')[:80]
+        out.append({'uploadId': a['uploadId'], 'size': size, 'sha256': sha, 'mime': mime,
+                    'name': relay_media.safe_name(a.get('name'), mime)})
+    return out, ''
+
+
+def _discard_attachments(raw):
+    for a in raw if isinstance(raw, list) else []:
+        if isinstance(a, dict):
+            relay_media.discard_upload(a.get('uploadId'))
+
+
+def _stage_attachments(atts):
+    """Verify every upload (size + sha256) and move it to the Messages-readable stage BEFORE anything is
+    sent, so a bad attachment sends nothing at all. Returns (staged_paths, errcode)."""
+    staged = []
+    for a in atts:
+        try:
+            staged.append(relay_media.stage_for_send(relay_media.take_upload(a['uploadId'], a['size'], a['sha256']), a['name']))
+        except (ValueError, OSError):
+            for p in staged:
+                relay_media.remove_staged(p)
+            rc.log_event('attachment_rejected', size=a['size'], mime=a['mime'].split('/')[0])
+            return [], 'attachment_unavailable'
+    return staged, ''
+
+
+def _send_attachments(atts, staged, dest, tgt, handle, contact, t, cfg, runner, sleeper, ui_on, pending_ids):
+    """Send each staged file as one Messages file send. Returns (files_sent, errcode). A staged copy is
+    deleted on failure right away, else by the watcher once delivery resolves (or by the sweep)."""
+    sent = 0
+    for i, path in enumerate(staged):
+        ok, err = rc.send_imessage(path, dest, runner=runner, sleeper=sleeper, target=tgt, mode='file')
+        if not ok:
+            for p in staged[i:]:
+                relay_media.remove_staged(p)
+            return sent, err
+        sent += 1
+        if cfg.get('deliveryCheck', True):
+            pending_ids.append(rc.add_pending_send(handle, t, 0, label=contact['label'],
+                               chat_guid=contact['guid'] if contact.get('kind') == 'group' else '',
+                               x_uuid=_UI['uuid'], ui=ui_on, part='file', staged_path=path))
+        # deliveryCheck off: no watcher record; the sweep removes the staged copy after SEND_STAGE_TTL_S
+    return sent, ''
+
+
+def handle_attach_chunk(msg, cfg, now):
+    """v1.4.6: one in-order chunk of an attachment the owner sent in the relay chat (bytes only; never logged)."""
+    if cfg['paused'] or not cfg.get('relayAttachments', True):
+        return {'ok': False, 'error': 'attachments are off'}
+    return relay_media.stage_chunk(msg.get('uploadId'), msg.get('seq'), msg.get('data'), now=now())
 
 
 def handle_selftest(msg, cfg, runner, sleeper, now):
@@ -3929,6 +4769,9 @@ def handle_signal(msg, cfg, now, poster):
         ep_id = ('wrong_account:' + at) if at else 'wrong_account'
         notify(cfg, poster, {'type': 'wrong_account', 'id': ep_id, 'at': rc.iso_utc(now())})
         return {'ok': True}
+    if status == 'undo_cancelled':
+        rc.log_event('signal', status='undo_cancelled')    # v1.4.6: 🗑️ inside the undo window; nothing was sent
+        return {'ok': True}
     if status == 'guess_cancelled':
         # v1.4.1: the owner answered a reply prompt with "no" / "cancel" (the extension dropped the text)
         label = str(msg.get('label') or '').strip()
@@ -3948,12 +4791,71 @@ def handle_signal(msg, cfg, now, poster):
     return {'ok': False, 'error': 'unknown signal'}
 
 
+def handle_ui_ack(msg, cfg, now, poster):
+    """v1.4.6: the extension reports whether a UI action worked. ok=False on a prompt posts the routine
+    copy right away; ok=False on a \u2705 leaves the watcher's normal text confirmation in place."""
+    ok = msg.get('ok') is True
+    step = re.sub(r'[^a-z_-]', '', str(msg.get('step') or ''))[:30]
+    pid = re.sub(r'[^0-9a-f]', '', str(msg.get('pendingId') or ''))[:32]
+    note = re.sub(r'[^0-9a-f]', '', str(msg.get('noteId') or ''))[:32]
+    aid = re.sub(r'[^0-9a-f]', '', str(msg.get('actionId') or ''))[:32]
+    lat = msg.get('latencyMs')
+    lat = int(lat) if isinstance(lat, (int, float)) and 0 <= lat < 600000 else None
+    more = msg.get('pendingIds') if isinstance(msg.get('pendingIds'), list) else []
+    for extra in more[:12]:
+        e = re.sub(r'[^0-9a-f]', '', str(extra or ''))[:32]
+        if e and e != pid:
+            rc.update_pending(e, uiConfirmed=ok, uiFailed=not ok)
+    if pid:
+        rc.update_pending(pid, uiConfirmed=ok, uiFailed=not ok)
+        rc.log_event('ui_confirm', ok=ok, step=step, **({'latencyMs': lat} if lat is not None else {}))
+    if note:
+        path = os.path.join(NOTIFY_RETRY_DIR, note + '.json')
+        item = rc.read_json(path, {}) or {}
+        payload = item.get('payload') if isinstance(item.get('payload'), dict) else None
+        if not ok and payload is not None and not cfg['paused']:
+            notify(cfg, poster, payload)          # _UI is off here, so this posts (or queues a retry)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        rc.log_event('ui_prompt', ok=ok, step=step, type=(payload or {}).get('type'),
+                     **({'latencyMs': lat} if lat is not None else {}))
+    if aid:
+        relay_ui.ack(aid, ok, step)
+    return {'ok': True}
+
+
 def handle_request(msg, cfg=None, runner=subprocess.run, sleeper=time.sleep, now=time.time,
                    poster=rc.post_json):
+    _ui_reset(msg)
+    try:
+        res = _handle_request(msg, cfg, runner, sleeper, now, poster)
+        if isinstance(res, dict) and _UI['on']:
+            u = _ui_out()
+            if u:
+                res['ui'] = u
+        return res
+    finally:
+        _ui_reset(None)
+
+
+def _handle_request(msg, cfg, runner, sleeper, now, poster):
     cfg = cfg if cfg is not None else rc.load_config()
     if not isinstance(msg, dict):
         return {'ok': False, 'error': 'bad request'}
     typ = msg.get('type')
+    if typ == 'ui_ack':
+        return handle_ui_ack(msg, cfg, now, poster)
+    if typ == 'attach_chunk':
+        return handle_attach_chunk(msg, cfg, now)
+    if typ == 'attach_discard':
+        relay_media.discard_upload(msg.get('uploadId'))
+        return {'ok': True}
+    if typ == 'ui_poll':
+        if cfg['paused'] or not cfg.get('uiReactions', True):
+            return {'ok': True, 'actions': []}
+        return {'ok': True, 'actions': relay_ui.take(limit=5)}
     if typ == 'get_config':
         note_extension(msg, now)
         return handle_get_config(cfg, now)
@@ -3994,10 +4896,10 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=949a9fab688569da37faf8fbe1823f7bd41da62a69be47c591a6560cee419759 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=badbecd8b4e94c8eb449ef62ce889e3c8b3cc5eee74b6543e438060a913c28c1 nl=1
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.5: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.6: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -4044,6 +4946,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc
+import relay_media  # noqa: E402  (v1.4.6: inbound photos, in-flight only)
+import relay_ui
 import relay_setup  # noqa: E402
 import relay_contacts  # noqa: E402  (v1.4.0: replies to someone new)
 from typedstream import message_text  # noqa: E402
@@ -4051,7 +4955,28 @@ from typedstream import message_text  # noqa: E402
 STATE_PATH = os.path.join(rc.APP_DIR, 'watch_state.json')
 STATUS_PATH = os.path.join(rc.APP_DIR, 'status.json')
 JOBS_DIR = os.path.join(rc.APP_DIR, 'jobs')
-NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')   # v1.4.0: host notifications that failed
+NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')
+UI_ACK_GRACE_S = 10.0       # v1.4.6: wait this long for the extension's \u2705 before a text confirmation
+MIRROR_GRACE_S = 20.0       # v1.4.6: a mirrored tapback not shown in X by then is posted as a text line
+SPAM_SUMMARY_EVERY_S = 3600  # v1.4.6: "N texts went to Spam" (counts only) at most hourly
+PREFS_TTL_S = 600
+OPT_OUT_RE = re.compile(
+    r'(?:[\s\u2002]*[-\u2013\u2014|]?\s*(?:(?:msg|message)\s*(?:&|and)\s*data\s*rates\s*(?:may\s*)?apply[.!]?\s*)?'
+    r'(?:(?:reply|text|txt|respond)\s+(?:with\s+)?["\'\u201c]?stop["\'\u201d]?\b[^\n]{0,90}'
+    r'|["\'\u201c]?stop["\'\u201d]?\s+to\s+(?:opt[\s-]*out|end|cancel|unsubscribe|quit|stop)[^\n]{0,60}))\s*$', re.I)
+
+
+def strip_opt_out(text):
+    """v1.4.6: drop a trailing 'Reply STOP to opt out' style footer (texts tagged spam/unknown only). Never
+    empties a text: if nothing would be left, the original stays."""
+    s = str(text or '')
+    out = s
+    for _ in range(3):
+        nxt = OPT_OUT_RE.sub('', out).rstrip(' \u2002\n-|')
+        if nxt == out:
+            break
+        out = nxt
+    return out if out.strip() else s   # v1.4.0: host notifications that failed
 NOTIFY_RETRY_MAX_AGE_S = 600
 NOTIFY_RETRY_PER_TICK = 10
 CONTACTS_RESULT_MAX_AGE_S = 60
@@ -4283,6 +5208,12 @@ class Watcher:
         self._names_at = -1e18
         self._empty_since = {}    # rowid -> first-seen ts for empty-body rows (grace before skipping)
         self._backpressure_notified = False
+        self._last_route = None  # v1.4.6 quiet names: route of the last relayed line + when
+        self._last_route_at = -1e18
+        self._prefs = None       # v1.4.6: Messages' own filter settings (read-only), cached
+        self._prefs_at = -1e18
+        self._spam_held = 0      # v1.4.6: spam Messages filtered (counts only) since the last summary
+        self._spam_summary_at = None
 
     # ----- state -----
     def committed(self):
@@ -4329,6 +5260,8 @@ class Watcher:
             item = rc.read_json(path, {}) or {}
             payload = item.get('payload') if isinstance(item.get('payload'), dict) else None
             stale = time.time() - float(item.get('queuedAt') or 0) > NOTIFY_RETRY_MAX_AGE_S   # host stamps wall time
+            if payload is not None and not stale and float(item.get('notBefore') or 0) > time.time():
+                continue                      # v1.4.6: the extension is showing it first; posted only if it can't
             if payload is None or stale or cfg['paused'] or not cfg['webhookUrl']:
                 rc.log_event('notify_retry_dropped', type=(payload or {}).get('type'), stale=stale)
             elif self.post(cfg, payload):
@@ -4402,7 +5335,14 @@ class Watcher:
         body_q = 'SELECT text, %s FROM message WHERE ROWID = ?' % ('attributedBody' if 'attributedBody' in msg_cols else 'NULL')
         ctx = {'cc': cfg['defaultCountryCode'], 'mute': set(cfg['mute']), 'roster': rc.load_roster(),
                'roster_changed': False, 'body_q': body_q, 'chat_cols': chat_cols, 'now': self.now(),
-               'spam_col': 'is_spam' in msg_cols}
+               'spam_col': 'is_spam' in msg_cols, 'fa_col': 'filter_action' in msg_cols}
+        # v1.4.6: 1:1 photos are staged for the routine only when they can be posted right away
+        try:
+            att_cols = {r[1] for r in con.execute('PRAGMA table_info(attachment)')}
+        except Exception:
+            att_cols = set()
+        ctx['stage_media'] = bool(cfg.get('relayAttachments', True) and cfg['webhookUrl'] and not cfg['paused']
+                                  and 'filename' in att_cols and not rc.in_quiet_hours(cfg['quietHours'], ctx['now']))
         cursor = self.cursor
         out, capped, stop = [], False, False
         for _ in range(40):
@@ -4470,12 +5410,18 @@ class Watcher:
             counts['muted'] += 1
             return ('skip', None)
         reaction = None
+        mirror = ''
+        media = []
         if assoc:
             tb = classify_tapback(assoc, assoc_emoji)   # item 5: incoming tapbacks become text lines
             if tb is None:
                 counts['reactionsOrEvents'] += 1
                 return ('skip', None)
             emoji, removed = tb
+            if (not removed and not chat['group'] and cfg.get('uiReactions', True) and cfg.get('mirrorTapbacks', True)):
+                mp = relay_ui.map_get(assoc_guid)   # their tapback on a reply HE sent through the relay
+                if mp:
+                    mirror = relay_ui.enqueue_react(mp['x'], emoji, 'tapback')
             target = tapback_target(con, assoc_guid)
             reaction = ('removed ' if removed else '') + emoji + ' ' + target   # never the reacted row's text
         elif item_type:
@@ -4492,6 +5438,16 @@ class Watcher:
         else:
             text, ab = con.execute(ctx['body_q'], (rowid,)).fetchone()
             body = message_text(text, ab, False)        # real text only here; placeholders are added below
+            if has_att and not is_audio and not chat['group'] and ctx.get('stage_media'):
+                staged = self._stage_media(con, rowid, received, ctx, counts)
+                if staged is None:
+                    return ('defer', None)                # a photo still landing on disk: next tick
+                media, notes = staged
+                if media or notes:
+                    parts = [body] if body else []
+                    if media and not body:
+                        parts.append(relay_media.placeholder(media))   # "📷 Photo" (the image rides along)
+                    body = '\n'.join(parts + notes)
             if not body:
                 # item 4: metadata-only placeholders (no bytes) for audio / attachments / unsent notices
                 if is_audio or has_att:
@@ -4518,20 +5474,61 @@ class Watcher:
         m = {'rowid': rowid, 'id': str(guid or rowid), 'contactName': name or rc.format_handle(h),
              'label': label, 'handle': h, 'text': body,
              'receivedAt': rc.iso_utc(received), 'route': h}
+        if reaction is None and media:
+            m['media'] = media
         if reaction is not None:
             m['reaction'] = True
-        if not chat['group'] and cfg.get('spamMode', 'tag') == 'tag' and reaction is None:
-            # v1.4.5 spamMode tag (1:1 only): not in Contacts (and not a relay contact), or flagged by
-            # Messages (chat.is_filtered / message.is_spam). Flags only; the text is never hidden.
-            if (not contact and not name) or self.flagged(con, chat_id, rowid, ctx):
-                m['unknown'] = True
-                counts['taggedUnknown'] = counts.get('taggedUnknown', 0) + 1
+            if mirror:
+                m['uiMirror'], m['uiMirrorAt'] = mirror, ctx['now']
+        mode = cfg.get('spamMode', 'follow-messages')
+        if not chat['group'] and mode != 'off' and reaction is None:
+            tag = None
+            if mode == 'follow-messages':
+                tag = self.messages_filter(con, chat_id, rowid, ctx)
+                if tag is None:
+                    mode = 'tag'                     # this Mac can't tell: the v1.4.5 behavior
+                    counts['spamFallback'] = counts.get('spamFallback', 0) + 1
+            if mode == 'tag':
+                # v1.4.5 spamMode tag (1:1 only): not in Contacts (and not a relay contact), or flagged by
+                # Messages (chat.is_filtered / message.is_spam). Flags only; the text is never hidden.
+                tag = 'unknown' if ((not contact and not name) or self.flagged(con, chat_id, rowid, ctx)) else ''
+            if tag == 'spam' and not contact:
+                # Messages hides spam (no notification, Spam folder): so does the relay. Counts only.
+                self._spam_held += 1
+                counts['spamHeld'] = counts.get('spamHeld', 0) + 1
+                relay_media.drop_staged(m.get('media'))   # a held spam photo is never kept
+                return ('skip', None)
+            if tag:
+                m['tag'] = tag
+                if tag == 'unknown':
+                    m['unknown'] = True
+                    counts['taggedUnknown'] = counts.get('taggedUnknown', 0) + 1
+                else:
+                    counts['tagged'] = counts.get('tagged', 0) + 1
+                if cfg.get('stripOptOut', True):
+                    m['text'] = strip_opt_out(m['text'])
         if chat['group']:
             glabel, ch = rc.roster_label(cfg, ctx['roster'], chat['key'], chat['name'], group=True)
             ctx['roster_changed'] |= ch
             m.update(group={'label': glabel, 'name': chat['name']}, route=chat['key'])
             counts['groupMessages'] += 1
         return ('relay', m)
+
+    def _stage_media(self, con, rowid, received, ctx, counts):
+        """v1.4.6: copy a 1:1 message's photos into the private outbox for the routine (mode 600, swept after
+        ~10 min). Returns (media_meta, notices), or None to retry while a photo is still downloading.
+        Logs counts, sizes and kinds only."""
+        rows = relay_media.attachment_rows(con, rowid)
+        if not rows:
+            return [], []
+        if relay_media.missing_images(rows) and ctx['now'] - received < relay_media.ATTACH_GRACE_S:
+            counts['deferredMedia'] = counts.get('deferredMedia', 0) + 1
+            return None
+        media, notes, _ = relay_media.materialize(rows, stage=True, runner=self.runner)
+        if media or notes:
+            rc.log_event('media_staged', images=len(media), notices=len(notes),
+                         bytes=sum(x['size'] for x in media), kinds=sorted({r['kind'] for r in rows}))
+        return media, notes
 
     def flagged(self, con, chat_id, rowid, ctx):
         """Messages' own junk / unknown-sender flags for a 1:1 row (read-only, no text)."""
@@ -4620,6 +5617,13 @@ class Watcher:
             p['group'] = dict(m['group'])
         if m.get('reaction'):
             p['reaction'] = True            # item 5: formats as "Alex ❤️ your message" (no colon)
+        if m.get('tag') in ('spam', 'promotion', 'transaction'):
+            p['tag'] = m['tag']             # v1.4.6 follow-messages: "🚫 Spam · " / "🏷️ Promo · " / "🧾 "
+        if m.get('quiet'):
+            p['quiet'] = True               # v1.4.6: same sender as the line just above -> no "Name:" prefix
+        if m.get('media'):
+            # v1.4.6: photo metadata for the routine (token, kind, mime, ext, size, sha256, macPath); no names
+            p['media'] = [dict(x) for x in m['media']]
         if m.get('unknown'):
             p['unknown'] = True             # v1.4.5 spamMode tag: posted as "⚠️ Unknown · <label>: <text>"
         return p
@@ -4643,13 +5647,75 @@ class Watcher:
             except Exception:
                 pass
 
+    def _resolve_mirrors(self, counts):
+        """v1.4.6: a tapback shown as a real reaction in X is done (no text line). One that failed, or is not
+        done within MIRROR_GRACE_S, is posted the old way. Returns the ones still waiting."""
+        t = self.now()
+        waiting, keep = [], []
+        for m in self.retry:
+            aid = m.get('uiMirror')
+            if not aid:
+                keep.append(m)
+                continue
+            st = relay_ui.state_of(aid)
+            if st == 'done':
+                relay_ui.forget(aid)
+                self.delivered.add(m['rowid'])
+                counts['mirrored'] = counts.get('mirrored', 0) + 1
+            elif st in ('failed', 'expired', 'gone') or t - float(m.get('uiMirrorAt') or t) > MIRROR_GRACE_S:
+                relay_ui.forget(aid)
+                m.pop('uiMirror', None)
+                keep.append(m)
+            else:
+                waiting.append(m)
+        self.retry = keep
+        return waiting
+
+    def _quiet(self, m, cfg, t):
+        """v1.4.6 quiet names: no "Name:" when the same 1:1 sender wrote the line just above, recently."""
+        w = cfg.get('quietNamesSeconds', 600)
+        same = (w > 0 and not m.get('group') and not m.get('reaction') and not m.get('unknown') and not m.get('tag')
+                and self._last_route == m.get('route') and t - self._last_route_at <= w)
+        if same:
+            m['quiet'] = True
+        else:
+            m.pop('quiet', None)
+        return same
+
+    def _after_post(self, m, t):
+        self._last_route, self._last_route_at = m.get('route'), t
+        if m.get('quiet'):
+            try:   # routing for a native quote of an unprefixed line: keyed HMACs of its text, never the text
+                rc.record_quote_keys(m['text'], m.get('route', ''), t)
+            except Exception:
+                pass
+
     def flush(self, cfg, counts):
+        waiting = self._resolve_mirrors(counts)
+        try:
+            self._flush_now(cfg, counts)
+        finally:
+            if waiting:
+                self.retry = sorted(self.retry + waiting, key=lambda m: m['rowid'])
+
+    def _flush_now(self, cfg, counts):
         t = self.now()
         if t < self.backoff_until:
             return
         failed = False
         posts = 0
         if self.held:                    # quiet hours just ended: one digest (chunked if huge)
+            for m in self.held:
+                if m.get('uiMirror'):           # v1.4.6: reactions are silent; a mirrored one needs no recap line
+                    st = relay_ui.state_of(m['uiMirror'])
+                    relay_ui.forget(m['uiMirror'])
+                    m.pop('uiMirror', None)
+                    if st == 'done':
+                        m['_mirrored'] = True
+            for m in [m for m in self.held if m.get('_mirrored')]:
+                self.delivered.add(m['rowid'])
+            self.held = [m for m in self.held if not m.get('_mirrored')]
+        if self.held:
             while self.held and posts < MAX_POSTS_PER_TICK:
                 chunk = self.held[:DIGEST_CHUNK]
                 payload = {'type': 'digest', 'count': len(chunk), 'quietHours': cfg['quietHours'],
@@ -4661,6 +5727,7 @@ class Watcher:
                 posts += 1
                 counts['digested'] += len(chunk)
                 rc.write_digest_marker(t)               # item 7: owner's first bare reply afterward must name a person
+                self._last_route = None                 # the next line after a recap always shows a name
                 for m in chunk:
                     self._bookkeep(m, t, counts)
         while not failed and self.retry and posts < MAX_POSTS_PER_TICK:
@@ -4668,6 +5735,11 @@ class Watcher:
                 # v1.4.5 speed: several texts waiting -> ONE webhook (one routine run on the box), still
                 # one X message per text there. Same retry rules: nothing is dropped, a 2xx is never re-sent.
                 chunk = self.retry[:BATCH_MAX]
+                saved = (self._last_route, self._last_route_at)
+                for m in chunk:
+                    self._quiet(m, cfg, t)
+                    self._last_route, self._last_route_at = m.get('route'), t
+                self._last_route, self._last_route_at = saved
                 payload = {'type': 'batch', 'count': len(chunk), 'messages': [self.public(m) for m in chunk],
                            'untrusted': True}
                 if not self.post(cfg, payload):
@@ -4678,15 +5750,18 @@ class Watcher:
                 counts['forwarded'] += len(chunk)
                 counts['batched'] += len(chunk)
                 for m in chunk:
+                    self._after_post(m, t)
                     self._bookkeep(m, t, counts)
                 continue
             m = self.retry[0]
+            self._quiet(m, cfg, t)
             if not self.post(cfg, dict(type='message', untrusted=True, **self.public(m))):
                 failed = True
                 break
             self.retry.pop(0)                           # remove immediately after 2xx, before bookkeeping
             posts += 1
             counts['forwarded'] += 1
+            self._after_post(m, t)
             self._bookkeep(m, t, counts)
         if (self.retry or self.held) and posts >= MAX_POSTS_PER_TICK:
             counts['rateLimited'] = 1
@@ -4707,9 +5782,13 @@ class Watcher:
         counts = dict.fromkeys(('taggedUnknown', 'batched', 'scanned', 'notAllowlisted', 'group', 'groupMessages', 'own', 'muted', 'shortCode', 'noHandle',
                                 'reactionsOrEvents', 'empty', 'deferredEmpty', 'tooOld', 'rowErrors', 'rosterWriteErrors',
                                 'new', 'held', 'forwarded', 'digested', 'webhookFailures', 'droppedPaused',
-                                'backpressure', 'rateLimited', 'rebaselined', 'dbBusy'), 0)
+                                'backpressure', 'rateLimited', 'rebaselined', 'dbBusy', 'mirrored', 'spamHeld', 'tagged'), 0)
         self.process_jobs(cfg)
         self.retry_notifications(cfg)
+        try:
+            relay_media.sweep_all(self.now())       # v1.4.6: in-flight attachment files never outlive their TTL
+        except Exception:
+            pass
         t = self.now()
         try:
             con = rc.open_chat_db(self.db_path)
@@ -4736,6 +5815,10 @@ class Watcher:
             rc.log_event('chat_db_ok')
             self.auto_detect_owner(con, cfg)
         self.process_pending(cfg)            # verify delivery of host sends (host has no FDA; the watcher does)
+        try:
+            self.process_reads(cfg, con)     # v1.4.6: \U0001f440 when a relayed 1:1 reply was read
+        except Exception:
+            pass
         try:
             max_rowid = con.execute('SELECT COALESCE(MAX(ROWID), 0) FROM message').fetchone()[0]
             if self.cursor is None:
@@ -4777,6 +5860,7 @@ class Watcher:
                 self._backpressure_notified = self.post_status(cfg, 'catching_up', CATCHING_UP_DETAIL)
             if not self.retry and not self.held:
                 self._backpressure_notified = False
+            self.spam_summary(cfg)
         self.save_state()
         self.write_status(cfg, chatDb='ok')
         if any(v for k, v in counts.items() if k not in ('scanned', 'notAllowlisted', 'own', 'noHandle')):
@@ -4803,6 +5887,13 @@ class Watcher:
         except OSError:
             return False
 
+    @staticmethod
+    def _drop_pending(e):
+        """Resolve a pending send: forget the record and delete its staged attachment copy (v1.4.6)."""
+        if e.get('stagedPath'):
+            relay_media.remove_staged(e['stagedPath'])
+        rc.remove_pending(e)
+
     def process_pending(self, cfg):
         """The host (run under Chrome, no chat.db access) left body-free pending records of its sends;
         the watcher checks chat.db for is_delivered / error, logs a counts-only 'delivery' event, and
@@ -4819,11 +5910,19 @@ class Watcher:
         changed = False
 
         def confirm(e, delivered):
+            # v1.4.6: the extension put \u2705 on HIS message -> no text line on success. While its ack is
+            # still due (UI_ACK_GRACE_S), wait; a failed / missing reaction falls back to the text line.
+            if e.get('uiConfirmed'):
+                rc.log_event('confirm_suppressed', reason='ui')
+                return 'done'
+            if e.get('ui') and not e.get('uiFailed') and t - float(e.get('at') or 0) < UI_ACK_GRACE_S:
+                return 'wait'
             if cfg.get('confirmSends', True) and not cfg['paused'] and cfg['webhookUrl']:
                 p = {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered, 'dryRun': False, 'at': rc.iso_utc(t)}
                 if e.get('note'):
                     p['note'] = e['note']             # v1.4.1: "(new contact, •••0188)"
                 self.post(cfg, p)
+            return 'done'
 
         def fail(e, error=None, reason=None, superseded=False):
             if not cfg['paused'] and cfg['webhookUrl']:
@@ -4843,19 +5942,23 @@ class Watcher:
             status, error, rowid = rc.check_delivery_once(
                 e['handle'], float(e['at']), db_path=self.db_path,
                 exclude_rowids=tick_claimed, text_length=e.get('textLength'),
-                chat_guid=e.get('chatGuid') or None)        # v1.4.5: a group send is proven in its chat
+                chat_guid=e.get('chatGuid') or None,        # v1.4.5: a group send is proven in its chat
+                part=e.get('part') or 'text')               # v1.4.6: an attachment is proven by an attachment row
             if rowid is not None:
                 tick_claimed.add(rowid)            # same-tick collision guard (even for a still-pending match)
+                if e.get('xUuid') and not e.get('mapped') and status in ('delivered', 'pending'):
+                    self._map_send(e, rowid)       # v1.4.6: iMessage guid <-> HIS X message (ids only)
             if status == 'delivered':
-                rc.log_event('delivery', status='delivered')
                 if not e.get('softSent'):          # W3: the ✓ sent soft-confirmation already went out; don't double-post
-                    confirm(e, True)
-                rc.remove_pending(e)
+                    if confirm(e, True) == 'wait':
+                        continue
+                rc.log_event('delivery', status='delivered')
+                self._drop_pending(e)
             elif status == 'failed':
                 # W3: a failure that arrives later still corrects an earlier ✓ sent with a send_failed line.
                 rc.log_event('delivery', status='failed', error=error)
                 fail(e, error=error, superseded=bool(e.get('softSent')))
-                rc.remove_pending(e)
+                self._drop_pending(e)
             elif age > rc.PENDING_TTL_S:
                 # W3: the 10-minute timeout. If a matching row was ever seen we already soft-confirmed it;
                 # if NO row ever appeared, the send likely never happened -> say so, do not claim ✓ sent.
@@ -4864,13 +5967,14 @@ class Watcher:
                 else:
                     rc.log_event('delivery', status='unconfirmed')
                     fail(e, reason='unconfirmed')
-                rc.remove_pending(e)
+                self._drop_pending(e)
             elif (status == 'pending' and rowid is not None and age >= SEND_CONFIRM_FALLBACK_S
                   and not e.get('softSent')):
                 # W3: a matching chat.db row exists but delivery is still unconfirmed ~20s on -> post the
                 # soft "✓ sent" ONCE and KEEP the record, so a later delivered/failed can still correct it.
+                if confirm(e, False) == 'wait':
+                    continue
                 rc.log_event('delivery', status='soft_sent')
-                confirm(e, False)
                 rc.update_pending(e, softSent=True)
                 continue                           # keep waiting; nothing resolved yet
             else:
@@ -4880,6 +5984,103 @@ class Watcher:
                 changed = True
         if changed:
             self._save_claimed(resolved)
+
+    def _map_send(self, e, rowid):
+        try:
+            con = rc.open_chat_db(self.db_path)
+            try:
+                row = con.execute('SELECT guid FROM message WHERE ROWID = ? AND is_from_me = 1', (rowid,)).fetchone()
+            finally:
+                con.close()
+        except Exception:
+            return
+        if row and row[0] and relay_ui.map_put(row[0], e['xUuid'], rowid=rowid, one_to_one=not e.get('chatGuid')):
+            rc.update_pending(e, mapped=True)
+
+    def process_reads(self, cfg, con):
+        """v1.4.6: \u2705 -> \U0001f440 on HIS X message once chat.db shows the 1:1 reply was read (only when the
+        other person shares read receipts; otherwise is_read never flips). Reads flags only."""
+        if cfg['paused'] or not (cfg.get('uiReactions', True) and cfg.get('readReceipts', True)):
+            return 0
+        n = 0
+        for g, v in relay_ui.map_unread()[:30]:
+            try:
+                r = con.execute('SELECT is_read, date_read FROM message WHERE ROWID = ? AND is_from_me = 1 AND guid = ?',
+                                (v['rowid'], g)).fetchone()
+            except sqlite3.Error:
+                return n
+            if r is None:
+                relay_ui.map_update(g, read=True, gone=True)
+            elif (r[0] or 0) or (r[1] or 0) > 0:
+                relay_ui.enqueue_react(v['x'], '\U0001f440', 'read')
+                relay_ui.map_update(g, read=True)
+                n += 1
+        return n
+
+    # ----- v1.4.6 spamMode follow-messages: Messages' own filtering, read-only -----
+    def filter_prefs(self):
+        """{'unknown': bool|None, 'spam': bool|None} from com.apple.MobileSMS (FilterMessageRequests =
+        Screen Unknown Senders, EnableJunkFiltering = Filter Spam). Read-only; never written."""
+        t = self.now()
+        if self._prefs is not None and t - self._prefs_at < PREFS_TTL_S:
+            return self._prefs
+        out = {}
+        for k, key in (('unknown', 'FilterMessageRequests'), ('spam', 'EnableJunkFiltering')):
+            try:
+                r = self.runner(['/usr/bin/defaults', 'read', 'com.apple.MobileSMS', key],
+                                capture_output=True, text=True, timeout=3)
+                v = str(getattr(r, 'stdout', '') or '').strip()
+                out[k] = (v == '1') if getattr(r, 'returncode', 1) == 0 and v in ('0', '1') else None
+            except Exception:
+                out[k] = None
+        self._prefs, self._prefs_at = out, t
+        return out
+
+    def messages_filter(self, con, chat_id, rowid, ctx):
+        """How Messages itself filed a 1:1 row: 'spam' | 'unknown' | 'promotion' | 'transaction' | '' (main
+        list), or None when this Mac's chat.db can't tell (then spamMode falls back to 'tag').
+        chat.is_filtered: 0 main list, 1 Unknown Senders, 2 Junk/Spam. message.filter_action uses
+        ILMessageFilterAction: 2 junk, 3 promotion, 4 transaction. message.is_spam (macOS 27)."""
+        if 'is_filtered' not in ctx['chat_cols'] or chat_id is None:
+            return None
+        try:
+            r = con.execute('SELECT is_filtered FROM chat WHERE ROWID = ?', (chat_id,)).fetchone()
+            f = int(r[0] or 0) if r else 0
+            spam_flag = fa = 0
+            if ctx.get('spam_col'):
+                rr = con.execute('SELECT is_spam FROM message WHERE ROWID = ?', (rowid,)).fetchone()
+                spam_flag = int((rr or [0])[0] or 0)
+            if ctx.get('fa_col'):
+                rr = con.execute('SELECT filter_action FROM message WHERE ROWID = ?', (rowid,)).fetchone()
+                fa = int((rr or [0])[0] or 0)
+        except Exception:
+            return None
+        prefs = self.filter_prefs()
+        if (f == 2 or spam_flag or fa == 2) and prefs.get('spam') is not False:
+            return 'spam'
+        if fa == 3:
+            return 'promotion'
+        if fa == 4:
+            return 'transaction'
+        if f == 1 and prefs.get('unknown') is not False:
+            return 'unknown'
+        return ''
+
+    def spam_summary(self, cfg):
+        t = self.now()
+        if self._spam_summary_at is None:
+            self._spam_summary_at = t
+        if not self._spam_held or cfg['paused'] or not cfg['webhookUrl']:
+            return
+        if t - self._spam_summary_at < SPAM_SUMMARY_EVERY_S or rc.in_quiet_hours(cfg['quietHours'], t):
+            return
+        n = self._spam_held
+        detail = ('\U0001f6ab %d text%s went to Messages \u203a Spam in the last hour (not relayed; open Messages to review).'
+                  % (n, '' if n == 1 else 's'))
+        if self.post(cfg, {'type': 'status', 'status': 'spam_summary', 'detail': detail, 'count': n, 'at': rc.iso_utc(t)}):
+            rc.log_event('spam_summary', count=n)
+            self._spam_held = 0
+            self._spam_summary_at = t
 
     # ----- v1.3.8 guided setup: the owner's own handles, detected once Full Disk Access works -----
     def auto_detect_owner(self, con, cfg):
@@ -5066,9 +6267,9 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=f905a3fa8ea70a761345a28bcdbbb9624b410d33eed0dcfea8e34501c3e6292c nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=307155f3900c42e76cfc755ed1d7b80f65ade689936b78ac745434a747906c53 nl=1
 """
-iMessage Relay v1.4.5: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.6: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -5092,7 +6293,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.5'
+VERSION = '1.4.6'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -5113,6 +6314,8 @@ def with_host_lock(fn):
         fcntl.flock(lock, fcntl.LOCK_EX)
         return fn()
 ECHO_STORE_PATH = os.path.join(APP_DIR, 'relayed_echo.json')   # HMACs of recently relayed inbound text; never bodies
+QUOTE_KEYS_PATH = os.path.join(APP_DIR, 'quote_keys.json')     # v1.4.6: HMACs of unprefixed (quiet) lines -> route; never bodies
+QUOTE_KEYS_TTL_S = 2 * 86400
 ECHO_TTL_S = 3600
 ECHO_MIN_LEN = 20   # only guard against bouncing back a substantial body; short replies ('ok') are never echoes
 PENDING_TTL_S = 600   # a pending send the watcher never confirms is dropped after ~10 min
@@ -5142,6 +6345,14 @@ DEFAULT_CONFIG = {
     'mute': [],
     'skipShortCodes': True,
     'batchWebhooks': True,         # v1.4.5: texts waiting together share one webhook (one routine run)
+    'uiReactions': True,           # v1.4.6: \u2705 / \U0001f440 / \u2753 / tapback mirrors done by the extension in the owner's X tab
+    'uiPrompts': True,             # v1.4.6: prompts shown by the extension first; the routine copy only if that fails
+    'readReceipts': True,          # v1.4.6: \u2705 -> \U0001f440 when a 1:1 reply shows read (only if they share receipts)
+    'mirrorTapbacks': True,        # v1.4.6: their tapback on a relayed reply -> that reaction on HIS X message
+    'quietNamesSeconds': 600,      # v1.4.6: "Name:" only when the sender changes within this window (0 = always)
+    'undoSeconds': 5,              # v1.4.6: \U0001f5d1\ufe0f on his own reply within this cancels it (0-10; 0 = off)
+    'stripOptOut': True,           # v1.4.6: drop "Reply STOP to opt out" footers on texts tagged spam / unknown
+    'relayAttachments': True,      # v1.4.6: 1:1 photos both ways (in-flight temp files only, never stored)
     'footer': '',
     'deliveryCheck': True,
     'maxSendsPerMinute': 6,
@@ -5155,7 +6366,7 @@ DEFAULT_CONFIG = {
     'autoReopenMessages': False,
     'pollSeconds': 10,
     'defaultCountryCode': '1',
-    'spamMode': 'tag',             # v1.4.5: tag (prefix "\u26a0\ufe0f Unknown \u00b7 ") | off. Never hides a text.
+    'spamMode': 'follow-messages', # v1.4.6: follow-messages (mirror Messages' own filtering) | tag (v1.4.5) | off
     'confirmNewContacts': 'exact-skip',   # v1.4.1: exact-skip (an exact full name, one card, one number: send) | always
 }
 
@@ -5252,6 +6463,17 @@ def owner_handle_set(cfg):
 
 
 # ---------- config ----------
+SPAM_MODES = ('follow-messages', 'tag', 'off')
+
+
+def _clamp_int(v, default, lo, hi):
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
 def truthy(v, default):
     if isinstance(v, bool):
         return v
@@ -5333,10 +6555,14 @@ def sanitize_config(user):
     cfg['relayAll'] = truthy(cfg.get('relayAll'), False)
     cfg['skipShortCodes'] = truthy(cfg.get('skipShortCodes'), True)
     cfg['batchWebhooks'] = truthy(cfg.get('batchWebhooks'), True)
+    for k in ('uiReactions', 'uiPrompts', 'readReceipts', 'mirrorTapbacks', 'stripOptOut', 'relayAttachments'):
+        cfg[k] = truthy(cfg.get(k), True)
+    cfg['quietNamesSeconds'] = _clamp_int(cfg.get('quietNamesSeconds'), 600, 0, 3600)
+    cfg['undoSeconds'] = _clamp_int(cfg.get('undoSeconds'), 5, 0, 10)
     cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
-    sm = str(cfg.get('spamMode') or 'tag').strip().lower()
-    cfg['spamMode'] = sm if sm in ('tag', 'off') else 'tag'
+    sm = str(cfg.get('spamMode') or 'follow-messages').strip().lower()
+    cfg['spamMode'] = sm if sm in SPAM_MODES else 'follow-messages'
     mute = []
     for m in cfg.get('mute') if isinstance(cfg.get('mute'), list) else []:
         if not isinstance(m, str) or not m.strip():
@@ -6013,6 +7239,15 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                       key=lambda e: -e['lastInboundAt'])
 
     q_handle, q_status = parse_quote(quoted, cfg, d)
+    if q_status == 'none' and re.sub(r'\s+', '', str(quoted or '')):
+        # v1.4.6 quiet names: a quoted line that carried no "Name:" (same sender as the line above it) is
+        # found by keyed HMACs of its text, recorded when it was relayed. Several people -> ambiguous.
+        import relay_echo
+        hits = {h for h in relay_echo.lookup_quote(quoted, cfg, now) if h in by_handle}
+        if len(hits) == 1:
+            q_handle, q_status = next(iter(hits)), 'match'
+        elif len(hits) > 1:
+            q_status = 'ambiguous'
     p_handle, rest, p_status = parse_prefix(text, cfg, d)
     # Conversational addressing (v1.3.5, item A): when there is no "<Name>:" colon prefix, try the
     # directive forms ("text Sam ...", "tell Sam: ...", "Sam, ...", "@Sam ..."). A resolved directive
@@ -6306,7 +7541,7 @@ _SEND_NAMES = ('DELIVERY_SQL', 'add_pending_send', 'load_pending', 'remove_pendi
 
 
 _DIRECTIVE_NAMES = ('parse_directive', 'DIRECTIVE_DICT_WORDS')
-_ECHO_NAMES = ('is_echoed_inbound', 'looks_like_bot_output', 'record_relayed_text', 'echo_hmac',
+_ECHO_NAMES = ('record_quote_keys', 'lookup_quote', 'is_echoed_inbound', 'looks_like_bot_output', 'record_relayed_text', 'echo_hmac',
                '_echo_secret', '_echo_norm', 'BOT_LINE_SIGILS', 'BOT_LINE_PHRASES', 'BOT_FORMAT_RE',
                'BOT_STRUCTURED_RE')
 
@@ -6323,8 +7558,8 @@ def __getattr__(name):
         return getattr(relay_echo, name)
     raise AttributeError("module 'relay_common' has no attribute %r" % name)
 @@@@ END
-@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=c1acf3df206c2050df59825db58acaf622774c3f568d972a42c45f1b1ef30841 nl=1
-"""iMessage Relay v1.4.5 -- look a name up in the Mac's Contacts (for a reply to someone new).
+@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=a9c018dce0fdb8ccccf25176f5a99fbdd8026a2456792f6b97436f7c68b438db nl=1
+"""iMessage Relay v1.4.6 -- look a name up in the Mac's Contacts (for a reply to someone new).
 
 When the owner starts a reply with a name that is on no relay list ("Jordan Rivera: hey"), the host
 asks the watcher (it holds Full Disk Access, which covers the Contacts database) to look that name up.
@@ -6451,8 +7686,8 @@ def lookup(name, cfg, globs=None, people=None, fuzzy=False):
             break
     return {'ok': True, 'matches': out}
 @@@@ END
-@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=f227be48e2f6f620b001febba5719e57d2bf869ff4233ff8c38d8f667a676b48 nl=1
-"""iMessage Relay v1.4.5 -- conversational addressing (directive parsing).
+@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=4f14177213def5a4de4770b697e09b10c56475e6f58a5b03858b29fb4be7b0ea nl=1
+"""iMessage Relay v1.4.6 -- conversational addressing (directive parsing).
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.parse_directive, rc.DIRECTIVE_DICT_WORDS, ...); relay_common re-exports these
 names lazily. Do not import relay_directive before relay_common.
@@ -6576,8 +7811,8 @@ def parse_directive(text, cfg, directory=None):
                 return h, text, 'unknown_handle', 'handle', ''
     return None, text, 'none', '', ''
 @@@@ END
-@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=23ebe2f93ca4c3fb3ba9f02cd775a6f96d5ea46c6a109c63efa68d660ba966e3 nl=1
-"""iMessage Relay v1.4.5 -- echo guard + bot-output detection.
+@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=30e75c414e1660802f59a1dff1df270e70d205b3a3be30ee661c42951fe2c2c0 nl=1
+"""iMessage Relay v1.4.6 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
 these names lazily. Do not import relay_echo before relay_common."""
@@ -6697,13 +7932,523 @@ def is_echoed_inbound(text, prefix_stripped=None, at=None, path=None, handle='')
         if e.get('h') in hs and (not g or not e.get('g') or e.get('g') == g):
             return True
     return False
+
+
+# ---------- v1.4.6 quiet names: route a native quote of an UNPREFIXED relayed line ----------
+# X's quote preview may show the whole line or only its start, so a few keyed HMACs of the normalized
+# text's prefixes are stored (never the text). A quote matches when one of its own prefixes equals one.
+QUOTE_PREFIXES = (12, 20, 32, 48, 80)
+
+
+def _quote_norm(text):
+    s = re.sub(r'\s+', ' ', str(text or '')).strip().lower()
+    s = re.sub(r'(?:\u2026|\.\.\.)\s*$', '', s).rstrip()
+    return s
+
+
+def _quote_hashes(norm):
+    out = set()
+    for n in QUOTE_PREFIXES:
+        if len(norm) >= n:
+            out.add(hmac.new(_echo_secret(), ('q%d:' % n + norm[:n]).encode('utf-8'), hashlib.sha256).hexdigest()[:32])
+    if norm:
+        out.add(hmac.new(_echo_secret(), ('qall:' + norm).encode('utf-8'), hashlib.sha256).hexdigest()[:32])
+    return out
+
+
+def record_quote_keys(text, route, at=None, path=None):
+    norm = _quote_norm(text)
+    if len(norm) < 4 or not route:
+        return
+    at = time.time() if at is None else at
+    p = path or rc.QUOTE_KEYS_PATH
+    items = [e for e in (rc.read_json(p, {}) or {}).get('entries', [])
+             if isinstance(e, dict) and at - float(e.get('at', 0)) < rc.QUOTE_KEYS_TTL_S]
+    items.append({'k': sorted(_quote_hashes(norm)), 'r': str(route)[:140], 'at': float(at)})
+    rc.write_json_atomic(p, {'entries': items[-1000:]}, mode=0o600)
+
+
+def lookup_quote(quoted, cfg=None, at=None, path=None):
+    """Routes (handles / group keys) whose recorded quiet line matches the quote. The quote may start with
+    the bot account's name; that is dropped first, as in parse_quote."""
+    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()
+    sender = ((cfg or {}).get('senderXHandle') or '').lstrip('@')
+    for drop in ('@' + sender, sender):
+        if sender and q.lower().startswith(drop.lower()):
+            q = q[len(drop):].lstrip(' \u00b7-')
+            break
+    norm = _quote_norm(q)
+    if len(norm) < 4:
+        return set()
+    full = hmac.new(_echo_secret(), ('qall:' + norm).encode('utf-8'), hashlib.sha256).hexdigest()[:32]
+    pref = set()
+    for n in QUOTE_PREFIXES:
+        if len(norm) >= n:
+            pref.add(hmac.new(_echo_secret(), ('q%d:' % n + norm[:n]).encode('utf-8'), hashlib.sha256).hexdigest()[:32])
+    at = time.time() if at is None else at
+    entries = [e for e in (rc.read_json(path or rc.QUOTE_KEYS_PATH, {}) or {}).get('entries', [])
+               if isinstance(e, dict) and at - float(e.get('at', 0)) < rc.QUOTE_KEYS_TTL_S]
+    exact = {e['r'] for e in entries if full in set(e.get('k') or [])}
+    if exact:
+        return exact
+    # a truncated preview: the LONGEST shared prefix decides
+    for n in sorted(QUOTE_PREFIXES, reverse=True):
+        if len(norm) < n:
+            continue
+        h = hmac.new(_echo_secret(), ('q%d:' % n + norm[:n]).encode('utf-8'), hashlib.sha256).hexdigest()[:32]
+        hits = {e['r'] for e in entries if h in set(e.get('k') or [])}
+        if hits:
+            return hits
+    return set()
 @@@@ END
-@@@@ FILE mac-helper/relay_send.py mode=644 sha256=fe11b3b974dcc675229e07ba9bedcd51f6df3452a9da6e4eabe5b667e848f19b nl=1
-"""iMessage Relay v1.4.5 -- delivery-proof queries and Messages.app sending.
+@@@@ FILE mac-helper/relay_media.py mode=644 sha256=6294d8093452fd55b473979d88d6ee09d44243c42cf577c912e3389e8c15c2e1 nl=1
+"""iMessage Relay v1.4.6 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
+
+Inbound (iMessage -> X Chat). The watcher holds Full Disk Access, so it is the only process that can
+read ~/Library/Messages/Attachments. For a relayed message with photos it:
+  1. reads each image (at most MAX_SOURCE_BYTES) and writes a private copy to
+     ~/.imessage-relay/outbox/<random token>.<ext>  (dir 0700, file 0600; the token is 128 random bits
+     and is the ONLY name: the original filename never leaves chat.db),
+  2. converts HEIC/HEIF/TIFF/etc. to JPEG with /usr/bin/sips (on the copy, never the original) and
+     downsizes anything over the X Chat 5 MiB image limit,
+  3. puts METADATA ONLY in the webhook: {token, kind, mime, ext, size, sha256, macPath}.
+The bot's routine copies that one file to its own computer, relay_post.py checks size + sha256,
+encrypts it for X Chat and deletes the copy; the outbox file is swept here after OUTBOX_TTL_S.
+Videos, voice messages and other files are not uploaded (the X Chat helper encrypts images only):
+they become one-line notices with type and size only ("🎥 Video, 12 MB (not relayed)").
+
+Outbound (X Chat -> iMessage). The extension reads a photo/file the owner attached in the relay chat
+and streams it to the native host in chunks (attach_chunk). The host stages the chunks in
+~/.imessage-relay/inflight/<uploadId>/ (0700/0600), checks total size + sha256 on send, moves the file
+to ~/Pictures/.imessage-relay-out/<token>/ (a folder Messages' sandbox can read) and sends it with
+AppleScript. The watcher deletes that copy as soon as chat.db shows the attachment row resolved (or
+after the pending-send timeout); the host sweeps anything older than the TTLs.
+
+Privacy: attachment bytes are never stored. Only in-flight temp files (mode 600, dirs 700), deleted right
+after use (including on error) or swept after a short TTL. Never logged: filenames, paths, bytes, hashes.
+Only counts, kinds and sizes.
+"""
+import base64
+import binascii
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import sqlite3
+import subprocess
+import time
+
+import relay_common as rc
+
+OUTBOX_DIR = os.path.join(rc.APP_DIR, 'outbox')
+INFLIGHT_DIR = os.path.join(rc.APP_DIR, 'inflight')
+SEND_STAGE_DIR = os.environ.get('IMESSAGE_RELAY_SEND_STAGE', os.path.join(rc.HOME, 'Pictures', '.imessage-relay-out'))
+SIPS = '/usr/bin/sips'
+
+OUTBOX_TTL_S = 10 * 60          # the Mac can't see when the box copied a file: short TTL, swept every tick
+INFLIGHT_TTL_S = 10 * 60
+SEND_STAGE_TTL_S = rc.PENDING_TTL_S + 5 * 60
+MAX_SOURCE_BYTES = 64 * 1024 * 1024          # never read a bigger original
+MAX_RELAY_IMAGE_BYTES = 5 * 1024 * 1024      # X Chat (xchat_lite encrypt-media) image limit
+MAX_IMAGES_PER_MESSAGE = 10
+MAX_OUTBOUND_BYTES = 25 * 1024 * 1024        # one attachment the owner sends from X Chat
+MAX_OUTBOUND_FILES = 10
+MAX_INFLIGHT_TOTAL = 100 * 1024 * 1024
+MAX_CHUNK_BYTES = 640 * 1024                 # decoded bytes per attach_chunk (the extension sends 512 KiB)
+ATTACH_GRACE_S = 30                          # a new photo whose file has not landed yet is retried this long
+
+UPLOAD_ID_RE = re.compile(r'^[0-9a-f]{32}$')
+TOKEN_RE = re.compile(r'^[0-9a-f]{32}$')
+SHA_RE = re.compile(r'^[0-9a-f]{64}$')
+EXT_RE = re.compile(r'^[a-z0-9]{1,5}$')
+
+IMAGE_EXTS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'tif', 'tiff', 'bmp'}
+VIDEO_EXTS = {'mov', 'mp4', 'm4v', 'avi', '3gp'}
+AUDIO_EXTS = {'caf', 'm4a', 'mp3', 'aac', 'wav', 'amr', 'aiff'}
+_MAGIC = ((b'\xff\xd8\xff', 'image/jpeg', 'jpg'), (b'\x89PNG\r\n\x1a\n', 'image/png', 'png'),
+          (b'GIF87a', 'image/gif', 'gif'), (b'GIF89a', 'image/gif', 'gif'))
+EXT_MIME = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp',
+            'heic': 'image/heic', 'heif': 'image/heif', 'mov': 'video/quicktime', 'mp4': 'video/mp4',
+            'm4v': 'video/x-m4v', 'pdf': 'application/pdf', 'm4a': 'audio/mp4', 'caf': 'audio/x-caf',
+            'txt': 'text/plain', 'vcf': 'text/vcard', 'zip': 'application/zip'}
+
+
+# ---------- small helpers ----------
+def _private_dir(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
+
+
+def sniff(data):
+    """(mime, ext) of an image the X Chat helper accepts (JPEG/PNG/GIF/WebP), else (None, None)."""
+    for magic, mime, ext in _MAGIC:
+        if data.startswith(magic):
+            return mime, ext
+    if len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp', 'webp'
+    return None, None
+
+
+def fmt_size(n):
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return ''
+    if n <= 0:
+        return ''
+    if n < 1024 * 1024:
+        return '%d KB' % max(1, round(n / 1024.0))
+    v = n / (1024.0 * 1024.0)
+    return ('%.1f MB' % v) if v < 10 else ('%d MB' % round(v))
+
+
+def _ext_of(*names):
+    for n in names:
+        e = os.path.splitext(str(n or ''))[1].lstrip('.').lower()
+        if EXT_RE.match(e or ''):
+            return e
+    return ''
+
+
+def kind_of(mime, uti, ext, sticker=False):
+    m, u = str(mime or '').lower(), str(uti or '').lower()
+    if sticker or m.startswith('image/') or ext in IMAGE_EXTS or u in ('public.jpeg', 'public.png', 'public.heic',
+                                                                      'public.heif', 'com.compuserve.gif', 'public.tiff'):
+        return 'image'
+    if m.startswith('video/') or ext in VIDEO_EXTS or 'movie' in u or 'video' in u:
+        return 'video'
+    if m.startswith('audio/') or ext in AUDIO_EXTS or 'audio' in u:
+        return 'audio'
+    return 'file'
+
+
+def sweep(dirpath, ttl_s, now=None):
+    """Delete files (and then empty dirs) under dirpath older than ttl_s. Returns how many files."""
+    now = time.time() if now is None else now
+    n = 0
+    if not os.path.isdir(dirpath):
+        return 0
+    for root, dirs, files in os.walk(dirpath, topdown=False):
+        for f in files:
+            p = os.path.join(root, f)
+            try:
+                if now - os.lstat(p).st_mtime > ttl_s:
+                    os.remove(p)
+                    n += 1
+            except OSError:
+                pass
+        for d in dirs:
+            try:
+                os.rmdir(os.path.join(root, d))          # only succeeds when empty
+            except OSError:
+                pass
+    return n
+
+
+# ---------- inbound ----------
+def attachment_rows(con, rowid):
+    """Metadata of a message's attachments (memory only). Never logged. Each row:
+    {kind, mime, ext, size, path, sticker}. `path` is the original file (FDA-only)."""
+    cols = {r[1] for r in con.execute('PRAGMA table_info(attachment)')}
+    sel = ', '.join(('a.' + c) if c in cols else 'NULL' for c in
+                    ('filename', 'mime_type', 'uti', 'transfer_name', 'total_bytes', 'is_sticker'))
+    try:
+        rows = con.execute('SELECT %s FROM attachment a JOIN message_attachment_join j ON j.attachment_id = a.ROWID '
+                           'WHERE j.message_id = ? ORDER BY a.ROWID' % sel, (rowid,)).fetchall()
+    except sqlite3.Error:
+        return []
+    out = []
+    for filename, mime, uti, tname, total, sticker in rows:
+        ext = _ext_of(tname, filename)
+        path = os.path.expanduser(str(filename)) if filename else ''
+        try:
+            size = int(total or 0)
+        except (TypeError, ValueError):
+            size = 0
+        if path and not size:
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+        out.append({'kind': kind_of(mime, uti, ext, bool(sticker)), 'mime': str(mime or '')[:60], 'ext': ext,
+                    'size': size, 'path': path, 'sticker': bool(sticker)})
+    return out
+
+
+def missing_images(rows):
+    """True when some image's file has not been written yet (still downloading)."""
+    return any(r['kind'] == 'image' and (not r['path'] or not os.path.isfile(r['path'])) for r in rows)
+
+
+_KIND_WORD = {'image': ('\U0001f4f7', 'Photo'), 'video': ('\U0001f3a5', 'Video'), 'audio': ('\U0001f3a4', 'Voice message'),
+              'file': ('\U0001f4ce', 'File')}
+
+
+def notice(row, reason):
+    """One body-free line for an attachment that is not relayed. Type and size only, never a name.
+    reason: 'too_large' | 'unsupported' | 'unavailable' | 'off' | 'digest'."""
+    emoji, word = _KIND_WORD.get(row.get('kind'), _KIND_WORD['file'])
+    if row.get('sticker'):
+        emoji, word = '\U0001f9f7', 'Sticker'
+    elif row.get('kind') == 'file' and row.get('ext'):
+        word = row['ext'].upper() + ' file'
+    size = fmt_size(row.get('size'))
+    head = '%s %s%s' % (emoji, word, (', ' + size) if size and row.get('kind') != 'audio' else '')
+    tail = {'too_large': ' (too large to relay)', 'unsupported': ' (not relayed \u2014 open Messages to see it)',
+            'unavailable': ' (couldn\u2019t be relayed)', 'off': '', 'digest': ''}.get(reason, '')
+    return head + tail
+
+
+def placeholder(rows):
+    """Summary placeholder (no names) for photos that end up not uploaded: '📷 Photo' / '📷 3 photos'."""
+    n = len([r for r in rows if r.get('kind') == 'image'])
+    if n <= 0:
+        return ''
+    return '\U0001f4f7 Photo' if n == 1 else '\U0001f4f7 %d photos' % n
+
+
+def _convert(src, dst, runner, max_side):
+    cmd = [SIPS, '-s', 'format', 'jpeg', '-s', 'formatOptions', '82']
+    if max_side:
+        cmd += ['-Z', str(int(max_side))]
+    cmd += [src, '--out', dst]
+    try:
+        r = runner(cmd, capture_output=True, text=True, timeout=60)
+    except Exception:
+        return False
+    return getattr(r, 'returncode', 1) == 0 and os.path.isfile(dst)
+
+
+def stage_image(row, runner=subprocess.run, outbox=None):
+    """Copy (and if needed convert/downsize) one inbound image into the outbox. Returns
+    (public_meta, None) or (None, reason). public_meta has NO filename: {token, kind, mime, ext, size,
+    sha256, macPath}. Every intermediate file is removed; only the final token file remains."""
+    outbox = _private_dir(outbox or OUTBOX_DIR)
+    src = row.get('path') or ''
+    try:
+        st = os.stat(src)
+    except OSError:
+        return None, 'unavailable'
+    if st.st_size > MAX_SOURCE_BYTES:
+        return None, 'too_large'
+    token = secrets.token_hex(16)
+    work = os.path.join(outbox, '.%s.src' % token)
+    conv = os.path.join(outbox, '.%s.jpg' % token)
+    try:
+        fd = os.open(work, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as out, open(src, 'rb') as inp:
+            shutil.copyfileobj(inp, out, 1024 * 1024)
+        with open(work, 'rb') as f:
+            data = f.read()
+        mime, ext = sniff(data)
+        if mime and len(data) <= MAX_RELAY_IMAGE_BYTES:
+            final_src = work
+        elif mime == 'image/gif':
+            return None, 'too_large'             # an animated GIF can't be re-encoded without losing it
+        else:
+            ok = False
+            for side in ((None if not mime else 2048), 2048, 1600, 1200):
+                if os.path.exists(conv):
+                    os.remove(conv)
+                if _convert(work, conv, runner, side) and os.path.getsize(conv) <= MAX_RELAY_IMAGE_BYTES:
+                    ok = True
+                    break
+            if not ok:
+                return None, ('too_large' if mime else 'unsupported')
+            with open(conv, 'rb') as f:
+                data = f.read()
+            mime, ext = sniff(data)
+            if not mime:
+                return None, 'unsupported'
+            final_src = conv
+        final = os.path.join(outbox, '%s.%s' % (token, ext))
+        os.replace(final_src, final)
+        os.chmod(final, 0o600)
+        return {'token': token, 'kind': 'image', 'mime': mime, 'ext': ext, 'size': len(data),
+                'sha256': hashlib.sha256(data).hexdigest(), 'macPath': final}, None
+    except OSError:
+        return None, 'unavailable'
+    finally:
+        for p in (work, conv):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def materialize(rows, stage, runner=subprocess.run, outbox=None):
+    """Turn a message's attachment rows into (staged_images, notices, unstaged_photo_rows).
+    stage=False (attachments off, quiet-hours digest, no webhook) gives notices/placeholders only."""
+    staged, notices, unstaged = [], [], []
+    for r in rows:
+        if r['kind'] == 'image' and stage and len(staged) < MAX_IMAGES_PER_MESSAGE:
+            meta, why = stage_image(r, runner, outbox)
+            if meta:
+                staged.append(meta)
+            else:
+                notices.append(notice(r, why))
+        elif r['kind'] == 'image':
+            unstaged.append(r)
+        else:
+            notices.append(notice(r, 'unsupported' if stage else 'off'))
+    return staged, notices, unstaged
+
+
+# ---------- outbound (host side) ----------
+def valid_upload_id(u):
+    return isinstance(u, str) and bool(UPLOAD_ID_RE.match(u))
+
+
+def _inflight_total():
+    total = 0
+    for root, _dirs, files in os.walk(INFLIGHT_DIR):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def stage_chunk(upload_id, seq, data_b64, now=None):
+    """Append one chunk of an outbound attachment. Chunks must arrive in order (seq 0, 1, ...).
+    Returns {'ok':True,'received':bytes} or {'ok':False,'error'}. Nothing about the bytes is logged."""
+    now = time.time() if now is None else now
+    if not valid_upload_id(upload_id):
+        return {'ok': False, 'error': 'bad upload id'}
+    try:
+        seq = int(seq)
+        raw = base64.b64decode(str(data_b64 or ''), validate=True)
+    except (TypeError, ValueError, binascii.Error):
+        return {'ok': False, 'error': 'bad chunk'}
+    if not raw or len(raw) > MAX_CHUNK_BYTES:
+        return {'ok': False, 'error': 'bad chunk size'}
+    d = _private_dir(os.path.join(_private_dir(INFLIGHT_DIR), upload_id))
+    meta_p, data_p = os.path.join(d, 'meta.json'), os.path.join(d, 'data')
+    meta = rc.read_json(meta_p, {}) or {}
+    nxt = int(meta.get('next') or 0)
+    if seq != nxt:
+        return {'ok': False, 'error': 'chunk out of order'}
+    size = int(meta.get('size') or 0) + len(raw)
+    if size > MAX_OUTBOUND_BYTES:
+        discard_upload(upload_id)
+        return {'ok': False, 'error': 'attachment too large (limit %s)' % fmt_size(MAX_OUTBOUND_BYTES)}
+    if seq == 0 and _inflight_total() + len(raw) > MAX_INFLIGHT_TOTAL:
+        return {'ok': False, 'error': 'too many attachments in flight'}
+    fd = os.open(data_p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, 'ab') as f:
+        f.write(raw)
+    rc.write_json_atomic(meta_p, {'next': seq + 1, 'size': size, 'at': now}, mode=0o600)
+    return {'ok': True, 'received': size}
+
+
+def discard_upload(upload_id):
+    if valid_upload_id(upload_id):
+        shutil.rmtree(os.path.join(INFLIGHT_DIR, upload_id), ignore_errors=True)
+
+
+_NAME_BAD_RE = re.compile(r'[\x00-\x1f\x7f/\\:"*?<>|]+')
+
+
+def safe_name(name, mime):
+    """A filename for the recipient: the basename without path/control characters, at most 80 chars,
+    else 'photo.<ext>' / 'attachment.<ext>'. Never logged."""
+    base = os.path.basename(str(name or '').replace('\\', '/'))
+    base = _NAME_BAD_RE.sub('_', base).strip(' ._')[:80]
+    ext = _ext_of(base)
+    if not ext:
+        ext = {'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+               'video/mp4': 'mp4', 'video/quicktime': 'mov', 'application/pdf': 'pdf'}.get(str(mime or '').lower(), '')
+    if not base or base.startswith('.'):
+        base = 'photo' if str(mime or '').startswith('image/') else 'attachment'
+    if ext and not base.lower().endswith('.' + ext):
+        base = base + '.' + ext
+    return base
+
+
+def take_upload(upload_id, size, sha256):
+    """Verify a fully received upload (size + sha256) and return its data path, else raise ValueError."""
+    if not valid_upload_id(upload_id):
+        raise ValueError('bad upload id')
+    d = os.path.join(INFLIGHT_DIR, upload_id)
+    meta = rc.read_json(os.path.join(d, 'meta.json'), {}) or {}
+    p = os.path.join(d, 'data')
+    try:
+        real = os.path.getsize(p)
+    except OSError:
+        raise ValueError('attachment not received (expired?)')
+    if int(meta.get('size') or -1) != real or int(size or -1) != real:
+        raise ValueError('attachment size mismatch')
+    h = hashlib.sha256()
+    with open(p, 'rb') as f:
+        for block in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(block)
+    if not SHA_RE.match(str(sha256 or '')) or h.hexdigest() != sha256:
+        raise ValueError('attachment checksum mismatch')
+    return p
+
+
+def stage_for_send(data_path, name):
+    """Move a verified upload to a Messages-readable folder under its recipient-facing name. Returns
+    the staged path; the upload's inflight dir is removed."""
+    d = os.path.join(_private_dir(SEND_STAGE_DIR), secrets.token_hex(8))
+    os.makedirs(d, mode=0o700)
+    dst = os.path.join(d, name)
+    shutil.move(data_path, dst)
+    os.chmod(dst, 0o600)
+    shutil.rmtree(os.path.dirname(data_path), ignore_errors=True)
+    return dst
+
+
+def remove_staged(path):
+    """Delete a staged outbound file and its token folder (only ever inside SEND_STAGE_DIR)."""
+    if not path:
+        return False
+    root = os.path.realpath(SEND_STAGE_DIR)
+    p = os.path.realpath(path)
+    if not p.startswith(root + os.sep):
+        return False
+    try:
+        os.remove(p)
+    except OSError:
+        pass
+    try:
+        os.rmdir(os.path.dirname(p))
+    except OSError:
+        pass
+    return True
+
+
+def drop_staged(media):
+    """Delete inbound outbox files of a message that will not be posted (e.g. held spam)."""
+    root = os.path.realpath(OUTBOX_DIR)
+    for x in media or []:
+        p = os.path.realpath(str((x or {}).get('macPath') or ''))
+        if p.startswith(root + os.sep):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def sweep_all(now=None):
+    """Housekeeping for every in-flight area (safe to call often)."""
+    return {'outbox': sweep(OUTBOX_DIR, OUTBOX_TTL_S, now), 'inflight': sweep(INFLIGHT_DIR, INFLIGHT_TTL_S, now),
+            'sendStage': sweep(SEND_STAGE_DIR, SEND_STAGE_TTL_S, now)}
+@@@@ END
+@@@@ FILE mac-helper/relay_send.py mode=644 sha256=cfd080340e532fca0d8c7c4d130b9ef458f560e2fbfbd7e2ae189f90fa269a7c nl=1
+"""iMessage Relay v1.4.6 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
 import os
+import re
 import subprocess
 import sqlite3
 import time
@@ -6714,7 +8459,7 @@ import relay_common as rc
 # Outgoing messages in the ONE-TO-ONE chat with `handle`, earliest first. The participant-count subquery
 # keeps group chats out, and date-ascending order lets the watcher claim one distinct ROWID per send.
 DELIVERY_SQL = """
-SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, ''))
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')), COALESCE(m.cache_has_attachments, 0)
 FROM message m
 JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
 JOIN chat_handle_join chj ON chj.chat_id = cmj.chat_id
@@ -6727,7 +8472,7 @@ ORDER BY m.date ASC, m.ROWID ASC
 # v1.4.0: outgoing messages in ONE group chat, found by its Messages chat GUID (the id the reply was
 # sent to). Same columns as DELIVERY_SQL; delivery flags and lengths only, never text.
 DELIVERY_SQL_GROUP = """
-SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, ''))
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')), COALESCE(m.cache_has_attachments, 0)
 FROM message m
 JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
 JOIN chat c ON c.ROWID = cmj.chat_id
@@ -6746,7 +8491,8 @@ DELIVERY_FALLBACK_WINDOW_S = 4.0
 # ---------- delivery proof (watcher only; it holds Full Disk Access) ----------
 # One file per pending send, so a concurrent host append and a watcher resolve never lose each other's
 # record. Records are body-free: handle, send time, text length and label only -- never the body or a hash.
-def add_pending_send(handle, at, text_length, label='', path=None, note='', chat_guid=''):
+def add_pending_send(handle, at, text_length, label='', path=None, note='', chat_guid='', x_uuid='', ui=False,
+                     part='text', staged_path=''):
     """Host (no chat.db access) records a send for the watcher to verify. NEVER stores the body.
     v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0188").
     v1.4.2: `chat_guid` routes the check to a group chat (handle is then its group:<id> key)."""
@@ -6758,6 +8504,14 @@ def add_pending_send(handle, at, text_length, label='', path=None, note='', chat
         rec['note'] = str(note)[:60]
     if chat_guid:
         rec['chatGuid'] = str(chat_guid)
+    if x_uuid and re.match(r'^[0-9A-Za-z-]{8,64}$', str(x_uuid)):
+        rec['xUuid'] = str(x_uuid)        # v1.4.6: the owner's X message id (for \u2705/\U0001f440/tapback mirrors)
+    if part == 'file':
+        rec['part'] = 'file'              # v1.4.6: an attachment; proven by an outgoing attachment row
+        if staged_path:
+            rec['stagedPath'] = str(staged_path)   # the watcher deletes this staged copy once resolved
+    if ui:
+        rec['ui'] = True                  # the extension will try a \u2705 reaction; the watcher waits for its ack
     rc.write_json_atomic(os.path.join(d, rec['id'] + '.json'), rec, mode=0o600)
     return rec['id']
 
@@ -6806,7 +8560,7 @@ def remove_pending(entry, path=None):
         pass
 
 
-def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), text_length=None, chat_guid=None):
+def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), text_length=None, chat_guid=None, part='text'):
     """One non-blocking delivery check for the watcher's tick. Reads only delivery flags, never text.
     Matches the earliest outgoing message in the 1:1 chat with `handle` after `since_unix`, skipping
     ROWIDs already claimed this tick and preferring an exact text-length match on ties. Returns
@@ -6827,6 +8581,10 @@ def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), tex
     finally:
         con.close()
     rows = [r for r in rows if r[0] not in set(exclude_rowids or ())]
+    if part == 'file':
+        # v1.4.6: an attachment send is proven by an outgoing row that carries an attachment
+        rows = [r for r in rows if len(r) > 5 and r[5]]
+        text_length = None
     if not rows:
         return 'pending', None, None
     if text_length is not None:
@@ -6861,6 +8619,8 @@ OSASCRIPT_ERRORS = {
     'no_imessage': 'That recipient is not reachable (SMS replies are not supported).',
     'timeout': 'Messages did not respond (timed out).',
     'send_failed': 'The reply could not be sent.',
+    'attachment_unavailable': "The attachment didn't reach the Mac intact (expired or incomplete). Nothing was sent; attach it again.",
+    'attachment_failed': 'Part of the reply was sent, but an attachment failed. Check Messages before resending.',
 }
 
 
@@ -6883,24 +8643,26 @@ def error_message(code):
     return OSASCRIPT_ERRORS.get(code, OSASCRIPT_ERRORS['send_failed'])
 
 
-def build_osascript_cmd(text, handle, service='auto', script_path=None, target='participant'):
+def build_osascript_cmd(text, handle, service='auto', script_path=None, target='participant', mode='text'):
     """argv list (no shell). Text, handle and service are separate argv items, never spliced into
     source. service: 'iMessage', 'SMS', or 'auto' (iMessage, then SMS via Text Message Forwarding).
     v1.4.1: target 'chat' sends to the group chat whose Messages GUID is `handle` (an extra argv item,
     only added when used)."""
     cmd = [rc.OSASCRIPT, script_path or rc.SCRIPT_PATH, text, handle, service]
-    if target == 'chat':
+    if mode == 'file':
+        cmd += ['chat' if target == 'chat' else 'participant', 'file']   # v1.4.6: argv 1 is a staged file path
+    elif target == 'chat':
         cmd.append('chat')
     return cmd
 
 
 def send_imessage(text, handle, runner=subprocess.run, sleeper=time.sleep, timeout=30, service='auto',
-                  target='participant'):
+                  target='participant', mode='text'):
     """(ok, errcode). errcode is a fixed token from OSASCRIPT_ERRORS (never raw AppleScript text).
     Retries exactly once, and ONLY when a completed osascript actually reported -1712 on stderr
     (Messages busy / first-run Automation prompt). A local process timeout means osascript itself
     hung, so it is NOT retried (re-running would just hang again)."""
-    cmd = build_osascript_cmd(text, handle, service, target=target)
+    cmd = build_osascript_cmd(text, handle, service, target=target, mode=mode)
     code = 'send_failed'
     for attempt in (1, 2):
         try:
@@ -6939,9 +8701,9 @@ def open_messages_hidden(runner=subprocess.run):
     except Exception:
         return False
 @@@@ END
-@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=77002ec82710f9b14606c0dbb3fa1b130debfc61b6dec49e1bfc8c4ed722f212 nl=1
+@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=1e275b6ec4cb0a9b7104cfa2b8f8a79536a0feb92bb7920a318654d322baa6e9 nl=1
 """
-iMessage Relay v1.4.5: guided-setup helpers shared by relayctl and the watcher.
+iMessage Relay v1.4.6: guided-setup helpers shared by relayctl and the watcher.
 
   detect_owner_handles(con, cc)   the owner's OWN iMessage/SMS addresses, read from chat.db rows the
                                   owner sent (message.account / destination_caller_id). Handles only;
@@ -7093,9 +8855,9 @@ def apply_setup(values, token=None):
     rc.with_host_lock(_do)
     return out
 @@@@ END
-@@@@ FILE mac-helper/relay_test.py mode=644 sha256=f4168a711ce8a4a4523d84ebaa797890b7e0a2e238bc4dcabde5b05b28a24c9f nl=1
+@@@@ FILE mac-helper/relay_test.py mode=644 sha256=986239f42536e35ce7bbca40429e97cee5948882b0490deeebb771e7be874508 nl=1
 """
-iMessage Relay v1.4.5: the /test end-to-end check (runs inside the native host).
+iMessage Relay v1.4.6: the /test end-to-end check (runs inside the native host).
 
 The owner types "/test" (or "/test send") in the relay chat. The extension intercepts it before any
 reply routing and asks the host for {type:"test"}. The host then checks, each with its own timeout:
@@ -7274,7 +9036,202 @@ def record_routine(test_id, seen, now):
     rc.log_event('test_routine', testId=rec['testId'], seen=bool(seen))
     return True
 @@@@ END
-@@@@ FILE mac-helper/relayctl.py mode=755 sha256=80f58f4f67a50929721b851a1bbc09d67499de2f5f8bb8faffbd7ee3c4e0b9ea nl=1
+@@@@ FILE mac-helper/relay_ui.py mode=644 sha256=8e6dfacfcc0ba0b24f4b20f7ccada153b9a766f5af5c40db058d2e7c93f18d2b nl=1
+"""v1.4.6: fast, phone-visible feedback through the owner's own X tab (the browser extension).
+
+The watcher (chat.db) and the host (per-request, under Chrome) leave small BODY-FREE action records here;
+the extension polls the host for them and performs them in X Chat's web UI as the owner:
+  - react  {uuid, emoji}  : put an emoji reaction on one of the OWNER'S OWN messages in the relay chat
+                            (✅ sent, 👀 read, ❓ confirm?, or a mirrored iMessage tapback).
+Every record holds only ids, an emoji and timestamps: never message text, names or handles.
+
+Also here:
+  - the id map: iMessage message guid (chat.db) <-> X message uuid of the owner's reply, recorded when a
+    relayed reply is proven in chat.db, so an incoming tapback / read receipt finds HIS X message.
+  - deferred notifications: a routine webhook that is only posted if the extension could not show the
+    same thing first (notBefore), cancelled by the extension's ack.
+"""
+import os
+import re
+import time
+import uuid as _uuid
+
+import relay_common as rc
+
+UI_DIR = os.path.join(rc.APP_DIR, 'ui')
+QUEUE_DIR = os.path.join(UI_DIR, 'queue')
+MAP_PATH = os.path.join(UI_DIR, 'idmap.json')
+MAP_TTL_S = 7 * 86400
+MAP_MAX = 2000
+ACTION_TTL_S = 120            # an action nobody performed in 2 minutes is dropped (fallbacks cover it)
+TAKE_LEASE_S = 15             # a taken action is re-offered if not acked within this
+UI_FALLBACK_S = 10.0          # deferred routine copy of a UI-shown prompt is posted after this
+
+UUID_RE = re.compile(r'^[0-9A-Za-z][0-9A-Za-z-]{7,63}$')
+REACTIONS = ('\u2705', '\U0001f440', '\u2753', '\u2764\ufe0f', '\U0001f44d', '\U0001f44e', '\U0001f602',
+             '\u203c\ufe0f', '\U0001f5d1\ufe0f')
+_PICT = re.compile('[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u203C\u2049\u2122\u2139\u3030\u303D\u3297\u3299]')
+
+
+def valid_uuid(u):
+    return bool(UUID_RE.match(str(u or '')))
+
+
+def clean_emoji(e):
+    """Only a single short emoji string ever leaves here (never free text)."""
+    s = str(e or '').strip()
+    if s in REACTIONS:
+        return s
+    if 0 < len(s) <= 8 and _PICT.search(s) and not re.search(r'[A-Za-z0-9<>"\'\\/]', s):
+        return s
+    return ''
+
+
+def uuid_from_key(key):
+    """The extension's item key is '<conversation>|id:uuid=<uuid>'."""
+    m = re.search(r'id:uuid=([0-9A-Za-z-]{8,64})$', str(key or ''))
+    return m.group(1) if m else ''
+
+
+# ---------- actions ----------
+def enqueue_react(x_uuid, emoji, purpose='', at=None, qdir=None):
+    e = clean_emoji(emoji)
+    if not valid_uuid(x_uuid) or not e:
+        return ''
+    at = time.time() if at is None else float(at)
+    rec = {'id': _uuid.uuid4().hex, 'action': 'react', 'uuid': str(x_uuid), 'emoji': e,
+           'purpose': re.sub(r'[^a-z_]', '', str(purpose))[:20], 'at': at}
+    rc.write_json_atomic(os.path.join(qdir or QUEUE_DIR, rec['id'] + '.json'), rec, mode=0o600)
+    return rec['id']
+
+
+def _load(qdir):
+    out = []
+    try:
+        names = sorted(os.listdir(qdir))
+    except OSError:
+        return out
+    for n in names:
+        if n.endswith('.json'):
+            r = rc.read_json(os.path.join(qdir, n))
+            if isinstance(r, dict) and r.get('id'):
+                out.append(r)
+    return out
+
+
+def _remove(qdir, i):
+    try:
+        os.remove(os.path.join(qdir, re.sub(r'[^0-9a-f]', '', str(i)) + '.json'))
+    except OSError:
+        pass
+
+
+def take(limit=5, now=None, qdir=None):
+    """Host (extension poll): actions to perform now. A taken action is leased, not deleted. An action not
+    performed within ACTION_TTL_S becomes 'expired' (its fallback already covers it); records go after a day."""
+    qdir = qdir or QUEUE_DIR
+    now = time.time() if now is None else now
+    out = []
+    for r in sorted(_load(qdir), key=lambda r: float(r.get('at') or 0)):
+        age = now - float(r.get('at') or 0)
+        if age > 86400:
+            _remove(qdir, r['id'])
+            continue
+        if r.get('state') in ('done', 'failed', 'expired'):
+            continue
+        if age > ACTION_TTL_S:
+            r['state'] = 'expired'
+            rc.write_json_atomic(os.path.join(qdir, r['id'] + '.json'), r, mode=0o600)
+            rc.log_event('ui_action', status='expired', purpose=r.get('purpose', ''))
+            continue
+        if r.get('state') == 'taken' and now - float(r.get('takenAt') or 0) < TAKE_LEASE_S:
+            continue
+        if len(out) >= limit:
+            break
+        r['state'], r['takenAt'] = 'taken', now
+        rc.write_json_atomic(os.path.join(qdir, r['id'] + '.json'), r, mode=0o600)
+        out.append({'id': r['id'], 'action': r['action'], 'uuid': r['uuid'], 'emoji': r['emoji']})
+    return out
+
+
+def ack(action_id, ok, step='', now=None, qdir=None):
+    qdir = qdir or QUEUE_DIR
+    i = re.sub(r'[^0-9a-f]', '', str(action_id or ''))
+    if not i:
+        return False
+    p = os.path.join(qdir, i + '.json')
+    r = rc.read_json(p)
+    if not isinstance(r, dict):
+        return False
+    r['state'] = 'done' if ok else 'failed'
+    r['doneAt'] = time.time() if now is None else now
+    r['step'] = re.sub(r'[^a-z_-]', '', str(step))[:30]
+    rc.write_json_atomic(p, r, mode=0o600)
+    rc.log_event('ui_action', status=r['state'], purpose=r.get('purpose', ''), step=r['step'],
+                 latencyMs=int(max(0, r['doneAt'] - float(r.get('at') or r['doneAt'])) * 1000))
+    return True
+
+
+def state_of(action_id, qdir=None):
+    r = rc.read_json(os.path.join(qdir or QUEUE_DIR, re.sub(r'[^0-9a-f]', '', str(action_id or '')) + '.json'))
+    return (r or {}).get('state') or ('pending' if isinstance(r, dict) else 'gone')
+
+
+def forget(action_id, qdir=None):
+    _remove(qdir or QUEUE_DIR, action_id)
+
+
+# ---------- id map (iMessage guid <-> owner's X message uuid) ----------
+def _map_load(path, now):
+    d = rc.read_json(path, {}) or {}
+    ent = d.get('entries') if isinstance(d.get('entries'), dict) else {}
+    return {k: v for k, v in ent.items() if isinstance(v, dict) and now - float(v.get('at') or 0) < MAP_TTL_S}
+
+
+def map_put(msg_guid, x_uuid, rowid=None, one_to_one=True, now=None, path=None):
+    g = re.sub(r'[^0-9A-Za-z-]', '', str(msg_guid or ''))[:64]
+    if not g or not valid_uuid(x_uuid):
+        return False
+    path = path or MAP_PATH
+    now = time.time() if now is None else now
+    ent = _map_load(path, now)
+    ent[g] = {'x': str(x_uuid), 'at': now, 'rowid': int(rowid) if rowid is not None else None,
+              'dm': bool(one_to_one)}
+    if len(ent) > MAP_MAX:
+        ent = dict(sorted(ent.items(), key=lambda kv: kv[1]['at'])[-MAP_MAX:])
+    rc.write_json_atomic(path, {'entries': ent}, mode=0o600)
+    return True
+
+
+def map_get(msg_guid, now=None, path=None):
+    g = str(msg_guid or '')
+    if '/' in g:
+        g = g.rsplit('/', 1)[-1]          # "p:0/<guid>" (part 0 of the message)
+    if ':' in g:
+        g = g.split(':')[-1]              # "bp:<guid>"
+    g = re.sub(r'[^0-9A-Za-z-]', '', g)[:64]
+    if not g:
+        return None
+    return _map_load(path or MAP_PATH, time.time() if now is None else now).get(g)
+
+
+def map_update(msg_guid, path=None, now=None, **fields):
+    path = path or MAP_PATH
+    now = time.time() if now is None else now
+    ent = _map_load(path, now)
+    if msg_guid in ent:
+        ent[msg_guid].update(fields)
+        rc.write_json_atomic(path, {'entries': ent}, mode=0o600)
+
+
+def map_unread(path=None, now=None, max_age_s=86400):
+    """1:1 sends still waiting for a read receipt (for the 👀 upgrade), newest first."""
+    now = time.time() if now is None else now
+    ent = _map_load(path or MAP_PATH, now)
+    return [(g, v) for g, v in sorted(ent.items(), key=lambda kv: -kv[1]['at'])
+            if v.get('dm') and not v.get('read') and v.get('rowid') is not None and now - v['at'] < max_age_s]
+@@@@ END
+@@@@ FILE mac-helper/relayctl.py mode=755 sha256=a814acf61b6eafcff34318a299814d6bb0534a10b309f6620aa7224a68ebbbd4 nl=1
 #!/usr/bin/python3
 """
 relayctl: the one command the bot (or you) uses to operate iMessage Relay on the Mac.
@@ -7295,7 +9252,7 @@ Every command prints one JSON object. Message bodies are never printed or stored
                                           pollSeconds, defaultCountryCode, replyWindowMinutes,
                                           ambiguousSeconds, confirmSends, rosterDays, skipShortCodes,
                                           confirmNewContacts exact-skip|always (v1.4.1)
-                                          spamMode tag|off (v1.4.5: "⚠️ Unknown · " on texts not in Contacts)
+                                          spamMode follow-messages|tag|off (v1.4.6 default follow-messages: mirror Messages' filtering)
                                           batchWebhooks on|off (v1.4.5: texts waiting together share one webhook)
   relayctl set-webhook --url URL --token-stdin   set webhookUrl + webhookToken together; the key is
                                           read from stdin so it never lands in argv or shell history
@@ -7340,8 +9297,10 @@ SETTABLE = {
     'defaultCountryCode': str, 'relayConversationId': str, 'replyWindowMinutes': int, 'ambiguousSeconds': int,
     'confirmSends': 'bool', 'rosterDays': int, 'skipShortCodes': 'bool', 'redactCodes': 'bool',
     'confirmNewContacts': ('exact-skip', 'always'),   # v1.4.1
-    'spamMode': ('tag', 'off'),                       # v1.4.5
+    'spamMode': ('follow-messages', 'tag', 'off'),    # v1.4.5; v1.4.6 follow-messages (default)
     'batchWebhooks': 'bool',                          # v1.4.5
+    'uiReactions': 'bool', 'uiPrompts': 'bool', 'readReceipts': 'bool', 'mirrorTapbacks': 'bool',   # v1.4.6
+    'stripOptOut': 'bool', 'relayAttachments': 'bool', 'quietNamesSeconds': int, 'undoSeconds': int,                            # v1.4.6
 }
 
 
@@ -7999,41 +9958,56 @@ def main(argv=None):
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/send_imessage.applescript mode=644 sha256=18901504322c7aacb1a3d60d65ce9d005c4e210a00d39e601c5a1dad2deddb3e nl=1
--- iMessage Relay: sends ONE message to ONE participant (1:1) or to ONE group chat. Text, handle (or
--- chat GUID) and service arrive as argv, so nothing from the message is ever interpolated into script source.
--- Usage: osascript send_imessage.applescript "<text>" "<handle or chat GUID>" ["iMessage"|"SMS"|"auto"] ["chat"]
+@@@@ FILE mac-helper/send_imessage.applescript mode=644 sha256=c525c67051c4ca35f5e6388690b823fdafaa7f0f606a9e31e35daceeda52f72e nl=1
+-- iMessage Relay: sends ONE message (text, or one file) to ONE participant (1:1) or to ONE group chat.
+-- Payload, handle (or chat GUID) and service arrive as argv, so nothing from the message is ever
+-- interpolated into script source.
+-- Usage: osascript send_imessage.applescript "<text or POSIX path>" "<handle or chat GUID>" ["iMessage"|"SMS"|"auto"] ["participant"|"chat"] ["text"|"file"]
 -- service "auto" (default) tries iMessage first, then SMS (needs Text Message Forwarding).
 -- v1.4.1: a 4th argument "chat" sends to the group chat whose GUID is given ("iMessage;+;chat123..."),
 -- the same chat the group's messages came from (the service argument is then ignored).
+-- v1.4.6: a 5th argument "file" sends the file at the POSIX path in the 1st argument (an attachment the
+-- relay staged under ~/Pictures/.imessage-relay-out, a folder Messages can read).
 -- Works with Messages quit (it launches in the background, ~3 s) or hidden (~1 s).
 on run argv
-	if (count of argv) < 2 then error "expected: text handle [service] [chat]"
-	set theText to item 1 of argv
+	if (count of argv) < 2 then error "expected: payload handle [service] [participant|chat] [text|file]"
+	set thePayload to item 1 of argv
 	set theHandle to item 2 of argv
 	set theService to "auto"
 	if (count of argv) is greater than or equal to 3 then set theService to item 3 of argv
-	if (count of argv) is greater than or equal to 4 and item 4 of argv is "chat" then
+	set toChat to false
+	if (count of argv) is greater than or equal to 4 then
+		if item 4 of argv is "chat" then set toChat to true
+	end if
+	set theMode to "text"
+	if (count of argv) is greater than or equal to 5 then set theMode to item 5 of argv
+	if theMode is "file" then
+		-- resolved outside the Messages tell block: a missing file fails here, before anything is sent
+		set theItem to (POSIX file thePayload) as alias
+	else
+		set theItem to thePayload
+	end if
+	if toChat then
 		tell application "Messages"
-			send theText to chat id theHandle
+			send theItem to chat id theHandle
 		end tell
 		return
 	end if
 	tell application "Messages"
 		if theService is "iMessage" then
-			send theText to participant theHandle of (1st account whose service type = iMessage)
+			send theItem to participant theHandle of (1st account whose service type = iMessage)
 		else if theService is "SMS" then
-			my sendSMS(theText, theHandle)
+			my sendSMS(theItem, theHandle)
 		else
 			-- auto: try iMessage once. Re-raise the control errors unchanged so the host classifies them
 			-- (never double-send on busy/automation). Fall back to SMS ONLY on a genuine no-iMessage route.
 			try
-				send theText to participant theHandle of (1st account whose service type = iMessage)
+				send theItem to participant theHandle of (1st account whose service type = iMessage)
 			on error errMsg number errNum
 				if errNum is -1712 or errNum is -1743 or errNum is -1728 then
 					error errMsg number errNum
 				else if (errMsg contains "iMessage") or (errMsg contains "participant") or (errMsg contains "not registered") or (errMsg contains "service") then
-					my sendSMS(theText, theHandle)
+					my sendSMS(theItem, theHandle)
 				else
 					error errMsg number errNum
 				end if
@@ -8042,14 +10016,14 @@ on run argv
 	end tell
 end run
 
-on sendSMS(theText, theHandle)
+on sendSMS(theItem, theHandle)
 	tell application "Messages"
 		try
 			set smsAccount to 1st account whose service type = SMS
 		on error
 			error "SMS replies not supported (no SMS service; enable Text Message Forwarding)"
 		end try
-		send theText to participant theHandle of smsAccount
+		send theItem to participant theHandle of smsAccount
 	end tell
 end sendSMS
 @@@@ END
@@ -8176,9 +10150,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=826a39582a8257d29d508576add1b1bda2efd0f2952b30ac70ef87cfd71337cb nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=21e74829b5f852f3387a75095010aa801a19a75e8ee4dd28fd01bff61be7fa79 nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.5 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.6 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -8246,6 +10220,17 @@ STDOUT (one JSON object):
   the owner; every status/confirmation line is silent (should_notify:false) and threads under the
   owner's reply when reply_to is set (item 1).
   {"action":"skip","reason":"duplicate id …"}
+  v1.4.6 photos (1:1 inbound): a message/batch line may carry `media` (token, ext, size, sha256, macPath).
+  Before running, the routine copies each macPath from the Mac to <media_dir>/<token>.<ext> (default
+  ~/.imessage-relay-routine/media). Run 1 then answers
+  {"action":"upload","uploads":[{"token","upload_conversation_id","total_bytes","num_parts",
+                                 "parts":[{"segment_index","media":"$file:/…/part"}]}]}
+  -> chat_media_upload_initialize + _append per part, then run again (same payload) with
+  "media_keys": {token: media_hash_key}. Each send then carries "media_finalize":[{token, media_hash_key,
+  num_parts}] -> chat_media_upload_finalize (with that send's message_id) before send_chat_message.
+  "media_off": true (a copy/upload failed) posts the text with a clear "couldn't be relayed" notice.
+  Photos are in flight only: the copy, the parts and a tiny state file (mode 600) are deleted when the
+  send is built, on any error, or by the sweep after 15 min. Nothing about them is logged.
   {"action":"fetch","need":["conversation_key_events","signing_keys"],"reason":"…"}   # v1.4.5: fetch, write again, rerun
   {"action":"error","reason":"…"}                          # body-free; the routine posts one failure line
 """
@@ -8269,7 +10254,10 @@ def _label(p, default='someone'):
 
 
 UNKNOWN_TAG = '\u26a0\ufe0f Unknown \u00b7 '
+TAGS = {'spam': '\U0001f6ab Spam \u00b7 ', 'promotion': '\U0001f3f7\ufe0f Promo \u00b7 ',   # v1.4.6 follow-messages
+        'transaction': '\U0001f9fe '}
 BATCH_MAX = 20
+DIGEST_MAX_CHARS = 9000
 KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
 KEY_CACHE_TTL_S = 6 * 3600          # after 6 h the routine fetches keys again (a rotated key heals by then)
 KEY_CACHE_MAX_BYTES = 512 * 1024
@@ -8284,10 +10272,231 @@ def _message_line(m):
     g = m.get('group') or {}
     gl = str(g.get('label') or g.get('name') or '').strip()
     head = (gl + GROUP_SEP if gl else '') + label
-    if m.get('unknown') and not gl:
+    tag = TAGS.get(str(m.get('tag') or '')) if not gl else None
+    if tag:
+        head = tag + head               # v1.4.6: Messages filed it under Spam / Promotions / Transactions
+    elif m.get('unknown') and not gl:
         head = UNKNOWN_TAG + head       # v1.4.5 spamMode tag: not in Contacts / flagged by Messages
+    if m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown'):
+        return text                     # v1.4.6 quiet names: same sender as the line just above
     sep = ' ' if m.get('reaction') else ': '
     return head + sep + text
+
+
+# ---------- v1.4.6 photos (in-flight only) ----------
+MEDIA_DIR = '~/.imessage-relay-routine/media'
+MEDIA_TTL_S = 15 * 60               # a photo the routine never finished with is swept on the next run
+MEDIA_MAX_BYTES = 5 * 1024 * 1024   # the X Chat image limit (xchat_lite encrypt-media)
+MEDIA_EXTS = ('jpg', 'jpeg', 'png', 'gif', 'webp')
+MEDIA_MAX_PER_LINE = 10
+_HEX32 = re.compile(r'^[0-9a-f]{32}$')
+_HEX64 = re.compile(r'^[0-9a-f]{64}$')
+_PHOTO_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
+
+
+def media_meta(items):
+    """The valid photo entries of a webhook message (metadata only: token, ext, size, sha256, macPath)."""
+    out = []
+    for x in (items if isinstance(items, list) else [])[:MEDIA_MAX_PER_LINE]:
+        if not isinstance(x, dict):
+            continue
+        tok, ext, sha = str(x.get('token') or ''), str(x.get('ext') or '').lower(), str(x.get('sha256') or '').lower()
+        size = x.get('size')
+        if (_HEX32.match(tok) and ext in MEDIA_EXTS and _HEX64.match(sha) and isinstance(size, int)
+                and not isinstance(size, bool) and 0 < size <= MEDIA_MAX_BYTES):
+            out.append({'token': tok, 'ext': ext, 'size': size, 'sha256': sha, 'macPath': str(x.get('macPath') or '')[:400]})
+    return out
+
+
+def _with_media(line, m):
+    media = media_meta((m or {}).get('media'))
+    if media:
+        line['media'] = media
+    return line
+
+
+def media_box_path(item, media_dir=None):
+    return os.path.join(os.path.expanduser(media_dir or MEDIA_DIR), '%s.%s' % (item['token'], item['ext']))
+
+
+def _media_state_path(token, media_dir=None):
+    return os.path.join(os.path.expanduser(media_dir or MEDIA_DIR), '%s.json' % token)
+
+
+def _rm(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _rmtree_upload(path, media_dir=None):
+    """Delete an encrypt-media upload_dir (only its own part files; never anything else)."""
+    if not path or not os.path.isdir(path):
+        return
+    for f in os.listdir(path):
+        _rm(os.path.join(path, f))
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
+def media_cleanup(tokens_items, media_dir=None):
+    """Delete every in-flight file of these photos: the plaintext copy, the upload parts, the state file."""
+    for it in tokens_items:
+        st = _read_media_state(it['token'], media_dir)
+        _rmtree_upload(st.get('upload_dir'), media_dir)
+        _rm(media_box_path(it, media_dir))
+        _rm(_media_state_path(it['token'], media_dir))
+
+
+def _read_media_state(token, media_dir=None):
+    try:
+        with open(_media_state_path(token, media_dir)) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def media_sweep(media_dir=None, now=None, ttl=MEDIA_TTL_S):
+    """Remove photos and upload parts left behind by an unfinished run (older than ttl)."""
+    d = os.path.expanduser(media_dir or MEDIA_DIR)
+    now = time.time() if now is None else now
+    if not os.path.isdir(d):
+        return 0
+    n = 0
+    for f in os.listdir(d):
+        p = os.path.join(d, f)
+        try:
+            if now - os.lstat(p).st_mtime <= ttl:
+                continue
+            if os.path.isdir(p):
+                _rmtree_upload(p)
+            else:
+                os.remove(p)
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
+def _sha256_file(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def media_verify(item, media_dir=None):
+    """True when the routine copied the photo intact (size + sha256 match the Mac's metadata)."""
+    p = media_box_path(item, media_dir)
+    try:
+        if os.path.getsize(p) != item['size']:
+            return False
+        if os.stat(p).st_mode & 0o077:
+            os.chmod(p, 0o600)                 # in-flight copy: owner-only
+        return _sha256_file(p) == item['sha256']
+    except OSError:
+        return False
+
+
+def media_failed_text(text, n):
+    """The line when its photo(s) could not be relayed: a clear notice instead of a silent drop."""
+    note = '\U0001f4f7 %s couldn\u2019t be relayed \u2014 open Messages to see %s' % (
+        ('Photo', 'it') if n == 1 else ('%d photos' % n, 'them'))
+    if _PHOTO_PLACEHOLDER.search(text):
+        return _PHOTO_PLACEHOLDER.sub(lambda _m: note, text)
+    return text + '\n\u2002' + note
+
+
+def locate_media_helper(helper):
+    """(python, script) for an xchat_lite with encrypt-media (the newer helper; v1.4.6). helper.media_python /
+    helper.media_script win; else ~/xchat/helper; else the regular helper if it has encrypt-media."""
+    h = helper or {}
+    if h.get('media_python') and h.get('media_script'):
+        return os.path.expanduser(str(h['media_python'])), os.path.expanduser(str(h['media_script']))
+    for root in (os.path.expanduser('~/xchat/helper'), os.path.expanduser('~/xchat-grokbot-helper')):
+        sp = os.path.join(root, 'xchat_lite.py')
+        v = os.path.join(root, '.venv', 'bin', 'python')
+        if os.path.exists(sp) and _has_encrypt_media(sp):
+            return (v if os.path.exists(v) else sys.executable), sp
+    py, sp = locate_helper(helper)
+    if sp and _has_encrypt_media(sp):
+        return py, sp
+    return None, None
+
+
+def _has_encrypt_media(script):
+    try:
+        with open(script, encoding='utf-8', errors='replace') as fh:
+            return 'encrypt-media' in fh.read()
+    except OSError:
+        return False
+
+
+def _helper_argv(py, script, helper):
+    base = [py, script]
+    h = helper or {}
+    for flag, key in (('--user-id', 'user_id'), ('--key-version', 'key_version'), ('--juicebox', 'juicebox')):
+        if h.get(key):
+            val = os.path.expanduser(str(h[key])) if key == 'juicebox' else str(h[key])
+            base += [flag, val]
+    return base
+
+
+def media_prepare(conv, items, xchat, helper, runner, media_dir=None):
+    """Encrypt each verified photo into upload parts (encrypt-media). Returns (uploads, failed_items).
+    The plaintext stays only until the send run; the part files are mode 600 in a mode-700 upload_dir.
+    Nothing is logged; on any error every file of a failed photo is deleted."""
+    os.makedirs(os.path.expanduser(media_dir or MEDIA_DIR), mode=0o700, exist_ok=True)
+    good, failed = [], []
+    for it in items:
+        (good if media_verify(it, media_dir) else failed).append(it)
+    media_cleanup(failed, media_dir)
+    if not good:
+        return [], failed
+    py, script = locate_media_helper(helper)
+    if not py:
+        media_cleanup(good, media_dir)
+        return [], failed + good
+    stdin_obj = {'conversation_id': conv, 'events': (xchat or {}).get('events') or [],
+                 'conversation_key_events': (xchat or {}).get('conversation_key_events') or [],
+                 'signing_keys': (xchat or {}).get('signing_keys') or [],
+                 'media': [{'input': media_box_path(it, media_dir)} for it in good]}
+    try:
+        res = _run(_helper_argv(py, script, helper) + ['encrypt-media', '--out-dir', os.path.expanduser(media_dir or MEDIA_DIR)],
+                   stdin_obj, runner)
+    except Exception:
+        media_cleanup(good, media_dir)
+        return [], failed + good
+    out = res.get('media') or []
+    errors = res.get('errors') or {}
+    upload_dir = str(res.get('upload_dir') or '')
+    uploads, ok_items = [], []
+    for i, it in enumerate(good):
+        m = out[i] if i < len(out) and isinstance(out[i], dict) else None
+        if m is None or str(i) in errors or i in errors or not m.get('parts'):
+            failed.append(it)
+            continue
+        parts = [{'segment_index': p.get('segment_index'), 'media': '$file:' + str(p.get('path'))} for p in m['parts']]
+        state = {'upload_dir': upload_dir, 'conversation_key_version': m.get('conversation_key_version'),
+                 'num_parts': len(parts), 'total_bytes': m.get('total_bytes')}
+        sp = _media_state_path(it['token'], media_dir)
+        fd = os.open(sp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as fh:
+            json.dump(state, fh)
+        ok_items.append(it)
+        uploads.append({'token': it['token'], 'upload_conversation_id': res.get('upload_conversation_id'),
+                        'total_bytes': m.get('total_bytes'), 'num_parts': str(len(parts)), 'parts': parts})
+    for it in failed:
+        _rm(media_box_path(it, media_dir))
+    if not uploads:
+        _rmtree_upload(upload_dir)
+    return uploads, failed
 
 
 def format_event(payload):
@@ -8299,15 +10508,15 @@ def format_event(payload):
     t = str(payload.get('type') or '').strip()
     base_id = str(payload.get('id') or '')
     if t == 'message':
-        return {'kind': 'message', 'lines': [{'id': base_id, 'text': _message_line(payload), 'body': True}]}
+        return {'kind': 'message', 'lines': [_with_media({'id': base_id, 'text': _message_line(payload), 'body': True}, payload)]}
     if t == 'batch':
         # v1.4.5 speed: several texts the watcher found in one tick, one webhook / one routine run.
         # Still one X message per text (each pings), each deduped on its own id.
         msgs = (payload.get('messages') or [])[:BATCH_MAX]
         if not msgs:
             raise ValueError('empty batch')
-        return {'kind': 'batch', 'lines': [{'id': str(m.get('id') or (base_id + '#' + str(i))), 'text': _message_line(m),
-                                            'body': True} for i, m in enumerate(msgs)]}
+        return {'kind': 'batch', 'lines': [_with_media({'id': str(m.get('id') or (base_id + '#' + str(i))), 'text': _message_line(m),
+                                                        'body': True}, m) for i, m in enumerate(msgs)]}
     if t == 'digest':
         # item 7: a header line, then ONE X message per person (their texts grouped under one label).
         msgs = payload.get('messages') or []
@@ -8328,12 +10537,17 @@ def format_event(payload):
             groups[gi][1].append(sep + str(m.get('text') or '') if sep else str(m.get('text') or ''))
             groups[gi][2].append(mid)
         n, people = len(msgs), len(groups)
-        header = '\U0001f4ec %d message%s while you were away%s.' % (
+        header = '\U0001f319 Overnight: %d message%s%s' % (
             n, '' if n == 1 else 's', (' from %d people' % people) if people > 1 else '')
-        lines = [{'id': (base_id or 'digest') + ':header', 'text': header, 'body': False}]
-        for head, texts, ids in groups:
-            lines.append({'id': 'digest:' + '+'.join(ids), 'text': head + ': ' + '\n\u2002'.join(texts), 'body': True})
-        return {'kind': 'digest', 'lines': lines}
+        # v1.4.6: ONE tidy post (header, then each person once with their texts under them); the line
+        # ids still carry every message id so a retried webhook dedupes.
+        blocks = [head + ':\n' + '\n'.join('\u2002\u2022 ' + x.replace('\n\u2002', '\n\u2002\u2002 ') for x in texts)
+                  for head, texts, _ in groups]
+        text = header + '\n\n' + '\n\n'.join(blocks)
+        if len(text) > DIGEST_MAX_CHARS:
+            text = text[:DIGEST_MAX_CHARS - 40].rstrip() + '\n\u2026 (more in Messages)'
+        ids = '+'.join(i for _, _, ids_ in groups for i in ids_)
+        return {'kind': 'digest', 'lines': [{'id': 'digest:' + (base_id or ids)[:200], 'text': text, 'body': True}]}
     if t == 'sent':
         # item 6: ONE confirmation, posted by the watcher: \u2713\u2713 when chat.db shows delivered, else \u2713
         # after the ~20s fallback. (Dry runs and delivery-check-off still come from the host.)
@@ -8401,6 +10615,8 @@ def format_event(payload):
             line = '\U0001f504 Resynced after a long gap; older messages were skipped.'
         elif status == 'messages_not_running':
             line = '\u26a0\ufe0f Messages isn\u2019t running on the Mac, so replies can\u2019t be sent right now.'
+        elif status == 'spam_summary' and detail:
+            line = detail[:300]               # v1.4.6: counts only ("\U0001f6ab 3 texts went to Messages \u203a Spam ...")
         elif status == 'fda_missing':
             line = '\u26a0\ufe0f The watcher can\u2019t read Messages yet (Full Disk Access). New texts aren\u2019t coming through.'
         else:
@@ -8418,6 +10634,19 @@ def format_event(payload):
         label = _label(payload, '')
         if reason == 'echo':
             line = '\u26a0\ufe0f Didn\u2019t send that to ' + (label or 'them') + ' \u2014 it looked like a relayed message bounced straight back.'
+        elif reason == 'not_sent' and str(payload.get('detail') or '').strip():
+            # v1.4.6: the Mac's fixed, body-free reason ("There was nothing after the name to send …")
+            detail = re.sub(r'\s+', ' ', str(payload.get('detail')))[:200].strip()
+            line = '\u26a0\ufe0f Not sent: ' + detail
+        elif reason == 'attachment':
+            # v1.4.6: a photo/file he sent in X Chat couldn't be read or was over the limit (counts only)
+            try:
+                n = max(1, min(10, int(payload.get('count') or 1)))
+            except (TypeError, ValueError):
+                n = 1
+            what = 'An attachment' if n == 1 else '%d attachments' % n
+            line = '\u26a0\ufe0f %s couldn\u2019t be sent%s (too large, over 25 MB, or not loaded in X). ' % (
+                what, (' to ' + label) if label else '') + ('The text went through.' if payload.get('sentText') else 'Nothing was sent.')
         else:
             line = '\u26a0\ufe0f A reply wasn\u2019t sent' + ((' to ' + label) if label else '') + '.'
         return {'kind': 'refused', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
@@ -8613,11 +10842,11 @@ def session_encrypt_stdin(conversation_id, text, xchat, reply_to=None):
     return body
 
 
-def encrypt_line(conversation_id, text, xchat, helper, runner, reply_to=None, should_notify=False):
+def encrypt_line(conversation_id, text, xchat, helper, runner, reply_to=None, should_notify=False, media=None):
     """Encrypt one line via xchat_lite session-encrypt. Returns the send dict for send_chat_message.
     session-encrypt warms keys and unwraps the conversation key from conversation_key_events in one
     process (robust key resolution). Raises on failure."""
-    py, script = locate_helper(helper)
+    py, script = locate_media_helper(helper) if media else locate_helper(helper)
     if not py or not script:
         raise RuntimeError('xchat_lite not found (see x-api-mcp-guide skill)')
     base = [py, script]
@@ -8627,6 +10856,8 @@ def encrypt_line(conversation_id, text, xchat, helper, runner, reply_to=None, sh
             val = os.path.expanduser(str(h[key])) if key == 'juicebox' else str(h[key])   # item N3
             base += [flag, val]
     stdin_obj = session_encrypt_stdin(conversation_id, text, xchat, reply_to)
+    if media:
+        stdin_obj['media'] = media                     # v1.4.6: [{media_hash_key, input, conversation_key_version}]
     res = _run(base + ['session-encrypt'], stdin_obj, runner)
     return {
         'conversation_id': str(res.get('id') or conversation_id),
@@ -8689,6 +10920,53 @@ def process(req, runner=None):
         xchat.update(cached)
         from_cache = True
 
+    # v1.4.6 photos: run 1 turns the copied photos into upload parts ({"action":"upload"}); run 2 (with
+    # media_keys) builds the messages that carry them. Any photo that can't make it gets a clear notice.
+    media_dir = req.get('media_dir') or os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', 'media')
+    try:
+        media_sweep(media_dir)
+    except OSError:
+        pass
+    all_media = [it for ln in lines for it in ln.get('media') or []]
+    media_keys = req.get('media_keys') if isinstance(req.get('media_keys'), dict) else {}
+    line_media = {}
+    if all_media and req.get('media_off'):
+        media_cleanup(all_media, media_dir)
+        for ln in lines:
+            if ln.get('media'):
+                ln['text'] = media_failed_text(ln['text'], len(ln['media']))
+    elif all_media and not media_keys:
+        try:
+            uploads, failed = media_prepare(conv, all_media, xchat, req.get('helper'), runner, media_dir)
+        except Exception:
+            media_cleanup(all_media, media_dir)
+            uploads, failed = [], list(all_media)
+        if uploads:
+            return {'action': 'upload', 'uploads': uploads, 'posted_kind': ev['kind'],
+                    'failed': len(failed),
+                    'reason': 'upload each photo (chat_media_upload_initialize/append), then run again with the same '
+                              'payload and media_keys {token: media_hash_key}'}
+        media_keys = {}                              # nothing uploadable: text with notices
+    if all_media and not req.get('media_off'):
+        for ln in lines:
+            if not ln.get('media'):
+                continue
+            entries, missing = [], 0
+            for it in ln['media']:
+                key = str(media_keys.get(it['token']) or '')
+                st = _read_media_state(it['token'], media_dir)
+                if key and st and os.path.exists(media_box_path(it, media_dir)):
+                    e = {'media_hash_key': key, 'input': media_box_path(it, media_dir)}
+                    if st.get('conversation_key_version'):
+                        e['conversation_key_version'] = str(st['conversation_key_version'])
+                    entries.append((it, e, st))
+                else:
+                    missing += 1
+            if missing:
+                ln['text'] = media_failed_text(ln['text'], missing)
+            if entries:
+                line_media[ln['id']] = entries
+
     reply_to = payload.get('reply_to')          # item 1: X event id of the owner's reply (optional)
     if not xchat.get('events'):
         reply_to = None                         # v1.4.5: threading needs the fetched events; post unthreaded
@@ -8699,14 +10977,22 @@ def process(req, runner=None):
             # and thread under the owner's bubble when a reply_to was supplied.
             notify = bool(ln.get('body'))
             rt = None if notify else reply_to
-            sends.append(encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner,
-                                      reply_to=rt, should_notify=notify))
+            entries = line_media.get(ln['id'])
+            snd = encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner, reply_to=rt, should_notify=notify,
+                               media=[e for _, e, _ in entries] if entries else None)
+            if entries:
+                # finalize each upload with this message_id BEFORE send_chat_message
+                snd['media_finalize'] = [{'token': it['token'], 'media_hash_key': e['media_hash_key'],
+                                          'num_parts': str(st.get('num_parts') or 1)} for it, e, st in entries]
+            sends.append(snd)
     except Exception as e:                                  # body-free error for the routine
+        media_cleanup(all_media, media_dir)
         if from_cache:
             cache.clear()                                   # stale or bad cache: fetch fresh keys once
             return {'action': 'fetch', 'need': list(NEED_KEYS), 'posted_kind': ev['kind'],
                     'reason': 'cached keys did not work: fetch conversation_key_events + signing_keys and run again'}
         return {'action': 'error', 'reason': str(e)[:200], 'posted_kind': ev['kind'], 'encrypted': False}
+    media_cleanup(all_media, media_dir)                     # v1.4.6: photos are in flight only; gone now
     if supplied and cache:
         try:
             cache.save(conv, xchat['conversation_key_events'], xchat['signing_keys'])
@@ -8845,6 +11131,257 @@ if __name__ == '__main__':
   [" mailto:Someone@Example.com ", "someone@example.com"],
   ["", ""]
 ]
+@@@@ END
+@@@@ FILE tests/js/bgui.test.js mode=644 sha256=af8c47b608dc4426d5bf9120a281e7cff4a6033f84f29cde17b9ef3da31b303b nl=1
+/* v1.4.6: background.js UI flow — ✅ on a sent reply is acked to the host, ❓ / 🤖 prompt acks, the relay's
+ * own 🤖 text is never sent, the undo window cancels a send, queued reactions are polled. Fictional names. */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+const vm = require('vm');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+const UU = 'df48633d-6588-4b18-bc77-000000000001';
+const KEY = '111-222|id:uuid=' + UU;
+
+function boot(opts) {
+  const EXT = path.join(__dirname, '../../extension');
+  const MANIFEST = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
+  const bag = {}, sess = {}, listeners = [], host = [], tabMsgs = [];
+  const mk = b => ({ async get(k) { const ks = k == null ? Object.keys(b) : (typeof k === 'string' ? [k] : k); const o = {}; ks.forEach(x => { if (x in b) o[x] = JSON.parse(JSON.stringify(b[x])); }); return o; },
+                     async set(o) { Object.assign(b, o); }, async remove(k) { delete b[k]; } });
+  const chrome = {
+    runtime: { id: 'ext', getManifest: () => MANIFEST, onMessage: { addListener: f => listeners.push(f) }, onInstalled: { addListener() {} }, onStartup: { addListener() {} },
+      sendNativeMessage: async (h, m) => {
+        host.push(JSON.parse(JSON.stringify(m)));
+        if (m.type === 'get_config') return { ok: true, paused: false, dryRun: false, relayConversationId: '111-222', contacts: [{ name: 'Jordan', handle: '15555550123' }], uiReactions: true, undoSeconds: opts.undo || 0 };
+        if (m.type === 'send') return opts.send(m);
+        if (m.type === 'ui_poll') return opts.poll ? opts.poll() : { ok: true, actions: [] };
+        return { ok: true };
+      } },
+    storage: { local: mk(bag), session: mk(sess), onChanged: { addListener() {} } },
+    tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} }, query: async () => [],
+            sendMessage: async (tabId, m, o) => { tabMsgs.push({ tabId, m: JSON.parse(JSON.stringify(m)), o }); return opts.tab ? opts.tab(m) : { ok: true, step: 'placed' }; } },
+    alarms: { create() {}, clear() {}, onAlarm: { addListener() {} } },
+    action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(EXT, 'background.js'), 'utf8'),
+    { chrome, console: { log() {}, warn() {} }, setTimeout, clearTimeout, crypto: require('crypto').webcrypto, Uint8Array });
+  const fire = (type, item, wait) => new Promise(r => { listeners.forEach(f => f({ type, item }, { id: 'ext', tab: { id: 7 }, frameId: 0 }, () => {})); setTimeout(r, wait || 120); });
+  const reply = (text, wait) => fire('relay-log', { ts: new Date().toISOString(), conversationId: '111-222', direction: 'outbound', text, key: KEY, score: 9 }, wait);
+  return { host, tabMsgs, fire, reply };
+}
+
+(async () => {
+  await test('sent reply: ✅ placed in the tab, acked to the host with the pending id', async () => {
+    const b = boot({ send: m => ({ ok: true, sent: true, contact: 'Jordan', pendingId: 'aa11', ui: { react: [{ emoji: '\u2705', uuid: UU, pendingId: 'aa11' }] } }) });
+    await b.reply('Jordan: on my way');
+    const send = b.host.find(m => m.type === 'send');
+    assert.strictEqual(send.ui, true);
+    assert.strictEqual(send.xUuid, UU);
+    const t = b.tabMsgs.find(x => x.m.action === 'react');
+    assert.deepStrictEqual([t.tabId, t.m.uuid, t.m.emoji, t.o.frameId], [7, UU, '\u2705', 0]);
+    const ack = b.host.find(m => m.type === 'ui_ack');
+    assert.strictEqual(ack.pendingId, 'aa11');
+    assert.strictEqual(ack.ok, true);
+    assert.ok(Number.isFinite(ack.latencyMs));
+  });
+
+  await test('a missed reaction is reported as not ok (the Mac then posts the text line)', async () => {
+    const b = boot({ send: () => ({ ok: true, sent: true, ui: { react: [{ emoji: '\u2705', uuid: UU, pendingId: 'bb22' }] } }),
+                     tab: () => ({ ok: false, step: 'no-react-button' }) });
+    await b.reply('Jordan: hi');
+    const ack = b.host.find(m => m.type === 'ui_ack');
+    assert.deepStrictEqual([ack.ok, ack.step], [false, 'no-react-button']);
+  });
+
+  await test('❓ prompt and 🤖 typed prompt are done and acked by note id', async () => {
+    const b = boot({ send: () => ({ ok: false, needsConfirm: true, handle: '+15555550123', label: 'Jordan', reason: 'guessed',
+                                    ui: { react: [{ emoji: '\u2753', uuid: UU, noteId: 'cc33' }], type: [{ text: '\u{1F916} Who\u2019s this for?', noteId: 'dd44' }] } }) });
+    await b.reply('see you soon');
+    const acts = b.tabMsgs.map(x => x.m.action + ':' + (x.m.emoji || x.m.text));
+    assert.deepStrictEqual(acts, ['react:\u2753', 'type:\u{1F916} Who\u2019s this for?']);
+    assert.strictEqual(b.tabMsgs[0].m.prompt, true);
+    assert.deepStrictEqual(b.host.filter(m => m.type === 'ui_ack').map(m => m.noteId), ['cc33', 'dd44']);
+  });
+
+  await test('the relay\'s own 🤖 text is never sent', async () => {
+    const b = boot({ send: () => { throw new Error('must not send'); } });
+    await b.reply('\u{1F916} Who\u2019s this for? Start with a name');
+    assert.ok(!b.host.some(m => m.type === 'send'));
+  });
+
+  await test('untagged "type" directives are refused by the background too', async () => {
+    const b = boot({ send: () => ({ ok: false, needsTarget: true, ui: { type: [{ text: 'Jordan: hi', noteId: 'ee55' }] } }) });
+    await b.reply('hello there');
+    assert.ok(!b.tabMsgs.some(x => x.m.action === 'type'));
+    assert.strictEqual(b.host.find(m => m.type === 'ui_ack').ok, false);
+  });
+
+  await test('undo window: 🗑️ within it cancels; nothing reaches the host', async () => {
+    const b = boot({ undo: 1, send: () => { throw new Error('must not send'); }, tab: m => (m.action === 'await-undo' ? { trashed: true } : { ok: true }) });
+    await b.reply('Jordan: oops', 200);
+    assert.ok(!b.host.some(m => m.type === 'send'));
+    assert.strictEqual(b.tabMsgs[0].m.ms, 1000);
+    assert.ok(b.host.some(m => m.type === 'signal' && m.status === 'undo_cancelled'));
+  });
+
+  await test('undo window: no 🗑️ -> sent; commands skip the window', async () => {
+    const b = boot({ undo: 2, send: () => ({ ok: true, sent: true }), tab: m => (m.action === 'await-undo' ? { trashed: false } : { ok: true }) });
+    await b.reply('Jordan: fine', 200);
+    assert.strictEqual(b.host.filter(m => m.type === 'send').length, 1);
+    const n = b.tabMsgs.length;
+    await b.reply('/who', 200);
+    assert.strictEqual(b.tabMsgs.length, n, 'no undo wait for a command');
+  });
+
+  await test('tick polls the host and performs queued reactions (ids only)', async () => {
+    const b = boot({ send: () => ({ ok: true }), poll: () => ({ ok: true, actions: [{ id: 'ff66', action: 'react', uuid: UU, emoji: '\u{1F440}' }] }) });
+    await b.fire('relay-ui-tick', undefined, 200);
+    const t = b.tabMsgs.find(x => x.m.action === 'react');
+    assert.strictEqual(t.m.emoji, '\u{1F440}');
+    const ack = b.host.find(m => m.type === 'ui_ack');
+    assert.deepStrictEqual([ack.actionId, ack.ok], ['ff66', true]);
+  });
+
+  console.log(`${passed} passed, ${failed} failed (v1.4.6 background UI flow)`);
+  process.exit(failed ? 1 : 0);
+})();
+@@@@ END
+@@@@ FILE tests/js/cards.test.js mode=644 sha256=0665356fb2b6edca094116f60361da27a2ffd9123ea74f1800d0125450aa18b0 nl=1
+/* v1.4.6: a shared X post / link card in HIS bubble is not a reply quote; its canonical URL goes out as the
+ * iMessage text after anything he typed. The fixture follows the real X Chat card markup recorded by the
+ * text-free quote_probe on 2026-10-19 (row div > aria-hidden labels > role=group card [data-side > a[href,
+ * target] > thumbnail img[srcset]] + role=article [message-text > spans + time/status chips]).
+ * Fictional names only. */
+'use strict';
+const assert = require('assert');
+const { JSDOM } = require('jsdom');
+const { createRelayDetector } = require('../../extension/content.js');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+const POST = 'https://x.com/ExampleNews/status/1850000000000000001';
+
+// The real structure (probe fingerprint), with fictional text. `typed` null = no message-text element.
+function cardMsg(doc, n, { typed = 'Jordan:', href = '/ExampleNews/status/1850000000000000001/photo/1', thumb = true } = {}) {
+  const u = uuid(n);
+  const row = doc.createElement('div');
+  row.setAttribute('data-testid', 'message-' + u);
+  row.setAttribute('data-dm-message-row', '');
+  row.setAttribute('data-send-status', 'sent');
+  row.innerHTML = `
+    <div aria-hidden="true"><span hidden id="l1-${n}">You</span><span hidden id="l2-${n}">Shared a post</span><span hidden id="l3-${n}">Sent</span></div>
+    <div data-fake-rect="780,0,200,120" data-testid="bubble-sent">
+      <div></div>
+      <div>
+        <div role="group" tabindex="0" data-dm-message-focus-target="" aria-labelledby="l1-${n}">
+          <div data-side="right"><div>
+            <a href="${href}" target="_blank"><div>
+              <div>${thumb ? '<img draggable="false" alt="Image" decoding="async" loading="lazy" sizes="200px" srcset="https://pbs.twimg.com/media/EXAMPLE?format=jpg 1x" src="https://pbs.twimg.com/media/EXAMPLE?format=jpg&name=small">' : ''}</div>
+              <div><div id="c-${n}">Example News</div><div>@ExampleNews</div><div>City council approves the new park plan</div></div>
+            </div><div><div>x.com</div><div>Oct 19</div></div></a>
+          </div></div>
+        </div>
+        ${typed === null ? '' : `<div role="article" tabindex="0" data-dm-message-focus-target="" aria-labelledby="l1-${n}" aria-describedby="l3-${n}">
+          <div data-testid="message-text-${u}" id="t-${n}"><div><span><span dir="auto"><span>${typed}</span></span>
+            <span aria-hidden="true"><div><span>3:11 PM</span><svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg></div></span></span>
+            <div><div><span>3:11 PM</span><svg aria-hidden="true"><path d="M0"></path></svg></div></div></div>
+          </div>
+        </div>`}
+      </div>
+    </div>`;
+  doc.querySelector('[data-testid="dm-conversation-panel"]').appendChild(row);
+  return row;
+}
+function plain(doc, n, text) {
+  const e = doc.createElement('div');
+  e.setAttribute('data-testid', 'message-' + uuid(n));
+  e.innerHTML = `<div data-fake-rect="780,0,200,40" data-testid="bubble-sent"><span data-testid="message-text-${uuid(n)}">${text}</span></div>`;
+  doc.querySelector('[data-testid="dm-conversation-panel"]').appendChild(e);
+}
+async function setup() {
+  const dom = new JSDOM('<html><body><div data-testid="dm-conversation-panel"></div></body></html>', { url: 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
+  const { window } = dom;
+  window.Element.prototype.getBoundingClientRect = function () {
+    const v = this.getAttribute('data-fake-rect');
+    if (!v) return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    const [l, t, w, h] = v.split(',').map(Number);
+    return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
+  };
+  const logs = [];
+  plain(window.document, 900, 'older history');
+  const det = createRelayDetector({ window, document: window.document, config: FAST, getState: () => ({ paused: false, conversationFilter: '' }),
+    onEmit: i => logs.push(i), onStatus: () => {}, log: () => {}, onReaction: () => {}, seen: { has: () => false, add: () => {} } });
+  det.start();
+  await sleep(200);
+  return { doc: window.document, det, logs };
+}
+
+(async () => {
+  await test('"Jordan:" + a shared post card -> the post URL to Jordan; not a quote; no photo', async () => {
+    const s = await setup();
+    cardMsg(s.doc, 1);
+    await sleep(300);
+    const it = s.logs.find(l => l.key && l.key.endsWith(uuid(1)));
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.direction, 'outbound');
+    assert.strictEqual(it.text, 'Jordan: ' + POST);
+    assert.ok(!it.quotedText, 'the card is not a native quote: ' + it.quotedText);
+    assert.strictEqual(it.cards, 1);
+    assert.ok(!it.mediaCount, 'the card thumbnail is not his photo');
+  });
+
+  await test('a card shared with no text of his own -> just the URL', async () => {
+    const s = await setup();
+    cardMsg(s.doc, 2, { typed: null });
+    await sleep(400);
+    const it = s.logs.find(l => l.key && l.key.endsWith(uuid(2)));
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.text, POST);
+  });
+
+  await test('a link card -> its URL, on its own line after longer text', async () => {
+    const s = await setup();
+    cardMsg(s.doc, 3, { typed: 'Sam: this is the article about the new bike lanes downtown', href: 'https://example.com/news/bike-lanes?ref=x', thumb: false });
+    await sleep(300);
+    const it = s.logs.find(l => l.key && l.key.endsWith(uuid(3)));
+    assert.strictEqual(it.text, 'Sam: this is the article about the new bike lanes downtown\nhttps://example.com/news/bike-lanes?ref=x');
+  });
+
+  await test('a URL he typed himself is not added twice', async () => {
+    const s = await setup();
+    cardMsg(s.doc, 4, { typed: 'Alex: ' + POST });
+    await sleep(300);
+    const it = s.logs.find(l => l.key && l.key.endsWith(uuid(4)));
+    assert.strictEqual(it.text, 'Alex: ' + POST);
+  });
+
+  await test('canonical URLs', async () => {
+    const s = await setup();
+    const c = s.det._canonicalCardUrl;
+    assert.strictEqual(c('/ExampleNews/status/1850000000000000001/photo/1'), POST);
+    assert.strictEqual(c('https://twitter.com/ExampleNews/status/1850000000000000001?s=20'), POST);
+    assert.strictEqual(c('https://mobile.x.com/ExampleNews/statuses/1850000000000000001'), POST);
+    assert.strictEqual(c('/ExampleNews'), '', 'a profile link is not a card');
+    assert.strictEqual(c('https://x.com/i/chat/111-222'), '');
+    assert.strictEqual(c('javascript:alert(1)'), '');
+    assert.strictEqual(c('https://t.co/abc123'), 'https://t.co/abc123');
+  });
+
+  console.log(`${passed} passed, ${failed} failed (v1.4.6 shared post / link cards)`);
+  process.exit(failed ? 1 : 0);
+})();
 @@@@ END
 @@@@ FILE tests/js/chips.test.js mode=644 sha256=aecce5f677ea626f3cf20ece930227049f908d42a64b9884f4de35eb3f2ac764 nl=1
 /* v1.3.9: X Chat time/status chips rendered as plain spans inside message-text-<uuid> must never
@@ -9664,6 +12201,190 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
+@@@@ FILE tests/js/media.test.js mode=644 sha256=f9e7b0ac3fc7e072dd0f8e494ddc186874c19991da7c29c40d2661f79068afc6 nl=1
+/* v1.4.6: his photos in X Chat go out as iMessage attachments. content.js finds images in HIS outbound
+ * bubble only (not emoji, not the quoted message) and reads them in 512 KiB chunks; background.js streams
+ * them to the Mac (attach_chunk), sends metadata only with the reply, and keeps them for a "yes".
+ * Fictional names only. */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+const vm = require('vm');
+const nodeCrypto = require('crypto');
+const { JSDOM } = require('jsdom');
+const { createRelayDetector } = require('../../extension/content.js');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+
+function setup() {
+  const dom = new JSDOM('<html><body><div data-testid="dm-conversation-panel"></div></body></html>', { url: 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
+  const { window } = dom;
+  window.Element.prototype.getBoundingClientRect = function () {
+    const v = this.getAttribute('data-fake-rect');
+    if (!v) return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    const [l, t, w, h] = v.split(',').map(Number);
+    return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
+  };
+  const logs = [];
+  out(window.document, 900, 'older history');      // already on the page at start: baselined, never sent
+  const det = createRelayDetector({ window, document: window.document, config: FAST, getState: () => ({ paused: false, conversationFilter: '' }),
+    onEmit: i => logs.push(i), onStatus: () => {}, log: () => {}, onReaction: () => {}, seen: { has: () => false, add: () => {} } });
+  det.start();
+  return { window, doc: window.document, det, logs };
+}
+function out(doc, n, text, imgs) {
+  const e = doc.createElement('div');
+  e.setAttribute('data-testid', 'message-' + uuid(n));
+  const b = doc.createElement('div');
+  b.setAttribute('data-fake-rect', '780,0,200,40');
+  b.setAttribute('data-testid', 'bubble-sent');
+  for (const html of imgs || []) b.insertAdjacentHTML('beforeend', html);
+  if (text) { const s = doc.createElement('span'); s.setAttribute('data-testid', 'message-text-' + uuid(n)); s.textContent = text; b.appendChild(s); }
+  e.appendChild(b);
+  doc.querySelector('[data-testid="dm-conversation-panel"]').appendChild(e);
+  return e;
+}
+
+function bootBg(opts) {
+  const EXT = path.join(__dirname, '../../extension');
+  const MANIFEST = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
+  const bag = {}, sess = {}, listeners = [], host = [], tabMsgs = [];
+  const mk = b => ({ async get(k) { const ks = k == null ? Object.keys(b) : (typeof k === 'string' ? [k] : k); const o = {}; ks.forEach(x => { if (x in b) o[x] = JSON.parse(JSON.stringify(b[x])); }); return o; },
+                     async set(o) { Object.assign(b, o); }, async remove(k) { delete b[k]; } });
+  const chrome = {
+    runtime: { id: 'ext', getManifest: () => MANIFEST, onMessage: { addListener: f => listeners.push(f) }, onInstalled: { addListener() {} }, onStartup: { addListener() {} },
+      sendNativeMessage: async (h, m) => {
+        host.push(JSON.parse(JSON.stringify(m)));
+        if (m.type === 'get_config') return { ok: true, paused: false, dryRun: false, relayConversationId: '111-222', contacts: [{ name: 'Jordan', handle: '15555550123' }], uiReactions: true, undoSeconds: 0, relayAttachments: opts.off ? false : true };
+        if (m.type === 'send') return opts.send(m);
+        if (m.type === 'attach_chunk') return { ok: true };
+        return { ok: true, actions: [] };
+      } },
+    storage: { local: mk(bag), session: mk(sess), onChanged: { addListener() {} } },
+    tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} }, query: async () => [],
+            sendMessage: async (tabId, m) => { tabMsgs.push(JSON.parse(JSON.stringify(m))); return opts.tab(m); } },
+    alarms: { create() {}, clear() {}, onAlarm: { addListener() {} } },
+    action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(EXT, 'background.js'), 'utf8'),
+    { chrome, console: { log() {}, warn() {} }, setTimeout, clearTimeout, crypto: nodeCrypto.webcrypto, Uint8Array });
+  let k = 0;
+  const reply = (text, extra, wait) => new Promise(r => {
+    const item = Object.assign({ ts: new Date().toISOString(), conversationId: '111-222', direction: 'outbound', text, key: '111-222|id:uuid=' + uuid(++k), score: 9 }, extra);
+    listeners.forEach(f => f({ type: 'relay-log', item }, { id: 'ext', tab: { id: 7 }, frameId: 0 }, () => {}));
+    setTimeout(r, wait || 150);
+  });
+  return { host, tabMsgs, reply };
+}
+const SHA = 'ab'.repeat(32);
+const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: 'image/jpeg', sha256: SHA, name: 'photo.jpg', chunks: 2 }
+  : m.action === 'media-chunk' ? { ok: true, data: 'QUJD' } : { ok: true, step: 'placed' };
+
+(async () => {
+  await test('content: only real images in HIS bubble count (emoji images are skipped)', async () => {
+    const s = setup();
+    await sleep(200);
+    out(s.doc, 1, 'look', ['<img src="blob:https://x.com/1111" width="300">', '<img src="https://abs-0.twimg.com/emoji/v2/svg/1f600.svg" alt="\u{1F600}">']);
+    await sleep(250);
+    const it = s.logs.find(l => l.text === 'look');
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.mediaCount, 1);
+    assert.ok(!JSON.stringify(it).includes('blob:'), 'no source URL leaves the tab');
+  });
+
+  await test('content: a photo-only bubble is emitted with empty text', async () => {
+    const s = setup();
+    await sleep(200);
+    out(s.doc, 2, '', ['<img src="blob:https://x.com/2222" width="300">']);
+    await sleep(250);
+    const it = s.logs.find(l => l.mediaCount === 1);
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.text, '');
+  });
+
+  await test('content: bytes are read in-page, hashed, chunked, then released', async () => {
+    const s = setup();
+    await sleep(200);
+    out(s.doc, 3, 'pic', ['<img src="blob:https://x.com/3333" width="300">']);
+    await sleep(250);
+    const bytes = new Uint8Array(600 * 1024); bytes[0] = 0xff; bytes[1] = 0xd8; bytes[2] = 0xff; bytes[700] = 7;
+    s.window.fetch = async (src) => { assert.strictEqual(src, 'blob:https://x.com/3333'); return { ok: true, headers: { get: () => null }, arrayBuffer: async () => bytes.buffer }; };
+    const info = await s.det.uiMediaInfo(uuid(3), 0);
+    assert.deepStrictEqual([info.ok, info.size, info.mime, info.chunks, info.name], [true, bytes.length, 'image/jpeg', 2, 'photo.jpg']);
+    assert.strictEqual(info.sha256, nodeCrypto.createHash('sha256').update(bytes).digest('hex'));
+    const c0 = Buffer.from(s.det.uiMediaChunk(uuid(3), 0, 0).data, 'base64');
+    const c1 = Buffer.from(s.det.uiMediaChunk(uuid(3), 0, 1).data, 'base64');
+    assert.strictEqual(c0.length, 512 * 1024);
+    assert.ok(Buffer.concat([c0, c1]).equals(Buffer.from(bytes)));
+    s.det.uiMediaRelease(uuid(3));
+    assert.strictEqual(s.det.uiMediaChunk(uuid(3), 0, 0).step, 'expired');
+  });
+
+  await test('content: over 25 MB is refused before reading', async () => {
+    const s = setup();
+    await sleep(200);
+    out(s.doc, 4, 'big', ['<img src="blob:https://x.com/4444" width="300">']);
+    await sleep(250);
+    s.window.fetch = async () => ({ ok: true, headers: { get: h => h === 'content-length' ? String(30 * 1024 * 1024) : null }, arrayBuffer: async () => { throw new Error('read'); } });
+    const info = await s.det.uiMediaInfo(uuid(4), 0);
+    assert.deepStrictEqual([info.ok, info.step], [false, 'too-large']);
+  });
+
+  await test('background: chunks stream in order, the reply carries metadata only', async () => {
+    const b = bootBg({ tab: tabOk, send: () => ({ ok: true, sent: true }) });
+    await b.reply('Jordan: look', { mediaCount: 1 });
+    const chunks = b.host.filter(m => m.type === 'attach_chunk');
+    assert.deepStrictEqual(chunks.map(c => c.seq), [0, 1]);
+    assert.ok(/^[0-9a-f]{32}$/.test(chunks[0].uploadId));
+    const send = b.host.find(m => m.type === 'send');
+    assert.deepStrictEqual(send.attachments, [{ uploadId: chunks[0].uploadId, size: 700000, sha256: SHA, mime: 'image/jpeg', name: 'photo.jpg' }]);
+    assert.ok(b.host.indexOf(send) > b.host.indexOf(chunks[1]), 'bytes first, then the send');
+    assert.ok(b.tabMsgs.some(m => m.action === 'media-release'));
+  });
+
+  await test('background: an unreadable photo is reported as skipped, never silently dropped', async () => {
+    const b = bootBg({ tab: m => m.action === 'media-info' ? { ok: false, step: 'too-large' } : { ok: true }, send: () => ({ ok: false, error: 'attachments could not be read' }) });
+    await b.reply('', { mediaCount: 1 });
+    const send = b.host.find(m => m.type === 'send');
+    assert.strictEqual(send.attachmentsSkipped, 1);
+    assert.ok(!send.attachments);
+    assert.strictEqual(b.host.filter(m => m.type === 'attach_chunk').length, 0);
+  });
+
+  await test('background: attachments off -> nothing is read, the host is told', async () => {
+    const b = bootBg({ off: true, tab: tabOk, send: () => ({ ok: true, sent: true }) });
+    await b.reply('Jordan: look', { mediaCount: 2 });
+    assert.strictEqual(b.tabMsgs.filter(m => /^media-/.test(m.action)).length, 0);
+    assert.strictEqual(b.host.find(m => m.type === 'send').attachmentsSkipped, 2);
+  });
+
+  await test('background: a confirm keeps the uploads for "yes"; "no" discards them', async () => {
+    let n = 0;
+    const b = bootBg({ tab: tabOk, send: m => (++n === 1 ? { ok: false, needsConfirm: true, handle: '+15555550123', label: 'Jordan', reason: 'guessed' } : { ok: true, sent: true }) });
+    await b.reply('see this', { mediaCount: 1 });
+    const first = b.host.find(m => m.type === 'send');
+    await b.reply('yes');
+    const sends = b.host.filter(m => m.type === 'send');
+    assert.strictEqual(sends.length, 2);
+    assert.strictEqual(sends[1].confirmed, true);
+    assert.deepStrictEqual(sends[1].attachments, first.attachments);
+    n = 0;
+    await b.reply('look again', { mediaCount: 1 });
+    await b.reply('no');
+    assert.strictEqual(b.host.filter(m => m.type === 'attach_discard').length, 1);
+  });
+
+  console.log(`${passed} passed, ${failed} failed (v1.4.6 attachments)`);
+  process.exit(failed ? 1 : 0);
+})();
+@@@@ END
 @@@@ FILE tests/js/native.test.js mode=644 sha256=d986dfb274466d0ee38bd3e3cb25ba36d5ce4608c951482c5d259f69c473fef9 nl=1
 /* Background (service worker) tests: config from the host (get_config), reply gating,
  * handle normalization, popup status, self-test relay, and "no bodies in storage". Run:
@@ -10414,7 +13135,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=0917e4636da65617456fab7c151d163420dbb943336d97925c34de59121d13b8 nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=1b56ea66b56b1deaef6b93e7a336473ef40c18c3920e7e10ab7ecd8e33a7b8e9 nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -10469,7 +13190,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.5');
+  assert.strictEqual(m.version, '1.4.6');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -10500,7 +13221,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/js/trash.test.js mode=644 sha256=54e2865dbb809a13e26d0f352d1778b80a686efc989e3c0e35732c94ca896da3 nl=1
+@@@@ FILE tests/js/trash.test.js mode=644 sha256=607f18f300dae2b489ed2f47847511ee5ec003dc62e9753593646a22d83aa5e2 nl=1
 /* v1.4.5: a wastebasket reaction on a relayed message asks the Mac "Block <sender>?" (content.js + background.js).
  *   NODE_PATH=/path/to/node_modules node tests/js/trash.test.js
  */
@@ -10649,12 +13370,288 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
     await fire({ word: 'block', quotedText: 'Sam: buy now', conversationId: '999-000', key: 'trash:b' });   // other chat
     await fire({ word: 'block', quotedText: '', conversationId: '111-222', key: 'trash:c' });
     const r = host.filter(m => m.type === 'reaction');
-    assert.deepStrictEqual(JSON.parse(JSON.stringify(r)), [{ type: 'reaction', word: 'block', quotedText: 'Sam: buy now', conversationId: '111-222' }]);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(r)), [{ type: 'reaction', word: 'block', quotedText: 'Sam: buy now', conversationId: '111-222', ui: true }]);   // v1.4.6: + boolean ui flag
     assert.ok(!host.some(m => m.type === 'send'), 'never a send');
     assert.ok(!JSON.stringify(bag).includes('buy now'), 'not stored');
   });
 
   console.log(`${passed} passed, ${failed} failed (v1.4.5 wastebasket)`);
+  process.exit(failed ? 1 : 0);
+})();
+@@@@ END
+@@@@ FILE tests/js/ui.test.js mode=644 sha256=c0821914372586a6899b69c3f6e7f9475ef8686b697334b441d1de9acfdc3c27 nl=1
+/* v1.4.6: the UI engine (reactions on the owner's own messages, typed 🤖 prompts, undo), on a fake X Chat UI. Run:
+ *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+const { JSDOM } = require('jsdom');
+const { CONFIG, createRelayDetector } = require('../../extension/content.js');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+
+function setup(html, url, opts = {}) {
+  const dom = new JSDOM(html || fixture, { url: url || 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
+  const { window } = dom;
+  window.Element.prototype.getBoundingClientRect = function () {
+    const v = this.getAttribute('data-fake-rect');
+    if (!v) return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    const [l, t, w, h] = v.split(',').map(Number);
+    return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
+  };
+  const state = Object.assign({ paused: false, conversationFilter: '' }, opts.state);
+  const logs = [];
+  const reacts = [];
+  const statuses = [];
+  const seenSet = opts.seenSet || new Set();
+  const det = createRelayDetector({
+    window, document: window.document, config: Object.assign({}, FAST, opts.config), getState: () => state,
+    onEmit: i => logs.push(i), onStatus: s => statuses.push(s), log: () => {}, onReaction: r => reacts.push(r),
+    now: opts.now, ownerCheck: opts.ownerCheck,
+    seen: { has: u => seenSet.has(u), add: u => seenSet.add(u) },
+  });
+  det.start();
+  return { window, doc: window.document, det, logs, statuses, state, dom, seenSet, reacts };
+}
+
+// uuid helpers
+const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
+let msg = function (doc, n, dir, build, opts = {}) {
+  const e = doc.createElement('div');
+  e.setAttribute('data-testid', 'message-' + uuid(n));
+  e.style.display = 'flex';
+  e.style.justifyContent = dir === 'out' ? 'flex-end' : 'flex-start';
+  const left = dir === 'out' ? 780 : 420;
+  const b = doc.createElement('div');
+  b.setAttribute('data-fake-rect', `${left},0,200,40`);
+  if (dir === 'in') b.innerHTML = '<a href="/SenderBot"><img alt="SenderBot"></a>';
+  const span = doc.createElement('span');
+  span.setAttribute('data-testid', 'message-text-' + uuid(n));
+  if (typeof build === 'function') build(span, doc); else span.textContent = build;
+  b.appendChild(span);
+  if (opts.time) { const t = doc.createElement('time'); t.setAttribute('datetime', opts.time); t.textContent = 't'; b.appendChild(t); }
+  e.appendChild(b);
+  return e;
+};
+const panel = doc => doc.querySelector('[data-testid="dm-conversation-panel"]');
+const fixture = '<html><body><div data-testid="dm-conversation-panel"></div></body></html>';
+const PROMPT = '\u2753 Reply to Sam? Reply yes within 2 min.';
+function react(doc, entry, emoji) {
+  const pill = doc.createElement('div');
+  pill.setAttribute('data-testid', 'reactions');
+  const s = doc.createElement('span'); s.textContent = emoji; pill.appendChild(s);
+  entry.appendChild(pill);
+  return pill;
+}
+const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
+
+
+const msgBase = msg;
+// outbound bubbles carry a "sent" testid token (as real X markup has strong outbound signals)
+msg = function (doc, n, dir, build, opts) { const e = msgBase(doc, n, dir, build, opts); if (dir === 'out') e.firstChild.setAttribute('data-testid', 'bubble-sent'); return e; };
+const CHECK = '\u2705', QM = '\u2753', ROBOT = '\u{1F916}';
+// A fake X Chat UI: hovering a bubble shows an action bar; "React" opens a picker; picking an emoji adds a
+// reaction pill. Dangerous buttons record clicks so a test can prove they were never touched.
+function fakeUi(doc, opts = {}) {
+  const clicks = [];
+  const W = doc.defaultView;
+  doc.addEventListener('mouseover', ev => {
+    const e = ev.target.closest && ev.target.closest('[data-testid^="message-"]');
+    if (!e || e.getAttribute('data-testid').startsWith('message-text-') || e.querySelector('.bar')) return;
+    const bar = doc.createElement('div'); bar.className = 'bar';
+    const mk = (label, fn) => { const b = doc.createElement('button'); b.setAttribute('aria-label', label); b.addEventListener('click', () => { clicks.push(label); fn && fn(); }); bar.appendChild(b); return b; };
+    mk('Reply'); mk('Delete'); mk('More');
+    if (!opts.noReact) mk(opts.reactLabel || 'React', () => openPicker(e));
+    e.appendChild(bar);
+  }, true);
+  function openPicker(entry) {
+    const p = doc.createElement('div'); p.setAttribute('role', 'dialog'); p.className = 'picker';
+    const opt = em => { const b = doc.createElement('button'); b.textContent = em; b.addEventListener('click', () => { clicks.push('pick:' + em); p.remove(); if (!opts.noPlace) { const pill = doc.createElement('div'); pill.setAttribute('data-testid', 'reactions'); const s = doc.createElement('span'); s.textContent = em; pill.appendChild(s); entry.appendChild(pill); } }); p.appendChild(b); };
+    ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}'].forEach(opt);
+    if (!opts.searchOnly) opt(CHECK);
+    const inp = doc.createElement('input'); inp.setAttribute('type', 'search');
+    inp.addEventListener('input', () => { if (/check/.test(inp.value) && !p.querySelector('.found')) { opt(CHECK); p.lastChild.className = 'found'; } if (/question/.test(inp.value)) opt(QM); });
+    p.appendChild(inp);
+    doc.body.appendChild(p);
+  }
+  return { clicks };
+}
+function composer(doc, opts = {}) {
+  const wrap = doc.createElement('div');
+  const ta = doc.createElement('textarea'); ta.setAttribute('data-testid', 'dm-composer-textarea');
+  wrap.appendChild(ta);
+  let n = 900;
+  ta.addEventListener('input', () => {
+    let b = doc.querySelector('[data-testid="dm-composer-send-button"]');
+    if (ta.value && !b && !opts.noButton) {
+      b = doc.createElement('button'); b.setAttribute('data-testid', 'dm-composer-send-button');
+      b.addEventListener('click', () => { const v = ta.value; ta.value = ''; b.remove(); if (!opts.swallow) panel(doc).appendChild(msg(doc, ++n, 'out', v)); });
+      wrap.appendChild(b);
+    }
+  });
+  doc.body.appendChild(wrap);
+  return ta;
+}
+
+(async () => {
+  await test('✅ lands on the owner\'s own message via the React control; nothing else is clicked', async () => {
+    const { doc, det, reacts, logs } = setup();
+    const ui = fakeUi(doc);
+    await sleep(200);
+    const e = msg(doc, 1, 'out', 'on my way'); panel(doc).appendChild(e);
+    await sleep(300);
+    const r = await det.uiReact(uuid(1), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.step, 'placed');
+    assert.deepStrictEqual(ui.clicks, ['React', 'pick:' + CHECK]);
+    await sleep(300);
+    assert.strictEqual(reacts.length, 0, 'its own ✅ is never input');
+    assert.ok(logs.every(l => !String(l.text || '').includes(CHECK)), 'a reaction is never a message');
+  });
+
+  await test('search fallback finds ✅ when the quick row lacks it', async () => {
+    const { doc, det } = setup();
+    const ui = fakeUi(doc, { searchOnly: true });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 2, 'out', 'see you'));
+    await sleep(100);
+    const r = await det.uiReact(uuid(2), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.ok(ui.clicks.includes('pick:' + CHECK));
+  });
+
+  await test('no React control -> clean failure, nothing clicked, text-free vocabulary only', async () => {
+    const { doc, det } = setup();
+    const ui = fakeUi(doc, { noReact: true });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 3, 'out', 'private words here'));
+    await sleep(100);
+    const r = await det.uiReact(uuid(3), CHECK);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.step, 'no-react-button');
+    assert.deepStrictEqual(ui.clicks, []);
+    assert.ok(!JSON.stringify(r).includes('private'));
+    assert.ok(r.vocab.includes('delete') && r.vocab.includes('reply'));
+  });
+
+  await test('a label like "Remove reaction" or "More reactions" is never used', async () => {
+    const { doc, det } = setup();
+    const ui = fakeUi(doc, { reactLabel: 'Remove reaction' });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 4, 'out', 'hi'));
+    await sleep(100);
+    const r = await det.uiReact(uuid(4), CHECK);
+    assert.strictEqual(r.ok, false);
+    assert.deepStrictEqual(ui.clicks, []);
+  });
+
+  await test('never reacts on someone else\'s (inbound) message; already-reacted is a no-op', async () => {
+    const { doc, det } = setup();
+    const ui = fakeUi(doc);
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 5, 'in', 'Jordan: hello'));
+    const mine = msg(doc, 6, 'out', 'hey'); panel(doc).appendChild(mine);
+    react(doc, mine, CHECK);
+    await sleep(100);
+    assert.strictEqual((await det.uiReact(uuid(5), CHECK)).step, 'not-mine');
+    assert.strictEqual((await det.uiReact(uuid(6), CHECK)).step, 'already');
+    assert.strictEqual((await det.uiReact('bad', CHECK)).step, 'no-entry');
+    assert.deepStrictEqual(ui.clicks, []);
+  });
+
+  await test('picked but not placed -> failure (so the Mac posts the text line)', async () => {
+    const { doc, det } = setup();
+    fakeUi(doc, { noPlace: true });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 7, 'out', 'hey'));
+    await sleep(100);
+    const r = await det.uiReact(uuid(7), CHECK);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.step, 'not-placed');
+  });
+
+  await test('❓ on his message makes it a prompt: his new 👍 confirms once; ✅ afterwards ends it', async () => {
+    const { doc, det, reacts } = setup();
+    fakeUi(doc);
+    await sleep(200);
+    const e = msg(doc, 8, 'out', 'see you soon'); panel(doc).appendChild(e);
+    await sleep(100);
+    const r = await det.uiReact(uuid(8), QM, { prompt: true });
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    await sleep(200);
+    assert.strictEqual(reacts.length, 0, 'the ❓ itself is not an answer');
+    react(doc, e, '\u{1F44D}');
+    await sleep(250);
+    assert.deepStrictEqual(reacts.map(x => [x.word, x.key]), [['yes', 'reaction:' + uuid(8)]]);
+    // a later mirrored 👍 (their tapback) on the same message is never another "yes"
+    const e2 = msg(doc, 9, 'out', 'again'); panel(doc).appendChild(e2);
+    await sleep(100);
+    await det.uiReact(uuid(9), QM, { prompt: true });
+    await det.uiReact(uuid(9), CHECK);            // sent -> no longer a prompt
+    react(doc, e2, '\u{1F44D}');
+    await sleep(250);
+    assert.strictEqual(reacts.length, 1);
+  });
+
+  await test('typed prompt: only 🤖-tagged text, only into an empty composer, and never relayed', async () => {
+    const { doc, det, logs } = setup();
+    const ta = composer(doc);
+    await sleep(200);
+    const r = await det.uiType(ROBOT + ' Who\u2019s this for? Start with a name, like "Jordan: \u2026"');
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.step, 'sent');
+    await sleep(300);
+    assert.strictEqual(logs.length, 0, 'the relay never treats its own prompt as a reply');
+    assert.strictEqual((await det.uiType('Jordan: hi')).step, 'untagged');
+    ta.value = 'half-typed draft';
+    assert.strictEqual((await det.uiType(ROBOT + ' x')).step, 'composer-busy');
+    assert.strictEqual(ta.value, 'half-typed draft', 'his draft is untouched');
+  });
+
+  await test('typed prompt: no send button -> failure and the composer is cleared back', async () => {
+    const { doc, det } = setup();
+    const ta = composer(doc, { noButton: true });
+    await sleep(200);
+    const r = await det.uiType(ROBOT + ' Who\u2019s this for?');
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.step, 'no-send-button');
+    assert.strictEqual(ta.value, '');
+  });
+
+  await test('undo window: a 🗑️ on his own message is seen; none means go', async () => {
+    const { doc, det } = setup();
+    await sleep(200);
+    const e = msg(doc, 10, 'out', 'oops wrong person'); panel(doc).appendChild(e);
+    await sleep(100);
+    setTimeout(() => react(doc, e, '\u{1F5D1}\uFE0F'), 300);
+    const t0 = Date.now();
+    const r = await det.uiAwaitUndo(uuid(10), 3000);
+    assert.strictEqual(r.trashed, true);
+    assert.ok(Date.now() - t0 < 1500, 'stops as soon as it is seen');
+    const e2 = msg(doc, 11, 'out', 'fine'); panel(doc).appendChild(e2);
+    await sleep(100);
+    assert.strictEqual((await det.uiAwaitUndo(uuid(11), 400)).trashed, false);
+  });
+
+  await test('the 🗑️ on his own message is never treated as a block request', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const e = msg(doc, 12, 'out', 'oops'); panel(doc).appendChild(e);
+    await sleep(150);
+    react(doc, e, '\u{1F5D1}\uFE0F');
+    await sleep(250);
+    assert.strictEqual(reacts.length, 0);
+  });
+
+  console.log(`${passed} passed, ${failed} failed (v1.4.6 UI engine)`);
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
@@ -10792,7 +13789,7 @@ function xRow(doc, n, opts = {}) {
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/yes.test.js mode=644 sha256=7003b18eb80c237c83aa0e72a9939d9d176afa4253d2c787ffe771e889fccd99 nl=1
+@@@@ FILE tests/js/yes.test.js mode=644 sha256=9c6c607341249558c8f954ae8255ad3306b9c6c45e2f2c573ddd853cb6d30cda nl=1
 /* v1.4.1: a plain "yes"/"ok" confirms a pending reply prompt and "no"/"cancel" cancels it; neither is texted.
  * (Header kept from the v1.3.4 guess test harness.)
  * A guessed reply (host returns needsConfirm) is held in chrome.storage.session (never in local),
@@ -10895,7 +13892,8 @@ function relayLog(text) {
   await reactMsg('yes');
   const rc = hostCalls.filter(c => c.type === 'reaction');
   assert.strictEqual(rc.length, 1);
-  assert.deepStrictEqual(Object.keys(rc[0]).sort(), ['conversationId', 'type', 'word']);
+  assert.deepStrictEqual(Object.keys(rc[0]).sort(), ['conversationId', 'type', 'ui', 'word']);   // v1.4.6: + a boolean ui flag
+  assert.strictEqual(typeof rc[0].ui, 'boolean');
   // 8) a reaction from another conversation does nothing
   await reactMsg('yes', '999-000');
   assert.strictEqual(hostCalls.filter(c => c.type === 'reaction').length, 1);
@@ -10904,7 +13902,7 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/py/helpers.py mode=644 sha256=040f32a1fa0c5eebd399220f9e96bc56bc4041d6abf62768fbbe0bbcd35a5c0e nl=1
+@@@@ FILE tests/py/helpers.py mode=644 sha256=0f208310bfd5d5bc6c572b14d61baa95284213e0bf5eeb8e2eb542fbfc33ab00 nl=1
 """Shared test helpers: fresh module state per test, fakes, and a temp chat.db shaped like the real one."""
 import importlib
 import os
@@ -10939,6 +13937,11 @@ def fresh(tmp):
     m.setup = importlib.reload(relay_setup)      # v1.3.8 guided setup
     import relay_contacts
     m.contacts = importlib.reload(relay_contacts)  # v1.4.0 Contacts lookup
+    import relay_ui
+    m.ui = importlib.reload(relay_ui)             # v1.4.6 UI queue (paths follow IMESSAGE_RELAY_HOME)
+    os.environ['IMESSAGE_RELAY_SEND_STAGE'] = os.path.join(tmp, 'send-stage')
+    import relay_media
+    m.media = importlib.reload(relay_media)       # v1.4.6 attachments (outbox / inflight / send stage)
     m.host = importlib.reload(imessage_relay_host)
     m.watch = importlib.reload(imessage_relay_watch)
     m.ctl = importlib.reload(relayctl)
@@ -11274,7 +14277,7 @@ class RosterTolerance(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_host.py mode=644 sha256=65348c60abbc696fc741c5f5956dc47e151e478beb82f91fa91d8f63baa09333 nl=1
+@@@@ FILE tests/py/test_host.py mode=644 sha256=c230a11403fd00ed99b4f41a4dea0c37373182de5bf2af1faa5146e8af07a320 nl=1
 """Native host: framing, get_config, send gating (paused / relay chat / routing / normalization /
 rate limit), confirmations and "who is this for?" webhooks, dry run, -1712 retry, self-test, and
 an end-to-end run of the real script."""
@@ -11338,7 +14341,7 @@ class GetConfig(Base):
         r = self.h.handle_request({'type': 'get_config'}, cfg=self.cfg(ownerXHandle='OwnerAcct', senderXHandle='SenderBot',
                                                                         ownerXUserId='99887766', webhookToken='tok'), now=self.clock.now)
         self.assertEqual(r['ok'], True)
-        self.assertEqual(r['version'], '1.4.5')
+        self.assertEqual(r['version'], self.m.rc.VERSION)
         self.assertEqual((r['paused'], r['dryRun']), (False, True))
         self.assertEqual(r['contacts'], [{'name': 'Test Contact', 'label': 'Test', 'handle': '+15555550123'}])
         self.assertEqual(r['relayConversationId'], CONV)
@@ -11535,7 +14538,8 @@ class RoutingAndWebhooks(Base):
     def test_refusals_do_not_confirm(self):
         self.req(text='Mike: a', paused=True)
         self.req(text='Mike: ', dryRun=False)
-        self.assertEqual(self.posts, [])
+        # v1.4.6: no confirmation, but he is always told why it was not sent
+        self.assertEqual([(p['type'], p['reason']) for p in self.posts], [('refused', 'not_sent')] * 2)
         self.assertEqual(self.req(text='Mike:   ')['error'], 'empty text after the name prefix')
 
 
@@ -12413,7 +15417,7 @@ class BlockMute(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_relay_post.py mode=644 sha256=4dc04d0d4d355d1dc9fdd326e897d1c0488eebccb65db24b1be7e2a7ffa97a74 nl=1
+@@@@ FILE tests/py/test_relay_post.py mode=644 sha256=ea17ffc3990437c5a70679f289d154b6f32d0fc9da0376126934fc4941ac35f6 nl=1
 """Tests for the routine helper relay_post.py (bot-side): formatting per event type, id dedupe
 (ids only, no bodies on disk), and that message text is passed to xchat_lite on STDIN, never argv."""
 import json
@@ -12448,22 +15452,29 @@ class Formatting(unittest.TestCase):
         self.assertEqual(ln['text'], 'Family \u00b7 Sam: yo')
 
     def test_digest_header_and_per_person_grouping(self):
-        # item 7: a header line (no body/notify), then ONE line per person with their texts grouped.
+        # v1.4.6 (item 7): the overnight recap is ONE tidy post: a header, then each person once with their
+        # texts under them. It carries bodies, so it is a body line.
         ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [
             {'label': 'Alex', 'text': 'one'},
             {'id': 'x9', 'label': 'Sam', 'text': 'two', 'group': {'name': 'Crew'}},
             {'label': 'Alex', 'text': 'three'}]})
         self.assertEqual(ev['kind'], 'digest')
-        self.assertEqual([l['text'] for l in ev['lines']],
-                         ['\U0001f4ec 3 messages while you were away from 2 people.',
-                          'Alex: one\n\u2002three', 'Crew \u00b7 Sam: two'])
-        self.assertEqual([l['id'] for l in ev['lines']], ['d:header', 'digest:d#0+d#2', 'digest:x9'])
-        self.assertFalse(ev['lines'][0]['body'])          # header is a status line: should_notify false
-        self.assertTrue(ev['lines'][1]['body'] and ev['lines'][2]['body'])
+        self.assertEqual(len(ev['lines']), 1)
+        self.assertEqual(ev['lines'][0]['text'],
+                         '\U0001f319 Overnight: 3 messages from 2 people\n\n'
+                         'Alex:\n\u2002\u2022 one\n\u2002\u2022 three\n\n'
+                         'Crew \u00b7 Sam:\n\u2002\u2022 two')
+        self.assertEqual(ev['lines'][0]['id'], 'digest:d')
+        self.assertTrue(ev['lines'][0]['body'])
 
     def test_digest_single_message_header(self):
         ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [{'label': 'Alex', 'text': 'hi'}]})
-        self.assertEqual(ev['lines'][0]['text'], '\U0001f4ec 1 message while you were away.')
+        self.assertTrue(ev['lines'][0]['text'].startswith('\U0001f319 Overnight: 1 message\n\n'))
+
+    def test_digest_is_capped(self):
+        ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [{'label': 'Alex', 'text': 'x' * 3000}] * 5})
+        self.assertLessEqual(len(ev['lines'][0]['text']), rp.DIGEST_MAX_CHARS)
+        self.assertTrue(ev['lines'][0]['text'].endswith('(more in Messages)'))
 
     def test_sent_and_dry_run(self):
         # item 6: delivered -> double check, otherwise the ~20s "sent" fallback.
@@ -14732,7 +17743,7 @@ class TapbackLastSenderW(_WatchBase):
         self.assertEqual(after.get(self.ALLOWED), before_at.get(self.ALLOWED),
                          'a tapback must not advance the last-inbound time')
 @@@@ END
-@@@@ FILE tests/py/test_v138.py mode=644 sha256=d3681b898414257ca8415231fd3a23bf246a6daf15f40d6575fb70417565c65e nl=1
+@@@@ FILE tests/py/test_v138.py mode=644 sha256=d8da7c3478f6d1999f8e8313c739f69e7f08619cae85ca314b6c1489a4dcf505 nl=1
 """v1.3.8: the /test end-to-end check (host, watcher probe, relay_post rendering, never texts a
 contact, every step time-boxed) and the guided setup helpers (owner-handle detection from chat.db,
 relayctl setup / test-result, relay-all pending until the owner's handles are known)."""
@@ -14986,6 +17997,8 @@ class RelayPostTest(unittest.TestCase):
             golden = json.load(fh)
         self.assertGreaterEqual(len(golden), 30)
         for g in golden:
+            if g['payload'].get('type') == 'digest':
+                continue        # v1.4.6: the overnight recap is now ONE post (test_relay_post covers it)
             if 'error' in g:
                 with self.assertRaises(ValueError):
                     rp.format_event(g['payload'])
@@ -16220,7 +19233,7 @@ class Safety(Base):
         self.assertEqual(self.osa(), [])
         self.assertFalse(r.get('ok'), r)
 @@@@ END
-@@@@ FILE tests/py/test_v145.py mode=644 sha256=498062e1abc35901241070b25250e3660b5fbb53af3c0b807afeb463658c7e09 nl=1
+@@@@ FILE tests/py/test_v145.py mode=644 sha256=a537610fe0f6fa8838c9fd50fdf69137899f20ef72c210c9021a3f17b0747b22 nl=1
 """v1.4.5: replies to a group (exact group name or a quote of its message, always confirmed, relay-all
 only, delivery proven in the group chat), the wastebasket-to-block flow, and the spamMode tag."""
 import json
@@ -16443,6 +19456,7 @@ class Spam(test_watch.Base):
     def setUp(self):
         super().setUp()
         self.cfg['relayAll'] = True
+        self.cfg['spamMode'] = 'tag'      # v1.4.6: these are the v1.4.5 'tag' rules (follow-messages: test_v146)
         con = sqlite3.connect(self.db.path)
         con.execute('ALTER TABLE chat ADD COLUMN is_filtered INTEGER DEFAULT 0')
         con.execute('ALTER TABLE message ADD COLUMN is_spam INTEGER DEFAULT 0')
@@ -16556,7 +19570,1028 @@ class Batching(test_watch.Base):
                          ['Test: one', '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: two'])
 
 
-del test_watch.Base   # not a test case of this module
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
+@@@@ FILE tests/py/test_v146.py mode=644 sha256=a298b96a733d94c89c134efeab29465dca26b22ea8992b2c4c5f0bdd2e98d42b nl=1
+"""v1.4.6: fast feedback in the owner's X tab (✅ / ❓ / 🤖 prompts / 👀 / mirrored tapbacks), the relay
+ignoring its own output, undo, quiet names (+ quote routing), follow-messages spam mode, STOP-footer
+cleanup, the one-post overnight recap. Fictional names only."""
+import json
+import os
+import sqlite3
+import sys
+import time
+import unittest
+
+from helpers import fresh, tmpdir, FakeClock, FakeRunner, ChatDb, MAC
+import test_watch
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'routine'))
+import relay_post as rp  # noqa: E402
+
+CONV = '1111-2222'
+XU = 'df48633d-6588-4b18-bc77-000000000001'
+ALLOWED = test_watch.ALLOWED
+STRANGER = '+15555550166'
+SAM = '+15555550150'
+CHECK, EYES, QMARK, ROBOT = '\u2705', '\U0001f440', '\u2753', '\U0001f916'
+
+
+class HostBase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tmpdir()
+        self.m = fresh(self.tmp)
+        self.h = self.m.host
+        self.clock = FakeClock()
+        self.raw = {'dryRun': False, 'relayConversationId': CONV, 'webhookUrl': 'https://example.invalid/hook',
+                    'contacts': [{'name': 'Jordan Test', 'handle': '15555550123'}],
+                    'ownerHandle': '+15555550199', 'confirmSends': True}
+        self.posts = []
+        self.m.rc.record_inbound('+15555550123', self.clock.t - 60)
+
+    def cfg(self, **over):
+        return self.m.rc.sanitize_config(dict(self.raw, **over))
+
+    def poster(self, url, payload, token='', timeout=15):
+        self.posts.append(json.loads(json.dumps(payload)))
+        return True
+
+    def req(self, msg, runner=None, **over):
+        base = {'conversationId': CONV, 'ts': '2026-10-18T21:32:00Z'}
+        base.update(msg)
+        return self.h.handle_request(base, cfg=self.cfg(**over), runner=runner or FakeRunner([(0, '')]),
+                                     sleeper=self.clock.sleep, now=self.clock.now, poster=self.poster)
+
+    def retry_files(self):
+        d = self.h.NOTIFY_RETRY_DIR
+        return [self.m.rc.read_json(os.path.join(d, n)) for n in sorted(os.listdir(d))] if os.path.isdir(d) else []
+
+
+class HostConfirm(HostBase):
+    def test_sent_reply_gets_a_check_reaction_directive_and_a_ui_pending(self):
+        r = self.req({'type': 'send', 'text': 'Jordan: on my way', 'ui': True, 'xUuid': XU})
+        self.assertTrue(r['ok'] and r['sent'])
+        self.assertEqual(r['ui']['react'], [{'emoji': CHECK, 'uuid': XU, 'pendingId': r['pendingId']}])
+        pend = self.m.rc.load_pending()
+        self.assertEqual(len(pend), 1)
+        self.assertEqual((pend[0]['xUuid'], pend[0]['ui']), (XU, True))
+        self.assertNotIn('on my way', json.dumps(pend))
+
+    def test_without_ui_nothing_changes(self):
+        r = self.req({'type': 'send', 'text': 'Jordan: on my way'})
+        self.assertNotIn('ui', r)
+        self.assertNotIn('pendingId', r)
+        self.assertNotIn('ui', self.m.rc.load_pending()[0])
+
+    def test_ui_reactions_off_falls_back(self):
+        r = self.req({'type': 'send', 'text': 'Jordan: on my way', 'ui': True, 'xUuid': XU}, uiReactions=False)
+        self.assertNotIn('ui', r)
+
+    def test_bad_uuid_is_ignored(self):
+        r = self.req({'type': 'send', 'text': 'Jordan: on my way', 'ui': True, 'xUuid': '"><script>'})
+        self.assertNotIn('ui', r)
+
+    def test_ui_ack_marks_the_pending_send(self):
+        r = self.req({'type': 'send', 'text': 'Jordan: on my way', 'ui': True, 'xUuid': XU})
+        self.req({'type': 'ui_ack', 'pendingId': r['pendingId'], 'ok': True, 'step': 'placed', 'latencyMs': 2100})
+        self.assertTrue(self.m.rc.load_pending()[0]['uiConfirmed'])
+        r2 = self.req({'type': 'send', 'text': 'Jordan: second one', 'ui': True, 'xUuid': XU.replace('01', '02')})
+        self.req({'type': 'ui_ack', 'pendingId': r2['pendingId'], 'ok': False, 'step': 'no-react-button'})
+        p2 = [p for p in self.m.rc.load_pending() if p['id'] == r2['pendingId']][0]
+        self.assertTrue(p2['uiFailed'])
+        self.assertFalse(p2['uiConfirmed'])
+
+
+class HostPrompts(HostBase):
+    def guessed(self, **over):
+        return self.req({'type': 'send', 'text': 'see you soon', 'ui': True, 'xUuid': XU}, confirmGuessed='always', **over)
+
+    def test_confirm_prompt_becomes_a_question_reaction_and_the_webhook_waits(self):
+        r = self.guessed()
+        self.assertTrue(r.get('needsConfirm'))
+        self.assertEqual(self.posts, [], 'the routine copy is deferred')
+        react = r['ui']['react'][0]
+        self.assertEqual((react['emoji'], react['uuid']), (QMARK, XU))
+        files = self.retry_files()
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]['payload']['type'], 'needs_confirm')
+        self.assertGreater(files[0]['notBefore'], files[0]['queuedAt'])
+        self.assertNotIn('see you soon', json.dumps(files))
+        # the extension placed it: the routine copy is cancelled
+        self.req({'type': 'ui_ack', 'noteId': react['noteId'], 'ok': True, 'step': 'placed'})
+        self.assertEqual(self.retry_files(), [])
+        self.assertEqual(self.posts, [])
+
+    def test_a_missed_reaction_posts_the_text_prompt_at_once(self):
+        r = self.guessed()
+        self.req({'type': 'ui_ack', 'noteId': r['ui']['react'][0]['noteId'], 'ok': False, 'step': 'no-react-button'})
+        self.assertEqual([p['type'] for p in self.posts], ['needs_confirm'])
+        self.assertEqual(self.retry_files(), [])
+
+    def test_who_is_this_for_is_typed_with_the_robot_tag(self):
+        self.m.rc.record_inbound('+15555550123', self.clock.t - 99999)    # nobody recent -> "Who's this for?"
+        r = self.req({'type': 'send', 'text': 'hello there', 'ui': True, 'xUuid': XU})
+        self.assertTrue(r.get('needsTarget'))
+        t = r['ui']['type'][0]
+        self.assertTrue(t['text'].startswith(ROBOT + ' '))
+        self.assertEqual(self.posts, [])
+        self.assertEqual(len(self.retry_files()), 1)
+
+    def test_ui_prompts_off_keeps_the_routine(self):
+        r = self.guessed(uiPrompts=False)
+        self.assertNotIn('react', r.get('ui', {}))
+        self.assertEqual([p['type'] for p in self.posts], ['needs_confirm'])
+
+
+class HostIgnoresItsOwnOutput(HostBase):
+    def test_robot_tagged_text_is_never_sent_or_routed(self):
+        runner = FakeRunner([])
+        for text in (ROBOT + ' Who\u2019s this for? Start with a name', ROBOT + ' Jordan: hi', '  ' + ROBOT + 'x',
+                     'Who\u2019s this for? Start with a name, like "Jordan: \u2026"', 'Reply to Jordan? Reply yes within 2 min.'):
+            r = self.req({'type': 'send', 'text': text, 'ui': True, 'xUuid': XU}, runner=runner)
+            self.assertEqual(r.get('skipped'), 'relay prompt', text)
+        self.assertEqual(runner.count('/usr/bin/osascript'), 0)
+        self.assertEqual(self.m.rc.load_pending(), [])
+        self.assertEqual(self.posts, [])
+
+    def test_ordinary_text_with_a_robot_later_is_sent(self):
+        r = self.req({'type': 'send', 'text': 'Jordan: the ' + ROBOT + ' vacuum is here'})
+        self.assertTrue(r.get('sent'))
+
+    def test_poll_returns_ids_and_emoji_only(self):
+        self.m.ui.enqueue_react(XU, EYES, 'read')
+        r = self.req({'type': 'ui_poll'})
+        self.assertEqual([(a['uuid'], a['emoji']) for a in r['actions']], [(XU, EYES)])
+        self.assertEqual(set(r['actions'][0]), {'id', 'action', 'uuid', 'emoji'})
+        self.assertEqual(self.req({'type': 'ui_poll'})['actions'], [], 'leased, not offered twice at once')
+        self.req({'type': 'ui_ack', 'actionId': r['actions'][0]['id'], 'ok': True})
+        self.assertEqual(self.m.ui.state_of(r['actions'][0]['id']), 'done')
+
+    def test_get_config_tells_the_extension(self):
+        r = self.req({'type': 'get_config'})
+        self.assertEqual((r['uiReactions'], r['undoSeconds']), (True, 5))
+        r = self.req({'type': 'get_config'}, undoSeconds=99)
+        self.assertEqual(r['undoSeconds'], 10, 'clamped')
+
+
+class UiQueue(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tmpdir()
+        self.m = fresh(self.tmp)
+
+    def test_only_valid_ids_and_emoji(self):
+        ui = self.m.ui
+        self.assertEqual(ui.enqueue_react('bad id', CHECK), '')
+        self.assertEqual(ui.enqueue_react(XU, 'hello'), '')
+        self.assertEqual(ui.enqueue_react(XU, '<img>'), '')
+        self.assertTrue(ui.enqueue_react(XU, '\u2764\ufe0f'))
+        self.assertTrue(ui.enqueue_react(XU, '\U0001f525'), 'a custom emoji tapback')
+
+    def test_expiry(self):
+        ui = self.m.ui
+        aid = ui.enqueue_react(XU, CHECK, at=1000.0)
+        self.assertEqual(ui.take(now=1000.0 + ui.ACTION_TTL_S + 1), [])
+        self.assertEqual(ui.state_of(aid), 'expired')
+
+    def test_map_strips_part_prefixes(self):
+        ui = self.m.ui
+        ui.map_put('ABC-123', XU, rowid=5)
+        self.assertEqual(ui.map_get('p:0/ABC-123')['x'], XU)
+        self.assertEqual(ui.map_get('bp:ABC-123')['x'], XU)
+        self.assertIsNone(ui.map_get('p:0/OTHER'))
+
+
+class WatchBase(test_watch.Base):
+    def setUp(self):
+        super().setUp()
+        con = sqlite3.connect(self.db.path)
+        con.execute('ALTER TABLE message ADD COLUMN is_read INTEGER DEFAULT 0')
+        con.execute('ALTER TABLE message ADD COLUMN date_read INTEGER DEFAULT 0')
+        con.commit()
+        con.close()
+        self.w = self.new_watcher()
+        self.w.tick()
+
+    def sent(self, delivered=1, xu=XU, ui=True, guid='OUT-1', ago=30, **fields):
+        rc = self.m.rc
+        self.db.add(ALLOWED, text='hello back', from_me=1, delivered=delivered, guid=guid)
+        pid = rc.add_pending_send(ALLOWED, self.now - ago, len('hello back'), label='Jordan', x_uuid=xu, ui=ui)
+        if fields:
+            rc.update_pending(pid, **fields)
+        return pid
+
+    def types(self):
+        return self.poster.types()
+
+
+class WatchConfirm(WatchBase):
+    def test_ui_confirmed_send_posts_no_text_line(self):
+        self.sent(uiConfirmed=True)
+        self.w.tick()
+        self.assertNotIn('sent', self.types())
+        self.assertEqual(self.m.rc.load_pending(), [])
+
+    def test_waits_for_the_ack_then_falls_back(self):
+        self.sent(ago=2)
+        self.w.tick()
+        self.assertNotIn('sent', self.types(), 'within the grace window: wait for the ✅')
+        self.assertEqual(len(self.m.rc.load_pending()), 1)
+        self.now += 15
+        self.w.tick()
+        self.assertEqual(self.types().count('sent'), 1, 'no ack -> the old text confirmation')
+
+    def test_failed_reaction_posts_at_once(self):
+        self.sent(ago=2, uiFailed=True)
+        self.w.tick()
+        self.assertEqual(self.types().count('sent'), 1)
+
+    def test_failures_are_always_posted(self):
+        self.db.add(ALLOWED, text='x', from_me=1, error=22, guid='OUT-F')
+        pid = self.m.rc.add_pending_send(ALLOWED, self.now - 30, 1, label='Jordan', x_uuid=XU, ui=True)
+        self.m.rc.update_pending(pid, uiConfirmed=True)
+        self.w.tick()
+        self.assertIn('send_failed', self.types())
+
+    def test_read_receipt_upgrades_to_eyes(self):
+        self.sent(uiConfirmed=True)
+        self.w.tick()
+        self.assertEqual(self.m.ui.take(now=time.time()), [], 'not read yet')
+        con = sqlite3.connect(self.db.path)
+        con.execute("UPDATE message SET is_read = 1, date_read = 12345 WHERE guid = 'OUT-1'")
+        con.commit()
+        con.close()
+        self.w.tick()
+        acts = self.m.ui.take(now=time.time())
+        self.assertEqual([(a['uuid'], a['emoji']) for a in acts], [(XU, EYES)])
+        self.w.tick()
+        self.assertEqual(len(os.listdir(self.m.ui.QUEUE_DIR)), 1, 'once only')
+
+    def test_no_read_receipts_for_groups_or_when_off(self):
+        self.cfg['readReceipts'] = False
+        self.sent(uiConfirmed=True)
+        self.w.tick()
+        con = sqlite3.connect(self.db.path)
+        con.execute("UPDATE message SET is_read = 1 WHERE guid = 'OUT-1'")
+        con.commit()
+        con.close()
+        self.w.tick()
+        self.assertEqual(self.m.ui.take(now=time.time()), [])
+
+    def test_map_and_queue_hold_ids_only(self):
+        self.sent(uiConfirmed=True)
+        self.w.tick()
+        self.assert_no_bodies_on_disk('hello back')
+
+
+class WatchTapbacks(WatchBase):
+    def mapped(self):
+        self.sent(uiConfirmed=True)
+        self.w.tick()
+        self.assertIsNotNone(self.m.ui.map_get('OUT-1'))
+
+    def tapback(self, assoc=2000, guid='p:0/OUT-1', emoji=None):
+        self.db.add(ALLOWED, text='Loved \u201chello back\u201d', assoc=assoc, assoc_guid=guid, assoc_emoji=emoji)
+
+    def test_mirrored_tapback_replaces_the_text_line(self):
+        self.mapped()
+        self.tapback()
+        self.w.tick()
+        self.assertNotIn('message', self.types(), 'held while the extension places it')
+        acts = self.m.ui.take(now=time.time())
+        self.assertEqual([(a['uuid'], a['emoji']) for a in acts], [(XU, '\u2764\ufe0f')])
+        self.m.ui.ack(acts[0]['id'], True, 'placed')
+        self.w.tick()
+        self.assertNotIn('message', self.types(), 'shown as a real reaction: no text line')
+
+    def test_failed_mirror_falls_back_to_the_text_line(self):
+        self.mapped()
+        self.tapback(assoc=2001)
+        self.w.tick()
+        acts = self.m.ui.take(now=time.time())
+        self.m.ui.ack(acts[0]['id'], False, 'no-react-button')
+        self.w.tick()
+        msgs = [p for _, p, _ in self.poster.calls if p['type'] == 'message']
+        self.assertEqual(len(msgs), 1)
+        self.assertTrue(msgs[0]['reaction'])
+        self.assertIn('\U0001f44d', msgs[0]['text'])
+
+    def test_unanswered_mirror_times_out_to_text(self):
+        self.mapped()
+        self.tapback()
+        self.w.tick()
+        self.now += 25
+        self.w.tick()
+        self.assertEqual(self.types().count('message'), 1)
+
+    def test_tapback_on_an_unmapped_message_is_a_text_line_as_before(self):
+        self.tapback(guid='p:0/NOT-MINE')
+        self.w.tick()
+        self.assertEqual(self.types().count('message'), 1)
+        self.assertEqual(self.m.ui.take(now=time.time()), [])
+
+    def test_off_switch(self):
+        self.cfg['mirrorTapbacks'] = False
+        self.mapped()
+        self.tapback()
+        self.w.tick()
+        self.assertEqual(self.types().count('message'), 1)
+
+
+class FollowMessages(test_watch.Base):
+    def setUp(self):
+        super().setUp()
+        self.cfg['relayAll'] = True
+        con = sqlite3.connect(self.db.path)
+        con.execute('ALTER TABLE chat ADD COLUMN is_filtered INTEGER DEFAULT 0')
+        con.execute('ALTER TABLE message ADD COLUMN filter_action INTEGER DEFAULT 0')
+        con.commit()
+        con.close()
+        self.prefs = {'FilterMessageRequests': '1', 'EnableJunkFiltering': '1'}
+        test = self
+
+        class PrefRunner(FakeRunner):
+            def __call__(self, cmd, **kw):
+                if cmd[:3] == ['/usr/bin/defaults', 'read', 'com.apple.MobileSMS']:
+                    self.calls.append(list(cmd))
+                    v = test.prefs.get(cmd[3])
+                    import subprocess
+                    return subprocess.CompletedProcess(cmd, 0 if v is not None else 1, (v or '') + '\n', '')
+                return super().__call__(cmd, **kw)
+        self.runner = PrefRunner()
+        self.w = self.new_watcher()
+        self.w.tick()
+
+    def set_filtered(self, handle_rowid_sql, value):
+        con = sqlite3.connect(self.db.path)
+        con.execute(handle_rowid_sql, (value,))
+        con.commit()
+        con.close()
+
+    def msgs(self):
+        return [p for _, p, _ in self.poster.calls if p['type'] == 'message']
+
+    def add(self, handle, text, is_filtered=0, fa=0):
+        mid = self.db.add(handle, text=text)
+        con = sqlite3.connect(self.db.path)
+        con.execute('UPDATE chat SET is_filtered = ? WHERE ROWID = (SELECT chat_id FROM chat_message_join WHERE message_id = ?)', (is_filtered, mid))
+        con.execute('UPDATE message SET filter_action = ? WHERE ROWID = ?', (fa, mid))
+        con.commit()
+        con.close()
+        return mid
+
+    def test_default_is_follow_messages(self):
+        self.assertEqual(self.m.rc.sanitize_config({})['spamMode'], 'follow-messages')
+
+    def test_unknown_senders_bucket_is_tagged(self):
+        self.add(STRANGER, 'are you free for a quick call', is_filtered=1)
+        self.w.tick()
+        self.assertTrue(self.msgs()[-1].get('unknown'))
+
+    def test_main_list_is_not_tagged_even_if_not_in_contacts(self):
+        self.add(STRANGER, 'hi it is Alex from the gym', is_filtered=0)
+        self.w.tick()
+        self.assertFalse(self.msgs()[-1].get('unknown'))
+
+    def test_spam_is_held_and_summarized_as_counts_only(self):
+        self.add(STRANGER, 'You won a prize click here', is_filtered=2)
+        self.add(STRANGER, 'Final notice toll unpaid', is_filtered=2)
+        self.w.tick()
+        self.assertEqual(self.msgs(), [], 'Messages hides spam: so does the relay')
+        self.now += 3700
+        self.w.tick()
+        st = [p for _, p, _ in self.poster.calls if p.get('status') == 'spam_summary']
+        self.assertEqual(len(st), 1)
+        self.assertEqual(st[0]['count'], 2)
+        self.assertNotIn('prize', json.dumps(st))
+        self.assert_no_bodies_on_disk('You won a prize', 'toll unpaid')
+
+    def test_spam_from_a_relay_contact_is_tagged_not_held(self):
+        self.add(ALLOWED, 'hey', is_filtered=2)
+        self.w.tick()
+        self.assertEqual(self.msgs()[-1].get('tag'), 'spam')
+
+    def test_promotions_and_transactions(self):
+        self.add(STRANGER, '20% off today only', fa=3)
+        self.add('+15555550177', 'Your code is ready', fa=4)
+        self.w.tick()
+        self.assertEqual([m.get('tag') for m in self.msgs()], ['promotion', 'transaction'])
+
+    def test_screening_off_is_mirrored(self):
+        self.prefs['FilterMessageRequests'] = '0'
+        self.w._prefs = None
+        self.add(STRANGER, 'are you free for a quick call', is_filtered=1)
+        self.w.tick()
+        self.assertFalse(self.msgs()[-1].get('unknown'))
+
+    def test_spam_filter_off_is_mirrored(self):
+        self.prefs['EnableJunkFiltering'] = '0'
+        self.w._prefs = None
+        self.add(STRANGER, 'You won a prize', is_filtered=2)
+        self.w.tick()
+        self.assertEqual(len(self.msgs()), 1)
+
+    def test_prefs_are_only_read(self):
+        self.add(STRANGER, 'x y z', is_filtered=1)
+        self.w.tick()
+        cmds = [c for c in self.runner.calls if c[0] == '/usr/bin/defaults']
+        self.assertTrue(cmds)
+        self.assertTrue(all(c[1] == 'read' for c in cmds))
+
+    def test_stop_footer_stripped_on_tagged_texts_only(self):
+        self.add(STRANGER, 'Sale ends Friday at the shop. Reply STOP to opt out', fa=3)
+        self.add(ALLOWED, 'Dad said reply STOP to opt out is annoying', is_filtered=0)
+        self.w.tick()
+        texts = [m['text'] for m in self.msgs()]
+        self.assertEqual(texts[0], 'Sale ends Friday at the shop.')
+        self.assertEqual(texts[1], 'Dad said reply STOP to opt out is annoying')
+
+    def test_fallback_when_chat_db_cannot_tell(self):
+        tmp = test_watch.Base.setUp  # noqa: F841 (documentation: a db without is_filtered)
+        w = self.m.watch.Watcher
+        self.assertTrue(w)
+        # a chat.db with no is_filtered column -> the v1.4.5 'tag' behavior
+        self.m.watch.Watcher.messages_filter  # exists
+        ctx = {'chat_cols': set(), 'spam_col': False, 'fa_col': False}
+        self.assertIsNone(self.w.messages_filter(None, 1, 1, ctx))
+
+    def test_groups_unchanged(self):
+        self.db.add(STRANGER, text='hi all', group='fam', display_name='Family', members=[STRANGER, SAM])
+        con = sqlite3.connect(self.db.path)
+        con.execute('UPDATE chat SET is_filtered = 2')
+        con.commit()
+        con.close()
+        self.w.tick()
+        m = self.msgs()[-1]
+        self.assertFalse(m.get('unknown') or m.get('tag'))
+
+
+class StripOptOut(unittest.TestCase):
+    def setUp(self):
+        self.m = fresh(tmpdir())
+
+    def test_variants(self):
+        f = self.m.watch.strip_opt_out
+        self.assertEqual(f('Your table is ready. Reply STOP to unsubscribe.'), 'Your table is ready.')
+        self.assertEqual(f('Deal inside! Msg&data rates may apply. Txt STOP to end'), 'Deal inside!')
+        self.assertEqual(f('Big sale\n\u2002Text STOP to opt out'), 'Big sale')
+        self.assertEqual(f('Reply STOP to opt out'), 'Reply STOP to opt out', 'never empties a text')
+        self.assertEqual(f('stop by later?'), 'stop by later?')
+
+
+class QuietNames(test_watch.Base):
+    def setUp(self):
+        super().setUp()
+        self.cfg['contacts'] = [{'name': 'Jordan Test', 'handle': '15555550123'}, {'name': 'Sam Test', 'handle': '15555550150'}]
+        self.cfg['senderXHandle'] = 'SenderBot'
+        self.w = self.new_watcher()
+        self.w.tick()
+
+    def msgs(self):
+        return [p for _, p, _ in self.poster.calls if p['type'] == 'message']
+
+    def test_prefix_only_when_the_sender_changes(self):
+        for h, t in ((ALLOWED, 'one'), (ALLOWED, 'two'), (SAM, 'three'), (SAM, 'four'), (ALLOWED, 'five')):
+            self.db.add(h, text=t)
+            self.w.tick()
+        self.assertEqual([bool(m.get('quiet')) for m in self.msgs()], [False, True, False, True, False])
+        lines = [rp.format_event(m)['lines'][0]['text'] for m in self.msgs()]
+        self.assertEqual(lines, ['Jordan: one', 'two', 'Sam: three', 'four', 'Jordan: five'])
+
+    def test_window(self):
+        self.db.add(ALLOWED, text='one')
+        self.w.tick()
+        self.now += 601
+        self.db.add(ALLOWED, text='two')
+        self.w.tick()
+        self.assertFalse(self.msgs()[-1].get('quiet'))
+
+    def test_off(self):
+        self.cfg['quietNamesSeconds'] = 0
+        for t in ('one', 'two'):
+            self.db.add(ALLOWED, text=t)
+            self.w.tick()
+        self.assertFalse(any(m.get('quiet') for m in self.msgs()))
+
+    def test_batch_is_quiet_too(self):
+        self.cfg['batchWebhooks'] = True
+        self.db.add(ALLOWED, text='one')
+        self.db.add(ALLOWED, text='two')
+        self.db.add(SAM, text='three')
+        self.w.tick()
+        b = [p for _, p, _ in self.poster.calls if p['type'] == 'batch'][-1]
+        self.assertEqual([bool(m.get('quiet')) for m in b['messages']], [False, True, False])
+
+    def test_tapback_lines_keep_the_name(self):
+        self.db.add(ALLOWED, text='one')
+        self.w.tick()
+        self.db.add(ALLOWED, text='Liked', assoc=2001, assoc_guid='p:0/whatever')
+        self.w.tick()
+        self.assertFalse(self.msgs()[-1].get('quiet'))
+
+    def route(self, quoted, text='sounds good'):
+        rc = self.m.rc
+        cfg = rc.sanitize_config(self.cfg)
+        return rc.route_reply(text, quoted, cfg, rc.load_roster(), self.now + 5)
+
+    def test_native_quote_of_an_unprefixed_line_routes_to_its_sender(self):
+        for h, t in ((SAM, 'first from sam'), (SAM, 'are we still on for the picnic saturday'), (ALLOWED, 'unrelated')):
+            self.db.add(h, text=t)
+            self.w.tick()
+        r = self.route('are we still on for the picnic saturday')
+        self.assertEqual((r['contact']['handle'], r['by']), (SAM, 'quote'))
+        r = self.route('are we still on for the picnic s\u2026')      # a truncated preview
+        self.assertEqual((r['contact']['handle'], r['by']), (SAM, 'quote'))
+        r = self.route('SenderBot are we still on for the picnic saturday')
+        self.assertEqual(r['contact']['handle'], SAM)
+
+    def test_same_quiet_text_from_two_people_is_ambiguous(self):
+        for h, t in ((SAM, 'hey'), (SAM, 'call me when you can please'), (ALLOWED, 'hi'), (ALLOWED, 'call me when you can please')):
+            self.db.add(h, text=t)
+            self.w.tick()
+        r = self.route('call me when you can please')
+        self.assertTrue(r.get('needsTarget'))
+
+    def test_quote_keys_hold_no_text(self):
+        for t in ('first', 'are we still on for the picnic saturday'):
+            self.db.add(SAM, text=t)
+            self.w.tick()
+        raw = open(self.m.rc.QUOTE_KEYS_PATH).read()
+        self.assertNotIn('picnic', raw)
+
+
+class RecapAndFormatting(unittest.TestCase):
+    def test_tags(self):
+        line = lambda **m: rp.format_event(dict({'type': 'message', 'label': 'Alex', 'text': 'hi'}, **m))['lines'][0]['text']
+        self.assertEqual(line(tag='promotion'), '\U0001f3f7\ufe0f Promo \u00b7 Alex: hi')
+        self.assertEqual(line(tag='transaction'), '\U0001f9fe Alex: hi')
+        self.assertEqual(line(tag='spam'), '\U0001f6ab Spam \u00b7 Alex: hi')
+        self.assertEqual(line(quiet=True), 'hi')
+        self.assertEqual(line(quiet=True, unknown=True), '\u26a0\ufe0f Unknown \u00b7 Alex: hi', 'tagged lines always name')
+        self.assertEqual(line(quiet=True, group={'label': 'Family'}), 'Family \u00b7 Alex: hi', 'groups unchanged')
+
+    def test_spam_summary_status(self):
+        ev = rp.format_event({'type': 'status', 'status': 'spam_summary', 'detail': '\U0001f6ab 2 texts went to Messages \u203a Spam'})
+        self.assertTrue(ev['lines'][0]['text'].startswith('\U0001f6ab 2 texts'))
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
+@@@@ FILE tests/py/test_v146_cards.py mode=644 sha256=61b5bd977dbb05c895dcfbc2a6d0e03dfaeebb3ead470e22bb03876ab65b47ed nl=1
+"""v1.4.6: a shared post arrives as its URL; every refusal tells him why (text line + ⚠️ on his message).
+Fictional names only."""
+import os
+import sys
+import unittest
+
+from helpers import FakeRunner
+from test_v146 import HostBase, XU, CONV
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'routine'))
+import relay_post as rp  # noqa: E402
+
+POST = 'https://x.com/ExampleNews/status/1850000000000000001'
+WARN = '\u26a0\ufe0f'
+
+
+class Cards(HostBase):
+    def test_name_plus_post_url_sends_the_url(self):
+        runner = FakeRunner([(0, '')])
+        r = self.req({'type': 'send', 'text': 'Jordan: ' + POST, 'cards': 1, 'quoteProbe': 'E=0.div'}, runner=runner)
+        self.assertTrue(r.get('sent'), r)
+        osa = [c for c in runner.calls if c[0] == '/usr/bin/osascript'][0]
+        self.assertEqual(osa[2], POST)
+
+    def test_empty_after_prefix_says_why_with_a_warning_reaction(self):
+        r = self.req({'type': 'send', 'text': 'Jordan:', 'ui': True, 'xUuid': XU}, runner=FakeRunner([]))
+        self.assertFalse(r['ok'])
+        self.assertEqual(r['ui']['react'], [{'emoji': WARN, 'uuid': XU}])
+        [p] = self.posts
+        self.assertEqual((p['type'], p['reason']), ('refused', 'not_sent'))
+        line = rp.format_event(p)['lines'][0]['text']
+        self.assertEqual(line, WARN + ' Not sent: There was nothing after the name to send. Type the message after "Jordan:".')
+
+    def test_paused_and_other_refusals_also_say_why(self):
+        self.req({'type': 'send', 'text': 'Jordan: hi'}, paused=True)
+        self.assertIn('paused', self.posts[-1]['detail'])
+        self.req({'type': 'send', 'text': 'x' * 4001})
+        self.assertIn('too long', self.posts[-1]['detail'])
+
+    def test_not_his_relay_chat_stays_silent(self):
+        self.h.handle_request({'type': 'send', 'text': 'Jordan: hi', 'conversationId': '9999-8888'}, cfg=self.cfg(),
+                              runner=FakeRunner([]), sleeper=self.clock.sleep, now=self.clock.now, poster=self.poster)
+        self.assertEqual(self.posts, [])
+
+    def test_notice_is_body_free(self):
+        self.req({'type': 'send', 'text': 'Jordan:   ', 'ui': True, 'xUuid': XU})
+        self.assertNotIn('   ', self.posts[0]['detail'])
+
+    def test_probe_logs_the_card_count(self):
+        from helpers import read_log
+        self.req({'type': 'send', 'text': 'Jordan: ' + POST, 'cards': 1, 'quoteProbe': 'E=0.div'})
+        self.assertIn('"cards": 1', read_log() if isinstance(read_log(), str) else str(read_log()))
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
+@@@@ FILE tests/py/test_v146_media.py mode=644 sha256=b4641afd7df442b48de0ffd2075dbfdb8f1f917791ae2c413ade4c54a4e9b7ed nl=1
+"""v1.4.6: attachments both ways (1:1 photos in, his photos/files out). In-flight temp files only (mode
+600), deleted right after use or on error; logs carry counts, sizes and types only. Fictional names only."""
+import base64
+import hashlib
+import json
+import os
+import sqlite3
+import stat
+import sys
+import time
+import unittest
+
+from helpers import FakeRunner, read_log
+import test_watch
+from test_v146 import HostBase, CONV, XU, CHECK
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'routine'))
+import relay_post as rp  # noqa: E402
+
+ALLOWED = test_watch.ALLOWED
+# a tiny valid PNG (1x1)
+PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==')
+OK = (0, '')
+
+
+def upload(m, data, uid='a' * 32):
+    for seq, i in enumerate(range(0, len(data), 7)):
+        r = m.media.stage_chunk(uid, seq, base64.b64encode(data[i:i + 7]).decode())
+        assert r['ok'], r
+    return {'uploadId': uid, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'mime': 'image/png',
+            'name': '../../etc/Jordan beach.png'}
+
+
+class OsaScript(unittest.TestCase):
+    def setUp(self):
+        from helpers import fresh, tmpdir
+        self.m = fresh(tmpdir())
+
+    def test_file_mode_argv(self):
+        rc = self.m.rc
+        c = rc.build_osascript_cmd('/x/photo.png', '+15555550123', 'auto', target='participant', mode='file')
+        self.assertEqual(c[-5:], ['/x/photo.png', '+15555550123', 'auto', 'participant', 'file'])
+        c = rc.build_osascript_cmd('/x/photo.png', 'iMessage;+;chat1', 'auto', target='chat', mode='file')
+        self.assertEqual(c[-2:], ['chat', 'file'])
+        self.assertEqual(rc.build_osascript_cmd('hi', '+1', 'auto', target='chat')[-1], 'chat', 'v1.4.5 unchanged')
+        self.assertEqual(rc.build_osascript_cmd('hi', '+1')[-1], 'auto')
+
+    def test_applescript_resolves_the_file_before_messages(self):
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'mac-helper',
+                               'send_imessage.applescript')) as fh:
+            src = fh.read()
+        self.assertIn('set theItem to (POSIX file thePayload) as alias', src)
+        self.assertLess(src.index('as alias'), src.index('tell application "Messages"'))
+        self.assertNotIn('run script', src)
+
+
+class Outbound(HostBase):
+    def test_photo_and_text_go_out_as_two_messages_with_one_check(self):
+        att = upload(self.m, PNG)
+        runner = FakeRunner([OK, OK])
+        r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [att], 'ui': True, 'xUuid': XU}, runner=runner)
+        self.assertTrue(r['ok'] and r['sent'])
+        osa = [c for c in runner.calls if c[0] == '/usr/bin/osascript']
+        self.assertEqual(osa[0][2:], ['look', '+15555550123', 'auto'])
+        path = osa[1][2]
+        self.assertEqual(osa[1][-2:], ['participant', 'file'])
+        self.assertTrue(path.startswith(self.m.media.SEND_STAGE_DIR))
+        self.assertEqual(os.path.basename(path), 'Jordan beach.png', 'path parts stripped')
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        pend = self.m.rc.load_pending()
+        self.assertEqual(sorted(p.get('part', 'text') for p in pend), ['file', 'text'])
+        react = r['ui']['react'][0]
+        self.assertEqual(react['emoji'], CHECK)
+        self.assertEqual(set(react['pendingIds']), {p['id'] for p in pend})
+        self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, att['uploadId'])), 'upload consumed')
+        self.req({'type': 'ui_ack', 'pendingId': react['pendingId'], 'pendingIds': react['pendingIds'], 'ok': True})
+        self.assertTrue(all(p.get('uiConfirmed') for p in self.m.rc.load_pending()))
+
+    def test_same_photo_twice_within_a_minute_is_one_send(self):
+        self.req({'type': 'send', 'text': '', 'attachments': [upload(self.m, PNG)]}, runner=FakeRunner([OK]))
+        r = self.req({'type': 'send', 'text': '', 'attachments': [upload(self.m, PNG, 'b' * 32)]}, runner=FakeRunner([]))
+        self.assertEqual(r.get('skipped'), 'duplicate within 60s')
+        self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, 'b' * 32)), 'its upload is dropped')
+
+    def test_photo_only(self):
+        att = upload(self.m, PNG)
+        runner = FakeRunner([OK])
+        r = self.req({'type': 'send', 'text': 'Jordan:', 'attachments': [att]}, runner=runner)
+        self.assertTrue(r.get('sent'), r)
+        self.assertEqual(runner.count('/usr/bin/osascript'), 1)
+        r = self.req({'type': 'send', 'text': '', 'attachments': [upload(self.m, PNG + b'2', 'b' * 32)]}, runner=FakeRunner([OK]))
+        self.assertTrue(r.get('sent'), 'a bare photo goes to the recent person like a bare text')
+
+    def test_bad_checksum_sends_nothing_at_all(self):
+        att = upload(self.m, PNG)
+        att['sha256'] = '0' * 64
+        runner = FakeRunner([])
+        r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [att]}, runner=runner)
+        self.assertFalse(r['ok'])
+        self.assertEqual(r['errorCode'], 'attachment_unavailable')
+        self.assertEqual(runner.count('/usr/bin/osascript'), 0)
+        self.assertEqual(os.listdir(self.m.media.SEND_STAGE_DIR) if os.path.isdir(self.m.media.SEND_STAGE_DIR) else [], [])
+
+    def test_failed_file_send_deletes_the_staged_copy(self):
+        att = upload(self.m, PNG)
+        r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [att]}, runner=FakeRunner([OK, (1, 'execution error (-1700)')]))
+        self.assertEqual(r['errorCode'], 'attachment_failed')
+        stage = self.m.media.SEND_STAGE_DIR
+        self.assertEqual([f for _, _, fs in os.walk(stage) for f in fs], [])
+
+    def test_group_photo_needs_the_confirm_and_keeps_the_upload_until_then(self):
+        att = upload(self.m, PNG)
+        runner = FakeRunner([])
+        self.m.rc.record_inbound('group:chat900', self.clock.t - 30, label='Family')
+        h = self.h
+        h.group_guid_lookup = lambda key, sleeper, now: 'iMessage;+;chat900'
+        r = self.req({'type': 'send', 'text': 'Family: look', 'attachments': [att]}, runner=runner, relayAll=True)
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(runner.count('/usr/bin/osascript'), 0)
+        self.assertTrue(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, att['uploadId'])), 'kept for the yes')
+        runner = FakeRunner([OK, OK])
+        r = self.req({'type': 'send', 'text': 'Family: look', 'attachments': [att], 'confirmed': True,
+                      'handle': r['handle']}, runner=runner, relayAll=True)
+        self.assertTrue(r.get('sent'), r)
+        osa = [c for c in runner.calls if c[0] == '/usr/bin/osascript']
+        self.assertEqual(osa[1][3:], ['iMessage;+;chat900', 'auto', 'chat', 'file'])
+
+    def test_dry_run_discards_the_upload(self):
+        att = upload(self.m, PNG)
+        runner = FakeRunner([])
+        r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [att]}, runner=runner, dryRun=True)
+        self.assertTrue(r['dryRun'])
+        self.assertEqual(runner.count('/usr/bin/osascript'), 0)
+        self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, att['uploadId'])))
+
+    def test_limits(self):
+        r = self.req({'type': 'send', 'text': 'Jordan: x', 'attachments': [{'uploadId': 'c' * 32, 'size': 26 * 1024 * 1024,
+                                                                            'sha256': 'f' * 64, 'mime': 'video/mp4'}]})
+        self.assertIn('too large', r['error'])
+        r = self.req({'type': 'send', 'text': 'Jordan: x', 'attachments': [{'uploadId': '../x', 'size': 5, 'sha256': 'f' * 64}]})
+        self.assertEqual(r['error'], 'bad attachment')
+        r = self.req({'type': 'attach_chunk', 'uploadId': 'd' * 32, 'seq': 1, 'data': 'aGk='})
+        self.assertEqual(r['error'], 'chunk out of order')
+        r = self.req({'type': 'attach_chunk', 'uploadId': 'd' * 32, 'seq': 0, 'data': 'aGk='}, relayAttachments=False)
+        self.assertFalse(r['ok'])
+
+    def test_unreadable_photos_get_a_clear_notice(self):
+        runner = FakeRunner([])
+        r = self.req({'type': 'send', 'text': '', 'attachmentsSkipped': 2}, runner=runner)
+        self.assertFalse(r['ok'])
+        self.assertEqual(runner.count('/usr/bin/osascript'), 0)
+        self.assertEqual([(p['type'], p['reason'], p['count'], p['sentText']) for p in self.posts],
+                         [('refused', 'attachment', 2, False)])
+        line = rp.format_event(self.posts[0])['lines'][0]['text']
+        self.assertIn('2 attachments couldn\u2019t be sent', line)
+        self.posts.clear()
+        r = self.req({'type': 'send', 'text': 'Jordan: hi', 'attachmentsSkipped': 1}, runner=FakeRunner([OK]))
+        self.assertTrue(r['sent'])
+        self.assertIn('The text went through.', rp.format_event(self.posts[-1])['lines'][0]['text'])
+
+    def test_logs_counts_sizes_types_only(self):
+        att = upload(self.m, PNG)
+        self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [att]}, runner=FakeRunner([OK, OK]))
+        log = read_log() if isinstance(read_log(), str) else json.dumps(read_log())
+        for secret in ('beach', att['sha256'], att['uploadId'], 'look', 'send-stage'):
+            self.assertNotIn(secret, log)
+        self.assertIn('"attachments": 1', log)
+
+
+class WatchMedia(test_watch.Base):
+    def setUp(self):
+        super().setUp()
+        con = sqlite3.connect(self.db.path)
+        con.execute('ALTER TABLE attachment ADD COLUMN filename TEXT')
+        con.execute('ALTER TABLE attachment ADD COLUMN total_bytes INTEGER')
+        con.commit()
+        con.close()
+        self.w = self.new_watcher()
+        self.w.tick()
+
+    def photo(self, data=PNG, name='IMG_0001.png', mime='image/png', write=True, **kw):
+        p = os.path.join(self.tmp, 'Attachments', name)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        if write:
+            with open(p, 'wb') as f:
+                f.write(data)
+        mid = self.db.add(kw.pop('handle', ALLOWED), attach={'transfer_name': name, 'mime': mime}, **kw)
+        con = sqlite3.connect(self.db.path)
+        con.execute('UPDATE attachment SET filename = ?, total_bytes = ? WHERE ROWID = (SELECT MAX(ROWID) FROM attachment)',
+                    (p, len(data)))
+        con.commit()
+        con.close()
+        return mid, p
+
+    def msgs(self):
+        return [p for _, p, _ in self.poster.calls if p['type'] == 'message']
+
+    def test_a_photo_is_staged_with_metadata_only(self):
+        self.photo(text='beach day')
+        self.w.tick()
+        [m] = self.msgs()
+        self.assertEqual(m['text'], 'beach day')
+        [md] = m['media']
+        self.assertEqual(set(md), {'token', 'kind', 'mime', 'ext', 'size', 'sha256', 'macPath'})
+        self.assertEqual((md['mime'], md['size'], md['sha256']), ('image/png', len(PNG), hashlib.sha256(PNG).hexdigest()))
+        self.assertNotIn('IMG_0001', json.dumps(m))
+        self.assertEqual(stat.S_IMODE(os.stat(md['macPath']).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(md['macPath'])).st_mode), 0o700)
+        line = rp.format_event(m)['lines'][0]
+        self.assertEqual(line['media'][0]['token'], md['token'])
+
+    def test_photo_without_text_says_photo(self):
+        self.photo()
+        self.w.tick()
+        self.assertEqual(self.msgs()[0]['text'], '\U0001f4f7 Photo')
+
+    def test_non_image_gets_a_notice_and_no_bytes(self):
+        self.photo(data=b'%PDF-1.4 fake', name='Lease.pdf', mime='application/pdf', text='see attached')
+        self.w.tick()
+        [m] = self.msgs()
+        self.assertNotIn('media', m)
+        self.assertIn('PDF file', m['text'])
+        self.assertIn('open Messages', m['text'])
+        self.assertNotIn('Lease', m['text'])
+
+    def test_still_downloading_is_retried_then_noticed(self):
+        self.photo(write=False, when=self.now - 2)
+        self.w.tick()
+        self.assertEqual(self.msgs(), [], 'deferred while the file lands')
+        self.now += 40
+        self.w.tick()
+        [m] = self.msgs()
+        self.assertNotIn('media', m)
+        self.assertIn('couldn\u2019t be relayed', m['text'])
+
+    def test_groups_and_quiet_hours_are_not_staged(self):
+        self.cfg['relayAll'] = True
+        self.photo(handle='+15555550144', group=True, members=('+15555550144', '+15555550145'), display_name='Family')
+        self.w.tick()
+        self.assertTrue(all('media' not in p for p in self.msgs()))
+        self.assertFalse(os.path.isdir(self.m.media.OUTBOX_DIR) and os.listdir(self.m.media.OUTBOX_DIR))
+
+    def test_switch_off(self):
+        self.cfg['relayAttachments'] = False
+        self.photo()
+        self.w.tick()
+        self.assertNotIn('media', self.msgs()[0])
+
+    def test_outbox_is_swept(self):
+        self.photo()
+        self.w.tick()
+        p = self.msgs()[0]['media'][0]['macPath']
+        old = self.now - self.m.media.OUTBOX_TTL_S - 5     # the watcher sweeps on its own clock
+        os.utime(p, (old, old))
+        self.w.tick()
+        self.assertFalse(os.path.exists(p))
+
+    def test_logs_no_names_or_hashes(self):
+        self.photo(text='hello')
+        self.w.tick()
+        log = json.dumps(read_log())
+        self.assertNotIn('IMG_0001', log)
+        self.assertNotIn(hashlib.sha256(PNG).hexdigest(), log)
+        self.assertIn('media_staged', log)
+
+    def test_attachment_delivery_needs_an_attachment_row_and_cleans_up(self):
+        rc = self.m.rc
+        stage = os.path.join(self.m.media.SEND_STAGE_DIR, 'abcd')
+        os.makedirs(stage)
+        sp = os.path.join(stage, 'photo.png')
+        with open(sp, 'wb') as fh:
+            fh.write(PNG)
+        rc.add_pending_send(ALLOWED, self.now - 30, 0, label='Jordan', part='file', staged_path=sp)
+        self.db.add(ALLOWED, text='plain later text', from_me=1, delivered=1)
+        self.w.tick()
+        self.assertEqual(len(rc.load_pending()), 1, 'a text row never proves an attachment')
+        self.db.add(ALLOWED, text='\ufffc', from_me=1, delivered=1, attach={'transfer_name': 'photo.png', 'mime': 'image/png'})
+        self.w.tick()
+        self.assertEqual(rc.load_pending(), [])
+        self.assertFalse(os.path.exists(sp))
+
+
+class RoutineMedia(unittest.TestCase):
+    """relay_post: run 1 -> upload parts, run 2 (media_keys) -> sends that carry the photo; always cleaned."""
+
+    def setUp(self):
+        import tempfile
+        self.d = tempfile.mkdtemp(prefix='imr-rp-')
+        self.media_dir = os.path.join(self.d, 'media')
+        os.makedirs(self.media_dir, mode=0o700)
+        self.calls = []
+        self.item = {'token': 'e' * 32, 'kind': 'image', 'mime': 'image/png', 'ext': 'png', 'size': len(PNG),
+                     'sha256': hashlib.sha256(PNG).hexdigest(), 'macPath': '/Users/someone/.imessage-relay/outbox/x.png'}
+        with open(os.path.join(self.media_dir, 'e' * 32 + '.png'), 'wb') as f:
+            f.write(PNG)
+        self.helper = {'python': '/bin/py', 'script': '/old/xchat_lite.py', 'media_python': '/bin/py2', 'media_script': '/new/xchat_lite.py'}
+
+    def runner(self, argv, input=b''):
+        import subprocess
+        stdin = json.loads(input.decode())
+        self.calls.append((argv, stdin))
+        if 'encrypt-media' in argv:
+            out_dir = argv[argv.index('--out-dir') + 1]
+            up = os.path.join(out_dir, 'upload-1')
+            os.makedirs(up, mode=0o700, exist_ok=True)
+            part = os.path.join(up, 'part-0')
+            with open(part, 'w') as fh:
+                fh.write('QUJD')
+            res = {'upload_conversation_id': '1111:2222', 'upload_dir': up,
+                   'media': [{'total_bytes': 123, 'num_parts': 1, 'parts': [{'segment_index': 0, 'path': part}],
+                              'conversation_key_version': '1001'}], 'errors': {}}
+        else:
+            res = {'id': '1111-2222', 'message_id': 'mid-1', 'encoded_message_create_event': 'E', 'encoded_message_event_signature': 'S'}
+        return subprocess.CompletedProcess(argv, 0, json.dumps(res).encode(), b'')
+
+    def req(self, **over):
+        r = {'payload': {'type': 'message', 'id': 'g-1', 'contactName': 'Jordan', 'label': 'Jordan', 'text': '\U0001f4f7 Photo',
+                         'media': [self.item]},
+             'conversation_id': '1111-2222', 'helper': self.helper, 'dedupe_path': os.path.join(self.d, 'seen.json'),
+             'key_cache': False, 'media_dir': self.media_dir,
+             'xchat': {'conversation_key_events': ['k'], 'signing_keys': ['s']}}
+        r.update(over)
+        return r
+
+    def files(self):
+        return sorted(f for _, _, fs in os.walk(self.media_dir) for f in fs)
+
+    def test_two_runs(self):
+        r1 = rp.process(self.req(), runner=self.runner)
+        self.assertEqual(r1['action'], 'upload')
+        [u] = r1['uploads']
+        self.assertEqual((u['token'], u['upload_conversation_id'], u['num_parts']), ('e' * 32, '1111:2222', '1'))
+        self.assertTrue(u['parts'][0]['media'].startswith('$file:'))
+        self.assertEqual(self.calls[0][0][:2], ['/bin/py2', '/new/xchat_lite.py'], 'the encrypt-media helper')
+        self.assertNotIn('text', self.calls[0][1])
+        self.assertFalse(os.path.exists(os.path.join(self.d, 'seen.json')), 'nothing committed yet')
+        r2 = rp.process(self.req(media_keys={'e' * 32: 'HASHKEY'}), runner=self.runner)
+        self.assertEqual(r2['action'], 'send')
+        [s] = r2['sends']
+        self.assertEqual(s['media_finalize'], [{'token': 'e' * 32, 'media_hash_key': 'HASHKEY', 'num_parts': '1'}])
+        argv, stdin = self.calls[-1]
+        self.assertEqual(argv[:2], ['/bin/py2', '/new/xchat_lite.py'])
+        self.assertEqual(stdin['media'][0]['media_hash_key'], 'HASHKEY')
+        self.assertEqual(stdin['media'][0]['conversation_key_version'], '1001')
+        self.assertEqual(self.files(), [], 'photo, parts and state all deleted')
+
+    def test_text_lines_keep_the_old_helper(self):
+        req = self.req()
+        req['payload'] = {'type': 'message', 'id': 'g-2', 'label': 'Jordan', 'text': 'hi'}
+        r = rp.process(req, runner=self.runner)
+        self.assertEqual(r['action'], 'send')
+        self.assertEqual(self.calls[0][0][:2], ['/bin/py', '/old/xchat_lite.py'])
+
+    def test_a_bad_copy_gets_a_notice_and_is_deleted(self):
+        with open(os.path.join(self.media_dir, 'e' * 32 + '.png'), 'wb') as f:
+            f.write(PNG[:-1] + b'X')
+        r = rp.process(self.req(), runner=self.runner)
+        self.assertEqual(r['action'], 'send', 'nothing uploadable: post the text')
+        text = self.calls[-1][1]['text']
+        self.assertIn('Photo couldn\u2019t be relayed', text)
+        self.assertNotIn('media', self.calls[-1][1])
+        self.assertEqual(self.files(), [])
+
+    def test_missing_copy(self):
+        os.remove(os.path.join(self.media_dir, 'e' * 32 + '.png'))
+        r = rp.process(self.req(), runner=self.runner)
+        self.assertEqual(r['action'], 'send')
+        self.assertIn('open Messages', self.calls[-1][1]['text'])
+
+    def test_media_off_after_a_failed_upload(self):
+        rp.process(self.req(), runner=self.runner)
+        r = rp.process(self.req(media_off=True), runner=self.runner)
+        self.assertEqual(r['action'], 'send')
+        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertEqual(self.files(), [])
+
+    def test_text_with_photo_gets_an_appended_notice(self):
+        self.assertEqual(rp.media_failed_text('Jordan: beach', 1),
+                         'Jordan: beach\n\u2002\U0001f4f7 Photo couldn\u2019t be relayed \u2014 open Messages to see it')
+        self.assertEqual(rp.media_failed_text('Jordan: \U0001f4f7 3 photos', 3),
+                         'Jordan: \U0001f4f7 3 photos couldn\u2019t be relayed \u2014 open Messages to see them')
+
+    def test_invalid_media_meta_is_ignored(self):
+        bad = [{'token': '../x', 'ext': 'png', 'size': 1, 'sha256': 'a' * 64}, {'token': 'f' * 32, 'ext': 'exe', 'size': 1, 'sha256': 'a' * 64},
+               {'token': 'f' * 32, 'ext': 'png', 'size': 6 * 1024 * 1024, 'sha256': 'a' * 64}, 'x']
+        self.assertEqual(rp.media_meta(bad), [])
+
+    def test_leftovers_are_swept(self):
+        p = os.path.join(self.media_dir, 'e' * 32 + '.png')
+        old = time.time() - rp.MEDIA_TTL_S - 5
+        os.utime(p, (old, old))
+        self.assertEqual(rp.media_sweep(self.media_dir), 1)
+        self.assertEqual(self.files(), [])
 
 
 if __name__ == '__main__':

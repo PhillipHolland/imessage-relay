@@ -1,8 +1,9 @@
-"""iMessage Relay v1.4.5 -- delivery-proof queries and Messages.app sending.
+"""iMessage Relay v1.4.6 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
 import os
+import re
 import subprocess
 import sqlite3
 import time
@@ -13,7 +14,7 @@ import relay_common as rc
 # Outgoing messages in the ONE-TO-ONE chat with `handle`, earliest first. The participant-count subquery
 # keeps group chats out, and date-ascending order lets the watcher claim one distinct ROWID per send.
 DELIVERY_SQL = """
-SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, ''))
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')), COALESCE(m.cache_has_attachments, 0)
 FROM message m
 JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
 JOIN chat_handle_join chj ON chj.chat_id = cmj.chat_id
@@ -26,7 +27,7 @@ ORDER BY m.date ASC, m.ROWID ASC
 # v1.4.0: outgoing messages in ONE group chat, found by its Messages chat GUID (the id the reply was
 # sent to). Same columns as DELIVERY_SQL; delivery flags and lengths only, never text.
 DELIVERY_SQL_GROUP = """
-SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, ''))
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')), COALESCE(m.cache_has_attachments, 0)
 FROM message m
 JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
 JOIN chat c ON c.ROWID = cmj.chat_id
@@ -45,7 +46,8 @@ DELIVERY_FALLBACK_WINDOW_S = 4.0
 # ---------- delivery proof (watcher only; it holds Full Disk Access) ----------
 # One file per pending send, so a concurrent host append and a watcher resolve never lose each other's
 # record. Records are body-free: handle, send time, text length and label only -- never the body or a hash.
-def add_pending_send(handle, at, text_length, label='', path=None, note='', chat_guid=''):
+def add_pending_send(handle, at, text_length, label='', path=None, note='', chat_guid='', x_uuid='', ui=False,
+                     part='text', staged_path=''):
     """Host (no chat.db access) records a send for the watcher to verify. NEVER stores the body.
     v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0188").
     v1.4.2: `chat_guid` routes the check to a group chat (handle is then its group:<id> key)."""
@@ -57,6 +59,14 @@ def add_pending_send(handle, at, text_length, label='', path=None, note='', chat
         rec['note'] = str(note)[:60]
     if chat_guid:
         rec['chatGuid'] = str(chat_guid)
+    if x_uuid and re.match(r'^[0-9A-Za-z-]{8,64}$', str(x_uuid)):
+        rec['xUuid'] = str(x_uuid)        # v1.4.6: the owner's X message id (for \u2705/\U0001f440/tapback mirrors)
+    if part == 'file':
+        rec['part'] = 'file'              # v1.4.6: an attachment; proven by an outgoing attachment row
+        if staged_path:
+            rec['stagedPath'] = str(staged_path)   # the watcher deletes this staged copy once resolved
+    if ui:
+        rec['ui'] = True                  # the extension will try a \u2705 reaction; the watcher waits for its ack
     rc.write_json_atomic(os.path.join(d, rec['id'] + '.json'), rec, mode=0o600)
     return rec['id']
 
@@ -105,7 +115,7 @@ def remove_pending(entry, path=None):
         pass
 
 
-def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), text_length=None, chat_guid=None):
+def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), text_length=None, chat_guid=None, part='text'):
     """One non-blocking delivery check for the watcher's tick. Reads only delivery flags, never text.
     Matches the earliest outgoing message in the 1:1 chat with `handle` after `since_unix`, skipping
     ROWIDs already claimed this tick and preferring an exact text-length match on ties. Returns
@@ -126,6 +136,10 @@ def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), tex
     finally:
         con.close()
     rows = [r for r in rows if r[0] not in set(exclude_rowids or ())]
+    if part == 'file':
+        # v1.4.6: an attachment send is proven by an outgoing row that carries an attachment
+        rows = [r for r in rows if len(r) > 5 and r[5]]
+        text_length = None
     if not rows:
         return 'pending', None, None
     if text_length is not None:
@@ -160,6 +174,8 @@ OSASCRIPT_ERRORS = {
     'no_imessage': 'That recipient is not reachable (SMS replies are not supported).',
     'timeout': 'Messages did not respond (timed out).',
     'send_failed': 'The reply could not be sent.',
+    'attachment_unavailable': "The attachment didn't reach the Mac intact (expired or incomplete). Nothing was sent; attach it again.",
+    'attachment_failed': 'Part of the reply was sent, but an attachment failed. Check Messages before resending.',
 }
 
 
@@ -182,24 +198,26 @@ def error_message(code):
     return OSASCRIPT_ERRORS.get(code, OSASCRIPT_ERRORS['send_failed'])
 
 
-def build_osascript_cmd(text, handle, service='auto', script_path=None, target='participant'):
+def build_osascript_cmd(text, handle, service='auto', script_path=None, target='participant', mode='text'):
     """argv list (no shell). Text, handle and service are separate argv items, never spliced into
     source. service: 'iMessage', 'SMS', or 'auto' (iMessage, then SMS via Text Message Forwarding).
     v1.4.1: target 'chat' sends to the group chat whose Messages GUID is `handle` (an extra argv item,
     only added when used)."""
     cmd = [rc.OSASCRIPT, script_path or rc.SCRIPT_PATH, text, handle, service]
-    if target == 'chat':
+    if mode == 'file':
+        cmd += ['chat' if target == 'chat' else 'participant', 'file']   # v1.4.6: argv 1 is a staged file path
+    elif target == 'chat':
         cmd.append('chat')
     return cmd
 
 
 def send_imessage(text, handle, runner=subprocess.run, sleeper=time.sleep, timeout=30, service='auto',
-                  target='participant'):
+                  target='participant', mode='text'):
     """(ok, errcode). errcode is a fixed token from OSASCRIPT_ERRORS (never raw AppleScript text).
     Retries exactly once, and ONLY when a completed osascript actually reported -1712 on stderr
     (Messages busy / first-run Automation prompt). A local process timeout means osascript itself
     hung, so it is NOT retried (re-running would just hang again)."""
-    cmd = build_osascript_cmd(text, handle, service, target=target)
+    cmd = build_osascript_cmd(text, handle, service, target=target, mode=mode)
     code = 'send_failed'
     for attempt in (1, 2):
         try:

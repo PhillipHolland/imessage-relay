@@ -1,5 +1,5 @@
 /*
- * iMessage Relay v1.4.5: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -100,6 +100,8 @@ async function fetchConfig() {
     ownerNames: res.ownerXHandle ? [String(res.ownerXHandle).replace(/^@/, '')] : [],
     senderNames: res.senderXHandle ? [String(res.senderXHandle).replace(/^@/, '')] : [],
     ownerXUserId: String(res.ownerXUserId || ''),
+    relayAttachments: res.relayAttachments !== false,   // v1.4.6
+    uiReactions: res.uiReactions !== false, undoSeconds: Number.isFinite(Number(res.undoSeconds)) ? Number(res.undoSeconds) : 0,   // v1.4.6
     fetchedAt: Date.now(),
   };
   const prevStatus = (await chrome.storage.local.get('status')).status || {};
@@ -179,7 +181,7 @@ function decide(item, cfg) {
   if (!cfg.relayAll && !(cfg.contacts || []).some(c => validHandle(c.handle))) return Object.assign(base, { skip: 'no contacts in config' });
   const age = Date.now() - (Date.parse(item.ts) || 0);
   if (!(age >= -5000 && age <= MAX_ITEM_AGE_MS)) return Object.assign(base, { skip: 'stale item' });
-  if (!item.text || item.text === '[no text]') return Object.assign(base, { skip: 'empty text' });
+  if ((!item.text || item.text === '[no text]') && !(Number(item.mediaCount) > 0)) return Object.assign(base, { skip: 'empty text' });
   return base;
 }
 
@@ -228,11 +230,16 @@ async function clearPendingGuess() {
 // so the host skips the guess check. The raw "/yes" is never forwarded to the host.
 async function handleCancel(item, g) {
   await clearPendingGuess();
+  if (g && g.xUuid && uiSrc) await tabUi(uiSrc, { action: 'clear-prompt', uuid: String(g.xUuid) });   // v1.4.6
+  for (const a of (g && Array.isArray(g.attachments) ? g.attachments : [])) {   // v1.4.6: drop his staged photos now
+    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId: String(a.uploadId || '') }); } catch (e) { /* host down */ }
+  }
   await addEvent({ kind: 'reply', key: item.key, contactName: g.label || '', status: 'skipped', detail: 'cancelled' });
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_cancelled', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }
 
-async function handleYes(item, nameArg) {
+async function handleYes(item, nameArg, src) {
+  const seenAt = Date.now();
   const g = await getPendingGuess();
   if (!g || Date.now() - (g.at || 0) > GUESS_WINDOW_MS) {
     await clearPendingGuess();
@@ -246,6 +253,9 @@ async function handleYes(item, nameArg) {
   }
   await clearPendingGuess();
   const payload = { type: 'send', text: g.text, quotedText: g.quotedText || '', conversationId: g.conversationId, ts: item.ts, confirmed: true, handle: g.handle || '' };
+  const useSrc = src || uiSrc;
+  if (g.xUuid && useSrc) { payload.ui = true; payload.xUuid = String(g.xUuid); }   // ✅ goes on the ORIGINAL reply
+  if (Array.isArray(g.attachments) && g.attachments.length) payload.attachments = g.attachments;   // v1.4.6: still on the Mac
   const ev = { kind: 'reply', key: item.key, contactName: g.label || '', textLength: (g.text || '').length, status: 'sending' };
   await addEvent(ev);
   let res, status, detail;
@@ -259,7 +269,68 @@ async function handleYes(item, nameArg) {
   const patch = { status, detail };
   if (res && res.contact) { patch.contactName = String(res.contact).slice(0, 40); patch.routedBy = String(res.routedBy || ''); }
   await updateEvent(item.key, patch);
+  if (res && res.ui) await applyUi(res, useSrc, seenAt);
+  if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
 }
+
+// ─── v1.4.6: fast feedback in the owner's own tab ───
+// The host answers a send with `ui` directives: ✅ on HIS message once Messages accepted it, ❓ on HIS
+// message for "send to …?", or a 🤖-tagged prompt to type. Each is done by the content script in the tab
+// that reported the message, then acked to the host (which cancels the routine's slower copy, or posts it
+// at once on a miss). Text typed here always starts with UI_TAG and is never relayed.
+const UI_TAG = '\u{1F916}';
+const UI_TAG_RE = /^\s*\u{1F916}/u;
+const UI_TIMEOUT_MS = 12000;
+let uiSrc = null;                    // last tab/frame showing the relay chat (ids only)
+let uiArmedUntil = 0, uiPollTimer = null, uiPolling = false;
+function uuidFromKey(key) { const m = /id:uuid=([0-9a-f-]{8,64})$/i.exec(String(key || '')); return m ? m[1].toLowerCase() : ''; }
+async function tabUi(src, msg) {
+  if (!src || typeof src.tabId !== 'number' || !chrome.tabs || !chrome.tabs.sendMessage) return null;
+  const opts = typeof src.frameId === 'number' ? { frameId: src.frameId } : undefined;
+  try { return await withTimeout(chrome.tabs.sendMessage(src.tabId, Object.assign({ type: 'relay-ui' }, msg), opts), UI_TIMEOUT_MS); }
+  catch (e) { return null; }
+}
+async function hostAck(ack) { try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({ type: 'ui_ack' }, ack)); } catch (e) { /* host down */ } }
+async function applyUi(res, src, seenAt) {
+  const ui = res && res.ui;
+  if (!ui) return;
+  for (const r of (ui.react || []).slice(0, 4)) {
+    const out = await tabUi(src, { action: 'react', uuid: String(r.uuid || ''), emoji: String(r.emoji || ''), prompt: r.emoji === '\u2753' });
+    const ack = { ok: !!(out && out.ok), step: (out && out.step) || 'no-tab', latencyMs: Math.max(0, Date.now() - (seenAt || Date.now())) };
+    if (r.pendingId) ack.pendingId = String(r.pendingId);
+    if (r.noteId) ack.noteId = String(r.noteId);
+    await hostAck(ack);
+  }
+  for (const t of (ui.type || []).slice(0, 2)) {
+    const text = String(t.text || '');
+    const out = UI_TAG_RE.test(text) ? await tabUi(src, { action: 'type', text }) : { ok: false, step: 'untagged' };
+    await hostAck({ noteId: String(t.noteId || ''), ok: !!(out && out.ok), step: (out && out.step) || 'no-tab',
+                    latencyMs: Math.max(0, Date.now() - (seenAt || Date.now())) });
+  }
+}
+function armUiPoll(ms) {
+  uiArmedUntil = Math.max(uiArmedUntil, Date.now() + ms);
+  if (!uiPollTimer) uiPollTimer = setTimeout(uiPollLoop, 3000);
+}
+async function uiPollOnce() {
+  if (uiPolling || !uiSrc) return;
+  uiPolling = true;
+  try {
+    let res = null;
+    try { res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'ui_poll' }); } catch (e) { res = null; }
+    for (const a of ((res && res.actions) || []).slice(0, 5)) {
+      if (a.action !== 'react') continue;
+      const out = await tabUi(uiSrc, { action: 'react', uuid: String(a.uuid || ''), emoji: String(a.emoji || '') });
+      await hostAck({ actionId: String(a.id || ''), ok: !!(out && out.ok), step: (out && out.step) || 'no-tab' });
+    }
+  } finally { uiPolling = false; }
+}
+async function uiPollLoop() {
+  uiPollTimer = null;
+  await uiPollOnce();
+  if (Date.now() < uiArmedUntil) uiPollTimer = setTimeout(uiPollLoop, 3000);   // fast for a while after a send
+}
+let lastSendAt = 0;
 
 // ─── v1.3.8 /test ───
 let pendingTestMem = null;
@@ -287,6 +358,41 @@ function withTimeout(p, ms) {
   return Promise.race([p, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timed out after ' + Math.round(ms / 1000) + 's')), ms); })])
     .finally(() => clearTimeout(timer));
 }
+// v1.4.6: read his photos from the tab (the image X already shows) and stream them to the Mac in
+// in-order chunks. Bytes pass through memory only; nothing is stored or logged here.
+function randomUploadId() {
+  const b = new Uint8Array(16);
+  try { crypto.getRandomValues(b); } catch (e) { for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256); }
+  return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+}
+async function uploadMedia(uuid, count, src) {
+  const atts = [];
+  let skipped = 0;
+  const n = Math.max(0, Math.min(10, Number(count) || 0));
+  for (let i = 0; i < n; i++) {
+    const info = await tabUi(src, { action: 'media-info', uuid, index: i });
+    if (!info || !info.ok || !(info.size > 0) || !/^[0-9a-f]{64}$/.test(String(info.sha256 || ''))) { skipped++; continue; }
+    const uploadId = randomUploadId();
+    let ok = true;
+    const chunks = Math.max(1, Number(info.chunks) || 1);
+    for (let seq = 0; seq < chunks && ok; seq++) {
+      const c = await tabUi(src, { action: 'media-chunk', uuid, index: i, seq });
+      if (!c || !c.ok || !c.data) { ok = false; break; }
+      let r = null;
+      try { r = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_chunk', uploadId, seq, data: c.data }); } catch (e) { r = null; }
+      if (!r || !r.ok) ok = false;
+    }
+    if (!ok) {
+      skipped++;
+      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId }); } catch (e) { /* host down */ }
+      continue;
+    }
+    atts.push({ uploadId, size: info.size, sha256: info.sha256, mime: String(info.mime || ''), name: String(info.name || '') });
+  }
+  await tabUi(src, { action: 'media-release', uuid });
+  return { atts, skipped };
+}
+
 function randomTestId() {
   const b = new Uint8Array(6);
   try { crypto.getRandomValues(b); } catch (e) { for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256); }
@@ -358,7 +464,10 @@ async function onTestExpiry() {
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'test_unseen', testId: t.testId }); } catch (e) { /* host may be down */ }
 }
 
-async function handleItem(item) {
+async function handleItem(item, src) {
+  if (src) uiSrc = src;
+  const seenAt = Date.now();
+  if (UI_TAG_RE.test(String(item.text || ''))) return;   // v1.4.6: a prompt the relay typed itself, never a reply
   if (item.refuse) { await handleRefusal(item); return; }
   if (item.direction !== 'outbound') { await maybeTestReport(item); return; }
   const tm = TEST_RE.exec(String(item.text || ''));
@@ -373,7 +482,7 @@ async function handleItem(item) {
     const g = await getPendingGuess();
     if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
       if (await isDuplicate(item.key)) return;
-      if (bw === 'yes') await handleYes(item, '');
+      if (bw === 'yes') await handleYes(item, '', src);
       else await handleCancel(item, g);
       return;
     }                                         // nothing pending here: the host checks its own prompts
@@ -381,7 +490,7 @@ async function handleItem(item) {
   const ym = YES_RE.exec(String(item.text || ''));
   if (ym) {                                   // "/yes [Name]" confirms a pending guessed reply (item 3)
     if (await isDuplicate(item.key)) return;
-    await handleYes(item, ym[1]);
+    await handleYes(item, ym[1], src);
     return;
   }
   const cfg = await getConfig(false);
@@ -390,17 +499,42 @@ async function handleItem(item) {
   if (await isDuplicate(item.key)) return;
   const ev = { kind: 'reply', key: item.key, contactName: d.contactName, textLength: (item.text || '').length };
   if (d.skip) { await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip })); return; }
-  await addEvent(Object.assign(ev, { status: 'sending' }));
-  const payload = { type: 'send', text: item.text, quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  const xUuid = uuidFromKey(item.key);
+  const undoMs = Math.max(0, Math.min(10, Number(cfg.undoSeconds) || 0)) * 1000;
+  if (undoMs && xUuid && src && !/^\s*(\/|relay:)/i.test(String(item.text || ''))) {
+    // v1.4.6 undo window: a 🗑️ on his own message within undoSeconds cancels it before it goes out.
+    await addEvent(Object.assign({}, ev, { status: 'waiting', detail: 'undo window' }));
+    const u = await tabUi(src, { action: 'await-undo', uuid: xUuid, ms: undoMs });
+    if (u && u.trashed) {
+      await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
+      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
+      return;
+    }
+    await updateEvent(item.key, { status: 'sending' });
+  } else {
+    await addEvent(Object.assign(ev, { status: 'sending' }));
+  }
+  const payload = { type: 'send', text: item.text || '', quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
+  if (Number(item.mediaCount) > 0) {
+    if (cfg.relayAttachments !== false && xUuid && src) {
+      const up = await uploadMedia(xUuid, item.mediaCount, src);
+      if (up.atts.length) payload.attachments = up.atts;
+      if (up.skipped) payload.attachmentsSkipped = up.skipped;
+    } else payload.attachmentsSkipped = Math.min(10, Number(item.mediaCount));
+  }
   if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
-  console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: item.text.length, quoted: !!item.quotedText });
+  if (item.cards) payload.cards = item.cards;
+  console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
+                                                      attachments: (payload.attachments || []).length });
   let res, status, detail;
   try {
     res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
     if (!res) { status = 'error'; detail = 'no response'; }
     else if (res.needsConfirm && res.handle) {  // item 3 / W1: hold the text in session; confirm with /yes
       await setPendingGuess({ text: item.text, label: String(res.label || ''), handle: String(res.handle || ''),
-                              conversationId: item.conversationId, quotedText: item.quotedText || '', at: Date.now() });
+                              conversationId: item.conversationId, quotedText: item.quotedText || '', at: Date.now(),
+                              xUuid: payload.xUuid || '', attachments: payload.attachments || null });
       try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: 2 }); } catch (e) { /* tests */ }
       status = 'needs-confirm';
       detail = (res.reason === 'new_contact')
@@ -421,6 +555,8 @@ async function handleItem(item) {
   const patch = { status, detail };
   if (res && res.contact) { patch.contactName = String(res.contact).slice(0, 40); patch.routedBy = String(res.routedBy || ''); }
   await updateEvent(item.key, patch);
+  if (res && res.ui) await applyUi(res, src, seenAt);
+  if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
 }
 
 // v1.4.2: the owner put a thumbs-up / thumbs-down on the newest pending prompt (content.js checks the
@@ -437,17 +573,21 @@ async function handleReaction(r) {
     // v1.4.5: a wastebasket on a relayed message -> the Mac asks "Block <label>?" (nothing is muted yet)
     const quotedText = String(r.quotedText || '').slice(0, 500);
     if (!quotedText) return;
-    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, quotedText, conversationId: cfg.relayConversationId }); } catch (e) { /* host down */ }
+    let res = null;
+    try { res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, quotedText, conversationId: cfg.relayConversationId, ui: cfg.uiReactions !== false && !!uiSrc }); } catch (e) { /* host down */ }
+    if (res && res.ui) await applyUi(res, uiSrc, Date.now());
     return;
   }
   const item = { key, conversationId: cfg.relayConversationId, ts: String(r.ts || new Date().toISOString()), text: '' };
   const g = await getPendingGuess();
   if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
-    if (word === 'yes') await handleYes(item, '');
+    if (word === 'yes') await handleYes(item, '', uiSrc);
     else await handleCancel(item, g);
     return;
   }
-  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, conversationId: cfg.relayConversationId }); } catch (e) { /* host down */ }
+  let res = null;
+  try { res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, conversationId: cfg.relayConversationId, ui: cfg.uiReactions !== false && !!uiSrc }); } catch (e) { /* host down */ }
+  if (res && res.ui) await applyUi(res, uiSrc, Date.now());
 }
 
 function sanitizeItem(raw) {
@@ -466,6 +606,10 @@ function sanitizeItem(raw) {
     // v1.4.3: text-free structure only; closed character set, capped
     out.quoteProbe = raw.quoteProbe.replace(/[^A-Za-z0-9#@\[\]{},.:;<>|_\-!+=/ ()]/g, '').slice(0, 4000);
   }
+  const cc = Number(raw.cards);
+  if (Number.isInteger(cc) && cc > 0) out.cards = Math.min(5, cc);           // v1.4.6: shared post / link cards (count)
+  const mc = Number(raw.mediaCount);
+  if (Number.isInteger(mc) && mc > 0) out.mediaCount = Math.min(10, mc);   // v1.4.6: how many photos, nothing else
   if (raw.refuse) { out.refuse = String(raw.refuse).slice(0, 40); out.textLength = Number(raw.textLength) || 0; out.limit = Number(raw.limit) || 4000; }
   return out;
 }
@@ -495,7 +639,7 @@ async function setWrongAccount(on) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || sender.id !== chrome.runtime.id) return false;
   if (msg.type === 'relay-log' && msg.item && sender.tab) {
-    handleItem(sanitizeItem(msg.item)).catch(e => console.warn(LOG_PREFIX, 'reply handling failed', e));
+    handleItem(sanitizeItem(msg.item), { tabId: sender.tab.id, frameId: sender.frameId }).catch(e => console.warn(LOG_PREFIX, 'reply handling failed', e));
     return false;
   }
   if (msg.type === 'relay-signal' && msg.signal && sender.tab) {
@@ -503,7 +647,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     else if (msg.signal.status === 'account_ok') setWrongAccount(false).catch(() => {});
     return false;
   }
+  if (msg.type === 'relay-ui-tick' && sender.tab) {   // v1.4.6: pick up queued reactions (ids only)
+    uiSrc = { tabId: sender.tab.id, frameId: sender.frameId };
+    getConfig(false).then(c => { if (c.ok && !c.paused && c.uiReactions !== false) return uiPollOnce(); }).catch(() => {});
+    return false;
+  }
   if (msg.type === 'relay-reaction' && msg.item && sender.tab) {
+    uiSrc = { tabId: sender.tab.id, frameId: sender.frameId };
     handleReaction(msg.item).catch(e => console.warn(LOG_PREFIX, 'reaction handling failed', e));
     return false;
   }

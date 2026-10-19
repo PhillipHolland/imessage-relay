@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.5)
+# iMessage Relay: operator reference (v1.4.6)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -28,9 +28,9 @@ github.com/PhillipHolland/imessage-relay. It is one Python file that writes ever
 Mac helper, installer, tests) and checks each one against an embedded sha256 digest. Nothing is
 cloned or installed from the repo; you only download this one pinned file.
 
-**Pinned release (v1.4.5):**
-- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.5/build_bundle.py`
-- sha256: `2e51b4a7a50e35682217eeb64f8586ebdbfd451846e3f9de011e81759dc19da9`
+**Pinned release (v1.4.6):**
+- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.6/build_bundle.py`
+- sha256: `4e38db50b05e1a41c5e7d35624fbcd9e0240ea133d0ae4190ca2a3ecb185a8ac`
 
 **Always verify before running.** Download with `curl -fsSL`, check the sha256 against the pinned
 value above, and run the file only on an exact match. On a mismatch (or a failed download), **refuse**:
@@ -175,7 +175,7 @@ windows the checklist needs.
    machine Shell that reads it on **stdin**. Never put it on a command line.
 3. Run, with a perl alarm of 300 s:
    ```
-   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.5/build_bundle.py' && echo "2e51b4a7a50e35682217eeb64f8586ebdbfd451846e3f9de011e81759dc19da9  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
+   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.6/build_bundle.py' && echo "4e38db50b05e1a41c5e7d35624fbcd9e0240ea133d0ae4190ca2a3ecb185a8ac  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
    ```
 
 **Paste path (the owner runs it):** nothing to save or attach; the line downloads the pinned file to
@@ -184,7 +184,7 @@ line. When it asks for the webhook key,
 open grokbot://app/v1/sidebar?target=webhook-key&automation=<folder>, copy the key and paste it there
 (it stays hidden)."**
 ```
-cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.5/build_bundle.py' && echo "2e51b4a7a50e35682217eeb64f8586ebdbfd451846e3f9de011e81759dc19da9  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
+cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.6/build_bundle.py' && echo "4e38db50b05e1a41c5e7d35624fbcd9e0240ea133d0ae4190ca2a3ecb185a8ac  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
 ```
 
 **Read the output** (machine path: the JSON; paste path: ask "Did it end with "ok": true?"):
@@ -282,7 +282,7 @@ Settings > Privacy & Security > Automation > Google Chrome > Messages on.
 ### Step U. Existing install (upgrade in place)
 Ask nothing. Download the newest pinned build_bundle.py (the pinned release at the top of this skill)
 the same way, verify it, and run (perl alarm 300):
-`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.5/build_bundle.py' && echo "2e51b4a7a50e35682217eeb64f8586ebdbfd451846e3f9de011e81759dc19da9  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
+`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.6/build_bundle.py' && echo "4e38db50b05e1a41c5e7d35624fbcd9e0240ea133d0ae4190ca2a3ecb185a8ac  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
 A sha256 mismatch → refuse, exactly as in Step 5.
 The installer keeps config.json, roster.json and the watcher app with its Full Disk Access grant (it
 never rebuilds or re-signs it). The setup JSON shows what's already set. If a value is missing
@@ -582,6 +582,58 @@ Muting only stops the relay from forwarding that person (and drops them as a rep
 **not** block them in Messages — they can still text the owner's phone. In dry run, a confirmed block
 is previewed but config is not changed. (The admin CLI equivalents are `RC mute` / `RC unmute`.)
 
+### Photos into X Chat (v1.4.6, 1:1 chats)
+A `message` (or a `batch` entry) may carry `media:[{token,kind,mime,ext,size,sha256,macPath}]`: metadata
+of a photo the watcher copied into `~/.imessage-relay/outbox` on the Mac (mode 600, swept after 10 min;
+no filename, nothing logged but counts, sizes and kinds). Images over 5 MB are downsized on the Mac
+first (`sips`); GIFs over 5 MB, videos, voice notes and files are not sent, they arrive as a notice
+("📎 PDF file, 1.2 MB (not relayed — open Messages to see it)"). Group photos stay "📷 Photo".
+The routine (prompt steps M1–M3 in "The routine prompt"):
+1. Before running relay_post.py, copy each `macPath` from the Mac to the bot's computer at
+   `~/.imessage-relay-routine/media/<token>.<ext>` (CopyToBox with the Mac's machine id). A failed copy:
+   add `"media_off": true` to the request.
+2. relay_post.py verifies size + sha256, runs the newer helper's `encrypt-media` (auto-located at
+   `~/xchat/helper`, or `helper.media_python`/`helper.media_script`) and answers
+   `{"action":"upload","uploads":[{token, upload_conversation_id, total_bytes, num_parts, parts:[{segment_index, media:"$file:…"}]}]}`.
+   The routine calls `chat_media_upload_initialize` (conversation_id = upload_conversation_id, total_bytes),
+   then `chat_media_upload_append` per part (id = the session id, media = the part's `$file:` value exactly,
+   segment_index, conversation_id and media_hash_key from initialize), then runs relay_post.py again with
+   the same payload plus `"media_keys": {"<token>": "<media_hash_key>"}`. An upload failure: run again with
+   `"media_off": true` (the text is posted with "📷 Photo couldn't be relayed — open Messages to see it").
+3. Each resulting send may carry `media_finalize:[{token, media_hash_key, num_parts}]`: call
+   `chat_media_upload_finalize` (id = that token's session id, conversation_id, media_hash_key, num_parts,
+   message_id = the send's message_id) before its `send_chat_message`.
+Attachment bytes are never stored: the copy, the upload parts and a tiny state file (mode 600) are
+deleted as soon as the send is built, on any error, or by a 15-minute sweep. An old routine prompt keeps
+working: with no copied file the line simply carries the "couldn't be relayed" notice.
+
+### Your photos and files out to iMessage (v1.4.6)
+Photos the owner sends in the relay chat (with or without text) go out as iMessage attachments to the same
+person the text would go to, with the same prompts (a group only after yes). The extension reads the image
+X already shows, streams it to the Mac in 512 KiB chunks (`attach_chunk`), and the host verifies size +
+sha256 before anything is sent, stages it under `~/Pictures/.imessage-relay-out` (mode 600, a folder
+Messages can read), sends it with Messages' own `send` (file mode of send_imessage.applescript), and deletes
+it once chat.db shows the attachment row delivered (or on failure, or after the pending TTL). 25 MB and 10
+attachments per message. A photo that can't be read gets "⚠️ An attachment couldn't be sent … ".
+**Shared posts and links**: an X post (or a link card) shared into the chat is sent as its URL
+(`https://x.com/<user>/status/<id>`), after anything typed ("Jordan:" + a post → the link to Jordan). A
+card is never a reply quote and its thumbnail is never sent as a photo.
+
+### Fast feedback in X (v1.4.6)
+- ✅ on the owner's message when Messages accepted the reply; the "→ Alex ✓" line only when the reaction
+  could not be placed (failures always post ⚠️). 👀 when read (1:1). Their tapbacks on a relayed reply are
+  mirrored onto his X message (id map only). ❓ on his message = "Reply to …?" (👍/👎 or yes/no). Only
+  "Who's this for?" is typed (tagged 🤖). The relay ignores its own ✅/👀/❓/⚠️/🤖.
+- **Every refusal says why**: ⚠️ on his message plus `{"type":"refused","reason":"not_sent","detail"}` →
+  "⚠️ Not sent: There was nothing after the name to send. Type the message after "Jordan:"." (fixed,
+  body-free wording; not for messages outside the relay chat).
+- Undo: 🗑️ on his own message within `undoSeconds` (5) cancels it. Quiet names (`quietNamesSeconds`).
+- `spamMode follow-messages` (default): Junk held (counts only), Unknown Senders "⚠️ Unknown · ",
+  Promotions "🏷️ Promo · ", Transactions "🧾 "; falls back to `tag` when Messages' filters can't be read.
+- New config keys (all `RC set …`): `uiReactions`, `uiPrompts`, `readReceipts`, `mirrorTapbacks`,
+  `stripOptOut`, `relayAttachments` (true), `quietNamesSeconds` (600), `undoSeconds` (5),
+  `spamMode` (`follow-messages`|`tag`|`off`).
+
 ### How the routine posts (relay_post.py + xchat_lite)
 The routine never formats or encrypts message text itself. It writes each webhook payload to a unique
 request file and runs **relay_post.py --in <file>** on the bot's computer; that helper reads the file
@@ -718,7 +770,7 @@ LaunchAgent pointing at whatever applet it already runs. An early app that runs
 **only if the extension changed in this version**, the owner clicks the reload icon on the extension
 card **and then refreshes any open x.com chat tab (Cmd+R)** — reloading the extension disconnects its
 content script from already-open tabs, so replies sent in them before the refresh are missed.
-**v1.4.5 changes the extension** (🗑️ to block), **v1.4.4 changed it** (native Reply quotes), **v1.4.3 changed it** (quote diagnostics, Copy page structure), **v1.4.2 changed it** (👍/👎 on a prompt), **v1.4.1 changed it** (a plain `yes`/`no` answers a reply prompt), **v1.4.0 changed it** (the popup
+**v1.4.6 changes the extension** (reactions, photos), **v1.4.5 changed it** (🗑️ to block), **v1.4.4 changed it** (native Reply quotes), **v1.4.3 changed it** (quote diagnostics, Copy page structure), **v1.4.2 changed it** (👍/👎 on a prompt), **v1.4.1 changed it** (a plain `yes`/`no` answers a reply prompt), **v1.4.0 changed it** (the popup
 wording for a Contacts confirmation), **v1.3.9 changed it**
 (X Chat's bubble times, now plain spans in the message text, are no
 longer appended to replies; the native host also strips them, so an old extension can't leak them), and
@@ -729,6 +781,10 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.6 changes the extension** (✅/❓/👀/⚠️ reactions, 🤖 prompts, undo, photos, shared posts): reload
+it and press Cmd+R. **Update your side FIRST** here too: the v1.4.6 helper formats the new refusal lines,
+the one-post overnight recap and the photo flow. The photo flow needs the routine prompt's M1–M3 steps;
+without them photos arrive as a "couldn't be relayed" notice and everything else works unchanged.
 **v1.4.5: update your side FIRST.** The v1.4.5 watcher sends `batch` webhooks, which only v1.4.5's
 relay_post.py understands, so rebuild `~/imr/bundle` on your computer before running the Mac line (or set
 `RC set batchWebhooks off` until you do). The old routine prompt keeps working with v1.4.5's helper (it

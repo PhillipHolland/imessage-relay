@@ -26,6 +26,8 @@ has the technical details. `tools/` holds the scripts that pack `bundle/` into `
 - **No message bodies stored on the bot computer.** The bot sees a message only while relaying it
   and keeps nothing of the text; the Mac side never writes message bodies to disk either (memory
   only; logs hold counts).
+- **Attachments (v1.4.6).** Attachment bytes are never stored. Only in-flight temp files (mode 600),
+  deleted right after use, including on error. Nothing is logged except counts, sizes and types.
 - chat.db is opened read-only. Replies start in dry run (logged, not sent) until you go live.
 - No telemetry. The relay makes no analytics or phone-home requests.
 
@@ -33,7 +35,7 @@ has the technical details. `tools/` holds the scripts that pack `bundle/` into `
 Each release lists the sha256 of its assets in the release notes. Check before running:
 
 ```sh
-curl -fsSL -o build_bundle.py https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.5/build_bundle.py
+curl -fsSL -o build_bundle.py https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.6/build_bundle.py
 shasum -a 256 build_bundle.py     # macOS (on Linux: sha256sum build_bundle.py)
 ```
 

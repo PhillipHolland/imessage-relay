@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.5 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.6 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -67,6 +67,17 @@ STDOUT (one JSON object):
   the owner; every status/confirmation line is silent (should_notify:false) and threads under the
   owner's reply when reply_to is set (item 1).
   {"action":"skip","reason":"duplicate id …"}
+  v1.4.6 photos (1:1 inbound): a message/batch line may carry `media` (token, ext, size, sha256, macPath).
+  Before running, the routine copies each macPath from the Mac to <media_dir>/<token>.<ext> (default
+  ~/.imessage-relay-routine/media). Run 1 then answers
+  {"action":"upload","uploads":[{"token","upload_conversation_id","total_bytes","num_parts",
+                                 "parts":[{"segment_index","media":"$file:/…/part"}]}]}
+  -> chat_media_upload_initialize + _append per part, then run again (same payload) with
+  "media_keys": {token: media_hash_key}. Each send then carries "media_finalize":[{token, media_hash_key,
+  num_parts}] -> chat_media_upload_finalize (with that send's message_id) before send_chat_message.
+  "media_off": true (a copy/upload failed) posts the text with a clear "couldn't be relayed" notice.
+  Photos are in flight only: the copy, the parts and a tiny state file (mode 600) are deleted when the
+  send is built, on any error, or by the sweep after 15 min. Nothing about them is logged.
   {"action":"fetch","need":["conversation_key_events","signing_keys"],"reason":"…"}   # v1.4.5: fetch, write again, rerun
   {"action":"error","reason":"…"}                          # body-free; the routine posts one failure line
 """
@@ -90,7 +101,10 @@ def _label(p, default='someone'):
 
 
 UNKNOWN_TAG = '\u26a0\ufe0f Unknown \u00b7 '
+TAGS = {'spam': '\U0001f6ab Spam \u00b7 ', 'promotion': '\U0001f3f7\ufe0f Promo \u00b7 ',   # v1.4.6 follow-messages
+        'transaction': '\U0001f9fe '}
 BATCH_MAX = 20
+DIGEST_MAX_CHARS = 9000
 KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
 KEY_CACHE_TTL_S = 6 * 3600          # after 6 h the routine fetches keys again (a rotated key heals by then)
 KEY_CACHE_MAX_BYTES = 512 * 1024
@@ -105,10 +119,231 @@ def _message_line(m):
     g = m.get('group') or {}
     gl = str(g.get('label') or g.get('name') or '').strip()
     head = (gl + GROUP_SEP if gl else '') + label
-    if m.get('unknown') and not gl:
+    tag = TAGS.get(str(m.get('tag') or '')) if not gl else None
+    if tag:
+        head = tag + head               # v1.4.6: Messages filed it under Spam / Promotions / Transactions
+    elif m.get('unknown') and not gl:
         head = UNKNOWN_TAG + head       # v1.4.5 spamMode tag: not in Contacts / flagged by Messages
+    if m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown'):
+        return text                     # v1.4.6 quiet names: same sender as the line just above
     sep = ' ' if m.get('reaction') else ': '
     return head + sep + text
+
+
+# ---------- v1.4.6 photos (in-flight only) ----------
+MEDIA_DIR = '~/.imessage-relay-routine/media'
+MEDIA_TTL_S = 15 * 60               # a photo the routine never finished with is swept on the next run
+MEDIA_MAX_BYTES = 5 * 1024 * 1024   # the X Chat image limit (xchat_lite encrypt-media)
+MEDIA_EXTS = ('jpg', 'jpeg', 'png', 'gif', 'webp')
+MEDIA_MAX_PER_LINE = 10
+_HEX32 = re.compile(r'^[0-9a-f]{32}$')
+_HEX64 = re.compile(r'^[0-9a-f]{64}$')
+_PHOTO_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
+
+
+def media_meta(items):
+    """The valid photo entries of a webhook message (metadata only: token, ext, size, sha256, macPath)."""
+    out = []
+    for x in (items if isinstance(items, list) else [])[:MEDIA_MAX_PER_LINE]:
+        if not isinstance(x, dict):
+            continue
+        tok, ext, sha = str(x.get('token') or ''), str(x.get('ext') or '').lower(), str(x.get('sha256') or '').lower()
+        size = x.get('size')
+        if (_HEX32.match(tok) and ext in MEDIA_EXTS and _HEX64.match(sha) and isinstance(size, int)
+                and not isinstance(size, bool) and 0 < size <= MEDIA_MAX_BYTES):
+            out.append({'token': tok, 'ext': ext, 'size': size, 'sha256': sha, 'macPath': str(x.get('macPath') or '')[:400]})
+    return out
+
+
+def _with_media(line, m):
+    media = media_meta((m or {}).get('media'))
+    if media:
+        line['media'] = media
+    return line
+
+
+def media_box_path(item, media_dir=None):
+    return os.path.join(os.path.expanduser(media_dir or MEDIA_DIR), '%s.%s' % (item['token'], item['ext']))
+
+
+def _media_state_path(token, media_dir=None):
+    return os.path.join(os.path.expanduser(media_dir or MEDIA_DIR), '%s.json' % token)
+
+
+def _rm(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _rmtree_upload(path, media_dir=None):
+    """Delete an encrypt-media upload_dir (only its own part files; never anything else)."""
+    if not path or not os.path.isdir(path):
+        return
+    for f in os.listdir(path):
+        _rm(os.path.join(path, f))
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
+def media_cleanup(tokens_items, media_dir=None):
+    """Delete every in-flight file of these photos: the plaintext copy, the upload parts, the state file."""
+    for it in tokens_items:
+        st = _read_media_state(it['token'], media_dir)
+        _rmtree_upload(st.get('upload_dir'), media_dir)
+        _rm(media_box_path(it, media_dir))
+        _rm(_media_state_path(it['token'], media_dir))
+
+
+def _read_media_state(token, media_dir=None):
+    try:
+        with open(_media_state_path(token, media_dir)) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def media_sweep(media_dir=None, now=None, ttl=MEDIA_TTL_S):
+    """Remove photos and upload parts left behind by an unfinished run (older than ttl)."""
+    d = os.path.expanduser(media_dir or MEDIA_DIR)
+    now = time.time() if now is None else now
+    if not os.path.isdir(d):
+        return 0
+    n = 0
+    for f in os.listdir(d):
+        p = os.path.join(d, f)
+        try:
+            if now - os.lstat(p).st_mtime <= ttl:
+                continue
+            if os.path.isdir(p):
+                _rmtree_upload(p)
+            else:
+                os.remove(p)
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
+def _sha256_file(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def media_verify(item, media_dir=None):
+    """True when the routine copied the photo intact (size + sha256 match the Mac's metadata)."""
+    p = media_box_path(item, media_dir)
+    try:
+        if os.path.getsize(p) != item['size']:
+            return False
+        if os.stat(p).st_mode & 0o077:
+            os.chmod(p, 0o600)                 # in-flight copy: owner-only
+        return _sha256_file(p) == item['sha256']
+    except OSError:
+        return False
+
+
+def media_failed_text(text, n):
+    """The line when its photo(s) could not be relayed: a clear notice instead of a silent drop."""
+    note = '\U0001f4f7 %s couldn\u2019t be relayed \u2014 open Messages to see %s' % (
+        ('Photo', 'it') if n == 1 else ('%d photos' % n, 'them'))
+    if _PHOTO_PLACEHOLDER.search(text):
+        return _PHOTO_PLACEHOLDER.sub(lambda _m: note, text)
+    return text + '\n\u2002' + note
+
+
+def locate_media_helper(helper):
+    """(python, script) for an xchat_lite with encrypt-media (the newer helper; v1.4.6). helper.media_python /
+    helper.media_script win; else ~/xchat/helper; else the regular helper if it has encrypt-media."""
+    h = helper or {}
+    if h.get('media_python') and h.get('media_script'):
+        return os.path.expanduser(str(h['media_python'])), os.path.expanduser(str(h['media_script']))
+    for root in (os.path.expanduser('~/xchat/helper'), os.path.expanduser('~/xchat-grokbot-helper')):
+        sp = os.path.join(root, 'xchat_lite.py')
+        v = os.path.join(root, '.venv', 'bin', 'python')
+        if os.path.exists(sp) and _has_encrypt_media(sp):
+            return (v if os.path.exists(v) else sys.executable), sp
+    py, sp = locate_helper(helper)
+    if sp and _has_encrypt_media(sp):
+        return py, sp
+    return None, None
+
+
+def _has_encrypt_media(script):
+    try:
+        with open(script, encoding='utf-8', errors='replace') as fh:
+            return 'encrypt-media' in fh.read()
+    except OSError:
+        return False
+
+
+def _helper_argv(py, script, helper):
+    base = [py, script]
+    h = helper or {}
+    for flag, key in (('--user-id', 'user_id'), ('--key-version', 'key_version'), ('--juicebox', 'juicebox')):
+        if h.get(key):
+            val = os.path.expanduser(str(h[key])) if key == 'juicebox' else str(h[key])
+            base += [flag, val]
+    return base
+
+
+def media_prepare(conv, items, xchat, helper, runner, media_dir=None):
+    """Encrypt each verified photo into upload parts (encrypt-media). Returns (uploads, failed_items).
+    The plaintext stays only until the send run; the part files are mode 600 in a mode-700 upload_dir.
+    Nothing is logged; on any error every file of a failed photo is deleted."""
+    os.makedirs(os.path.expanduser(media_dir or MEDIA_DIR), mode=0o700, exist_ok=True)
+    good, failed = [], []
+    for it in items:
+        (good if media_verify(it, media_dir) else failed).append(it)
+    media_cleanup(failed, media_dir)
+    if not good:
+        return [], failed
+    py, script = locate_media_helper(helper)
+    if not py:
+        media_cleanup(good, media_dir)
+        return [], failed + good
+    stdin_obj = {'conversation_id': conv, 'events': (xchat or {}).get('events') or [],
+                 'conversation_key_events': (xchat or {}).get('conversation_key_events') or [],
+                 'signing_keys': (xchat or {}).get('signing_keys') or [],
+                 'media': [{'input': media_box_path(it, media_dir)} for it in good]}
+    try:
+        res = _run(_helper_argv(py, script, helper) + ['encrypt-media', '--out-dir', os.path.expanduser(media_dir or MEDIA_DIR)],
+                   stdin_obj, runner)
+    except Exception:
+        media_cleanup(good, media_dir)
+        return [], failed + good
+    out = res.get('media') or []
+    errors = res.get('errors') or {}
+    upload_dir = str(res.get('upload_dir') or '')
+    uploads, ok_items = [], []
+    for i, it in enumerate(good):
+        m = out[i] if i < len(out) and isinstance(out[i], dict) else None
+        if m is None or str(i) in errors or i in errors or not m.get('parts'):
+            failed.append(it)
+            continue
+        parts = [{'segment_index': p.get('segment_index'), 'media': '$file:' + str(p.get('path'))} for p in m['parts']]
+        state = {'upload_dir': upload_dir, 'conversation_key_version': m.get('conversation_key_version'),
+                 'num_parts': len(parts), 'total_bytes': m.get('total_bytes')}
+        sp = _media_state_path(it['token'], media_dir)
+        fd = os.open(sp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as fh:
+            json.dump(state, fh)
+        ok_items.append(it)
+        uploads.append({'token': it['token'], 'upload_conversation_id': res.get('upload_conversation_id'),
+                        'total_bytes': m.get('total_bytes'), 'num_parts': str(len(parts)), 'parts': parts})
+    for it in failed:
+        _rm(media_box_path(it, media_dir))
+    if not uploads:
+        _rmtree_upload(upload_dir)
+    return uploads, failed
 
 
 def format_event(payload):
@@ -120,15 +355,15 @@ def format_event(payload):
     t = str(payload.get('type') or '').strip()
     base_id = str(payload.get('id') or '')
     if t == 'message':
-        return {'kind': 'message', 'lines': [{'id': base_id, 'text': _message_line(payload), 'body': True}]}
+        return {'kind': 'message', 'lines': [_with_media({'id': base_id, 'text': _message_line(payload), 'body': True}, payload)]}
     if t == 'batch':
         # v1.4.5 speed: several texts the watcher found in one tick, one webhook / one routine run.
         # Still one X message per text (each pings), each deduped on its own id.
         msgs = (payload.get('messages') or [])[:BATCH_MAX]
         if not msgs:
             raise ValueError('empty batch')
-        return {'kind': 'batch', 'lines': [{'id': str(m.get('id') or (base_id + '#' + str(i))), 'text': _message_line(m),
-                                            'body': True} for i, m in enumerate(msgs)]}
+        return {'kind': 'batch', 'lines': [_with_media({'id': str(m.get('id') or (base_id + '#' + str(i))), 'text': _message_line(m),
+                                                        'body': True}, m) for i, m in enumerate(msgs)]}
     if t == 'digest':
         # item 7: a header line, then ONE X message per person (their texts grouped under one label).
         msgs = payload.get('messages') or []
@@ -149,12 +384,17 @@ def format_event(payload):
             groups[gi][1].append(sep + str(m.get('text') or '') if sep else str(m.get('text') or ''))
             groups[gi][2].append(mid)
         n, people = len(msgs), len(groups)
-        header = '\U0001f4ec %d message%s while you were away%s.' % (
+        header = '\U0001f319 Overnight: %d message%s%s' % (
             n, '' if n == 1 else 's', (' from %d people' % people) if people > 1 else '')
-        lines = [{'id': (base_id or 'digest') + ':header', 'text': header, 'body': False}]
-        for head, texts, ids in groups:
-            lines.append({'id': 'digest:' + '+'.join(ids), 'text': head + ': ' + '\n\u2002'.join(texts), 'body': True})
-        return {'kind': 'digest', 'lines': lines}
+        # v1.4.6: ONE tidy post (header, then each person once with their texts under them); the line
+        # ids still carry every message id so a retried webhook dedupes.
+        blocks = [head + ':\n' + '\n'.join('\u2002\u2022 ' + x.replace('\n\u2002', '\n\u2002\u2002 ') for x in texts)
+                  for head, texts, _ in groups]
+        text = header + '\n\n' + '\n\n'.join(blocks)
+        if len(text) > DIGEST_MAX_CHARS:
+            text = text[:DIGEST_MAX_CHARS - 40].rstrip() + '\n\u2026 (more in Messages)'
+        ids = '+'.join(i for _, _, ids_ in groups for i in ids_)
+        return {'kind': 'digest', 'lines': [{'id': 'digest:' + (base_id or ids)[:200], 'text': text, 'body': True}]}
     if t == 'sent':
         # item 6: ONE confirmation, posted by the watcher: \u2713\u2713 when chat.db shows delivered, else \u2713
         # after the ~20s fallback. (Dry runs and delivery-check-off still come from the host.)
@@ -222,6 +462,8 @@ def format_event(payload):
             line = '\U0001f504 Resynced after a long gap; older messages were skipped.'
         elif status == 'messages_not_running':
             line = '\u26a0\ufe0f Messages isn\u2019t running on the Mac, so replies can\u2019t be sent right now.'
+        elif status == 'spam_summary' and detail:
+            line = detail[:300]               # v1.4.6: counts only ("\U0001f6ab 3 texts went to Messages \u203a Spam ...")
         elif status == 'fda_missing':
             line = '\u26a0\ufe0f The watcher can\u2019t read Messages yet (Full Disk Access). New texts aren\u2019t coming through.'
         else:
@@ -239,6 +481,19 @@ def format_event(payload):
         label = _label(payload, '')
         if reason == 'echo':
             line = '\u26a0\ufe0f Didn\u2019t send that to ' + (label or 'them') + ' \u2014 it looked like a relayed message bounced straight back.'
+        elif reason == 'not_sent' and str(payload.get('detail') or '').strip():
+            # v1.4.6: the Mac's fixed, body-free reason ("There was nothing after the name to send …")
+            detail = re.sub(r'\s+', ' ', str(payload.get('detail')))[:200].strip()
+            line = '\u26a0\ufe0f Not sent: ' + detail
+        elif reason == 'attachment':
+            # v1.4.6: a photo/file he sent in X Chat couldn't be read or was over the limit (counts only)
+            try:
+                n = max(1, min(10, int(payload.get('count') or 1)))
+            except (TypeError, ValueError):
+                n = 1
+            what = 'An attachment' if n == 1 else '%d attachments' % n
+            line = '\u26a0\ufe0f %s couldn\u2019t be sent%s (too large, over 25 MB, or not loaded in X). ' % (
+                what, (' to ' + label) if label else '') + ('The text went through.' if payload.get('sentText') else 'Nothing was sent.')
         else:
             line = '\u26a0\ufe0f A reply wasn\u2019t sent' + ((' to ' + label) if label else '') + '.'
         return {'kind': 'refused', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
@@ -434,11 +689,11 @@ def session_encrypt_stdin(conversation_id, text, xchat, reply_to=None):
     return body
 
 
-def encrypt_line(conversation_id, text, xchat, helper, runner, reply_to=None, should_notify=False):
+def encrypt_line(conversation_id, text, xchat, helper, runner, reply_to=None, should_notify=False, media=None):
     """Encrypt one line via xchat_lite session-encrypt. Returns the send dict for send_chat_message.
     session-encrypt warms keys and unwraps the conversation key from conversation_key_events in one
     process (robust key resolution). Raises on failure."""
-    py, script = locate_helper(helper)
+    py, script = locate_media_helper(helper) if media else locate_helper(helper)
     if not py or not script:
         raise RuntimeError('xchat_lite not found (see x-api-mcp-guide skill)')
     base = [py, script]
@@ -448,6 +703,8 @@ def encrypt_line(conversation_id, text, xchat, helper, runner, reply_to=None, sh
             val = os.path.expanduser(str(h[key])) if key == 'juicebox' else str(h[key])   # item N3
             base += [flag, val]
     stdin_obj = session_encrypt_stdin(conversation_id, text, xchat, reply_to)
+    if media:
+        stdin_obj['media'] = media                     # v1.4.6: [{media_hash_key, input, conversation_key_version}]
     res = _run(base + ['session-encrypt'], stdin_obj, runner)
     return {
         'conversation_id': str(res.get('id') or conversation_id),
@@ -510,6 +767,53 @@ def process(req, runner=None):
         xchat.update(cached)
         from_cache = True
 
+    # v1.4.6 photos: run 1 turns the copied photos into upload parts ({"action":"upload"}); run 2 (with
+    # media_keys) builds the messages that carry them. Any photo that can't make it gets a clear notice.
+    media_dir = req.get('media_dir') or os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', 'media')
+    try:
+        media_sweep(media_dir)
+    except OSError:
+        pass
+    all_media = [it for ln in lines for it in ln.get('media') or []]
+    media_keys = req.get('media_keys') if isinstance(req.get('media_keys'), dict) else {}
+    line_media = {}
+    if all_media and req.get('media_off'):
+        media_cleanup(all_media, media_dir)
+        for ln in lines:
+            if ln.get('media'):
+                ln['text'] = media_failed_text(ln['text'], len(ln['media']))
+    elif all_media and not media_keys:
+        try:
+            uploads, failed = media_prepare(conv, all_media, xchat, req.get('helper'), runner, media_dir)
+        except Exception:
+            media_cleanup(all_media, media_dir)
+            uploads, failed = [], list(all_media)
+        if uploads:
+            return {'action': 'upload', 'uploads': uploads, 'posted_kind': ev['kind'],
+                    'failed': len(failed),
+                    'reason': 'upload each photo (chat_media_upload_initialize/append), then run again with the same '
+                              'payload and media_keys {token: media_hash_key}'}
+        media_keys = {}                              # nothing uploadable: text with notices
+    if all_media and not req.get('media_off'):
+        for ln in lines:
+            if not ln.get('media'):
+                continue
+            entries, missing = [], 0
+            for it in ln['media']:
+                key = str(media_keys.get(it['token']) or '')
+                st = _read_media_state(it['token'], media_dir)
+                if key and st and os.path.exists(media_box_path(it, media_dir)):
+                    e = {'media_hash_key': key, 'input': media_box_path(it, media_dir)}
+                    if st.get('conversation_key_version'):
+                        e['conversation_key_version'] = str(st['conversation_key_version'])
+                    entries.append((it, e, st))
+                else:
+                    missing += 1
+            if missing:
+                ln['text'] = media_failed_text(ln['text'], missing)
+            if entries:
+                line_media[ln['id']] = entries
+
     reply_to = payload.get('reply_to')          # item 1: X event id of the owner's reply (optional)
     if not xchat.get('events'):
         reply_to = None                         # v1.4.5: threading needs the fetched events; post unthreaded
@@ -520,14 +824,22 @@ def process(req, runner=None):
             # and thread under the owner's bubble when a reply_to was supplied.
             notify = bool(ln.get('body'))
             rt = None if notify else reply_to
-            sends.append(encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner,
-                                      reply_to=rt, should_notify=notify))
+            entries = line_media.get(ln['id'])
+            snd = encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner, reply_to=rt, should_notify=notify,
+                               media=[e for _, e, _ in entries] if entries else None)
+            if entries:
+                # finalize each upload with this message_id BEFORE send_chat_message
+                snd['media_finalize'] = [{'token': it['token'], 'media_hash_key': e['media_hash_key'],
+                                          'num_parts': str(st.get('num_parts') or 1)} for it, e, st in entries]
+            sends.append(snd)
     except Exception as e:                                  # body-free error for the routine
+        media_cleanup(all_media, media_dir)
         if from_cache:
             cache.clear()                                   # stale or bad cache: fetch fresh keys once
             return {'action': 'fetch', 'need': list(NEED_KEYS), 'posted_kind': ev['kind'],
                     'reason': 'cached keys did not work: fetch conversation_key_events + signing_keys and run again'}
         return {'action': 'error', 'reason': str(e)[:200], 'posted_kind': ev['kind'], 'encrypted': False}
+    media_cleanup(all_media, media_dir)                     # v1.4.6: photos are in flight only; gone now
     if supplied and cache:
         try:
             cache.save(conv, xchat['conversation_key_events'], xchat['signing_keys'])

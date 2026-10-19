@@ -100,7 +100,8 @@ function relayLog(text) {
   await reactMsg('yes');
   const rc = hostCalls.filter(c => c.type === 'reaction');
   assert.strictEqual(rc.length, 1);
-  assert.deepStrictEqual(Object.keys(rc[0]).sort(), ['conversationId', 'type', 'word']);
+  assert.deepStrictEqual(Object.keys(rc[0]).sort(), ['conversationId', 'type', 'ui', 'word']);   // v1.4.6: + a boolean ui flag
+  assert.strictEqual(typeof rc[0].ui, 'boolean');
   // 8) a reaction from another conversation does nothing
   await reactMsg('yes', '999-000');
   assert.strictEqual(hostCalls.filter(c => c.type === 'reaction').length, 1);

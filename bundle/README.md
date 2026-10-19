@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.5
+# iMessage Relay v1.4.6
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -11,8 +11,35 @@ iMessage from an opted-in contact
   -> bot posts "Alex: running late" into ONE relay chat (sender <-> you)
 Your reply in the relay chat (x.com in Chrome)
   -> extension sees your own bubble -> native host picks the contact -> Messages.app -> iMessage
-  -> bot posts "→ Alex ✓"
+  -> ✅ appears on your own X message (v1.4.6; a text line only if something fails)
 ```
+v1.4.6 makes the relay feel native in X Chat:
+- **✅ on your reply** as soon as Messages accepts it, placed by the extension in your X tab (seconds, not
+  a routine round trip). The "→ Alex ✓" text line is only posted when the reaction can't be placed;
+  failures are always posted (⚠️). It becomes **👀** when they read it (1:1 chats with read receipts).
+- **Their tapbacks** (❤️ 👍 😂 …) on a reply you sent through the relay show up as real reactions on your
+  X message (an id map only: iMessage guid ↔ X message id, 7 days, no text). Others stay text lines.
+- **Prompts are reactions**: "Reply to Jordan?" is a ❓ on your own message; answer 👍/👎 or yes/no. Only
+  "Who's this for?" is still text, typed by the extension and tagged 🤖. The relay ignores its own ✅ / 👀 /
+  ❓ / 🤖 output; only your 👍/👎/🗑️ on relay prompts and your yes/no count.
+- **Undo**: 🗑️ on your own message within `undoSeconds` (5, 0–10) cancels it before it goes out.
+- **Quiet names**: "Name:" appears only when the sender changes (`quietNamesSeconds`, 600). Replying to an
+  unprefixed bubble with X's native Reply still routes to its sender (keyed hashes of the text, no text).
+- **Spam follows Messages** (`spamMode follow-messages`, the default): texts Messages files under Junk
+  are held (counts only, an hourly "🚫 N spam texts held" line); Unknown Senders show "⚠️ Unknown · ",
+  Promotions "🏷️ Promo · ", Transactions "🧾 ". If you turned screening or the spam filter off in Messages,
+  the relay does the same; if this Mac can't tell, it falls back to `tag` (v1.4.5). "Reply STOP to opt out"
+  footers are dropped from tagged texts. Read-only: Messages settings are never changed.
+- **Photos both ways (1:1)**: their photos arrive as images in X Chat; your photos and files in the relay
+  chat go out as iMessage attachments, with the same routing and confirmations (a group only after yes).
+  Limits: 5 MB per photo into X Chat (bigger ones are downsized), 25 MB per attachment out, 10 per message;
+  anything skipped gets a clear notice. Attachment bytes are never stored. Only in-flight temp files
+  (mode 600), deleted right after use, including on error. Nothing is logged except counts, sizes and types.
+- **Overnight recap**: quiet hours end with ONE tidy post grouped by person.
+- **Shared posts and links**: sharing an X post (or a link card) into the relay chat sends its URL
+  (`https://x.com/<user>/status/<id>`), after anything you typed: "Jordan:" + a post texts Jordan the link.
+  A card is never mistaken for a reply quote, and its thumbnail is never sent as a photo.
+- **Every refusal says why**: a ⚠️ on your message right away, plus a short "⚠️ Not sent: …" line.
 - Every contact shares the one relay chat. A reply goes to the contact of the message you
   replied to (X Chat reply-quote, best effort), else the one named at the start ("Alex: on my
   way", stripped before sending), else whoever wrote last within `replyWindowMinutes` (120).
@@ -62,7 +89,7 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.5)
+## Limits (v1.4.6)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -72,15 +99,18 @@ Your reply in the relay chat (x.com in Chrome)
   reply never goes to a group.
 - 🗑️ on a relayed text asks "Block …?"; yes (or 👍, or `/block yes`) mutes that sender here only
   (Messages is not changed). Texts from numbers not in Contacts, or flagged by Messages, show
-  "⚠️ Unknown · " first (`relayctl set spamMode off` to stop); nothing is hidden.
-  No attachments are sent (incoming ones arrive as "[attachment]").
+  "⚠️ Unknown · " first (`relayctl set spamMode tag|off`; default `follow-messages`, see above).
+- Photos: 1:1 chats only for incoming (group photos stay "📷 Photo"); videos, voice notes and files that
+  arrive show a type/size notice ("open Messages to see it"). Typing indicators are not relayed (they are
+  not in chat.db). Your own tapbacks in X are not sent to iMessage (no supported way without UI scripting).
 
 ## Files
 - `extension/`: Chrome MV3 extension (content script, service worker, status popup). Fixed
   key, so the ID is always `gpnjllicnleeogdmgpjekgflakdiifee`.
 - `mac-helper/`: `imessage_relay_host.py` (native host `com.imessage_relay.host`),
   `imessage_relay_watch.py` (watcher), `watch_launcher.py` (run by the watcher app), `typedstream.py` (attributedBody decoder),
-  `relayctl.py` (operations), `relay_common.py`, `send_imessage.applescript`, templates,
+  `relayctl.py` (operations), `relay_common.py`, `relay_ui.py` (v1.4.6 reaction queue + id map),
+  `relay_media.py` (v1.4.6 in-flight attachments), `relay_echo.py`, `send_imessage.applescript`, templates,
   `config.example.json`.
 - `install.sh` / `uninstall.sh`: idempotent, per-user, no sudo. Install target `~/.imessage-relay/`
   plus `~/Applications/iMessage Relay Watcher.app`.
@@ -112,8 +142,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.5 changes the extension: 🗑️ to block;
-v1.4.4, v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
+reload the extension card in chrome://extensions (v1.4.6 changes the extension: ✅/❓/👀 reactions,
+🤖 prompts, undo, photos; v1.4.5 changed it too (🗑️ to block); v1.4.4, v1.4.3, v1.4.2, v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations
@@ -152,13 +182,19 @@ In the relay chat: `/test` (end-to-end check), `/test send` (also texts your own
   "senderXHandle": "",
   "autoReopenMessages": false,
   "pollSeconds": 10,
-  "defaultCountryCode": "1"
+  "defaultCountryCode": "1",
+  "spamMode": "follow-messages",
+  "uiReactions": true, "uiPrompts": true, "readReceipts": true, "mirrorTapbacks": true,
+  "stripOptOut": true, "relayAttachments": true, "quietNamesSeconds": 600, "undoSeconds": 5
 }
 ```
 Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component re-reads it.
 
 ## Webhook payloads (Mac -> bot)
-- `{"type":"message","contactName","label","handle","text","receivedAt","untrusted":true}`
+- `{"type":"message","contactName","label","handle","text","receivedAt","untrusted":true}`, plus optional
+  `tag`, `unknown`, `quiet`, `reaction` and (v1.4.6) `media:[{token,kind,mime,ext,size,sha256,macPath}]`
+  (metadata only; the routine copies the file from the Mac, see SKILL.md)
+- `{"type":"batch","messages":[...]}` (several texts from one tick)
 - `{"type":"digest","count","quietHours","messages":[...],"untrusted":true}`
 - `{"type":"sent","label","contactName","dryRun","delivered","routedBy","at"}` (host, after a reply; no body)
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)

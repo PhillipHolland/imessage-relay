@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.5: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.6: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -47,6 +47,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc
+import relay_media  # noqa: E402  (v1.4.6: inbound photos, in-flight only)
+import relay_ui
 import relay_setup  # noqa: E402
 import relay_contacts  # noqa: E402  (v1.4.0: replies to someone new)
 from typedstream import message_text  # noqa: E402
@@ -54,7 +56,28 @@ from typedstream import message_text  # noqa: E402
 STATE_PATH = os.path.join(rc.APP_DIR, 'watch_state.json')
 STATUS_PATH = os.path.join(rc.APP_DIR, 'status.json')
 JOBS_DIR = os.path.join(rc.APP_DIR, 'jobs')
-NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')   # v1.4.0: host notifications that failed
+NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')
+UI_ACK_GRACE_S = 10.0       # v1.4.6: wait this long for the extension's \u2705 before a text confirmation
+MIRROR_GRACE_S = 20.0       # v1.4.6: a mirrored tapback not shown in X by then is posted as a text line
+SPAM_SUMMARY_EVERY_S = 3600  # v1.4.6: "N texts went to Spam" (counts only) at most hourly
+PREFS_TTL_S = 600
+OPT_OUT_RE = re.compile(
+    r'(?:[\s\u2002]*[-\u2013\u2014|]?\s*(?:(?:msg|message)\s*(?:&|and)\s*data\s*rates\s*(?:may\s*)?apply[.!]?\s*)?'
+    r'(?:(?:reply|text|txt|respond)\s+(?:with\s+)?["\'\u201c]?stop["\'\u201d]?\b[^\n]{0,90}'
+    r'|["\'\u201c]?stop["\'\u201d]?\s+to\s+(?:opt[\s-]*out|end|cancel|unsubscribe|quit|stop)[^\n]{0,60}))\s*$', re.I)
+
+
+def strip_opt_out(text):
+    """v1.4.6: drop a trailing 'Reply STOP to opt out' style footer (texts tagged spam/unknown only). Never
+    empties a text: if nothing would be left, the original stays."""
+    s = str(text or '')
+    out = s
+    for _ in range(3):
+        nxt = OPT_OUT_RE.sub('', out).rstrip(' \u2002\n-|')
+        if nxt == out:
+            break
+        out = nxt
+    return out if out.strip() else s   # v1.4.0: host notifications that failed
 NOTIFY_RETRY_MAX_AGE_S = 600
 NOTIFY_RETRY_PER_TICK = 10
 CONTACTS_RESULT_MAX_AGE_S = 60
@@ -286,6 +309,12 @@ class Watcher:
         self._names_at = -1e18
         self._empty_since = {}    # rowid -> first-seen ts for empty-body rows (grace before skipping)
         self._backpressure_notified = False
+        self._last_route = None  # v1.4.6 quiet names: route of the last relayed line + when
+        self._last_route_at = -1e18
+        self._prefs = None       # v1.4.6: Messages' own filter settings (read-only), cached
+        self._prefs_at = -1e18
+        self._spam_held = 0      # v1.4.6: spam Messages filtered (counts only) since the last summary
+        self._spam_summary_at = None
 
     # ----- state -----
     def committed(self):
@@ -332,6 +361,8 @@ class Watcher:
             item = rc.read_json(path, {}) or {}
             payload = item.get('payload') if isinstance(item.get('payload'), dict) else None
             stale = time.time() - float(item.get('queuedAt') or 0) > NOTIFY_RETRY_MAX_AGE_S   # host stamps wall time
+            if payload is not None and not stale and float(item.get('notBefore') or 0) > time.time():
+                continue                      # v1.4.6: the extension is showing it first; posted only if it can't
             if payload is None or stale or cfg['paused'] or not cfg['webhookUrl']:
                 rc.log_event('notify_retry_dropped', type=(payload or {}).get('type'), stale=stale)
             elif self.post(cfg, payload):
@@ -405,7 +436,14 @@ class Watcher:
         body_q = 'SELECT text, %s FROM message WHERE ROWID = ?' % ('attributedBody' if 'attributedBody' in msg_cols else 'NULL')
         ctx = {'cc': cfg['defaultCountryCode'], 'mute': set(cfg['mute']), 'roster': rc.load_roster(),
                'roster_changed': False, 'body_q': body_q, 'chat_cols': chat_cols, 'now': self.now(),
-               'spam_col': 'is_spam' in msg_cols}
+               'spam_col': 'is_spam' in msg_cols, 'fa_col': 'filter_action' in msg_cols}
+        # v1.4.6: 1:1 photos are staged for the routine only when they can be posted right away
+        try:
+            att_cols = {r[1] for r in con.execute('PRAGMA table_info(attachment)')}
+        except Exception:
+            att_cols = set()
+        ctx['stage_media'] = bool(cfg.get('relayAttachments', True) and cfg['webhookUrl'] and not cfg['paused']
+                                  and 'filename' in att_cols and not rc.in_quiet_hours(cfg['quietHours'], ctx['now']))
         cursor = self.cursor
         out, capped, stop = [], False, False
         for _ in range(40):
@@ -473,12 +511,18 @@ class Watcher:
             counts['muted'] += 1
             return ('skip', None)
         reaction = None
+        mirror = ''
+        media = []
         if assoc:
             tb = classify_tapback(assoc, assoc_emoji)   # item 5: incoming tapbacks become text lines
             if tb is None:
                 counts['reactionsOrEvents'] += 1
                 return ('skip', None)
             emoji, removed = tb
+            if (not removed and not chat['group'] and cfg.get('uiReactions', True) and cfg.get('mirrorTapbacks', True)):
+                mp = relay_ui.map_get(assoc_guid)   # their tapback on a reply HE sent through the relay
+                if mp:
+                    mirror = relay_ui.enqueue_react(mp['x'], emoji, 'tapback')
             target = tapback_target(con, assoc_guid)
             reaction = ('removed ' if removed else '') + emoji + ' ' + target   # never the reacted row's text
         elif item_type:
@@ -495,6 +539,16 @@ class Watcher:
         else:
             text, ab = con.execute(ctx['body_q'], (rowid,)).fetchone()
             body = message_text(text, ab, False)        # real text only here; placeholders are added below
+            if has_att and not is_audio and not chat['group'] and ctx.get('stage_media'):
+                staged = self._stage_media(con, rowid, received, ctx, counts)
+                if staged is None:
+                    return ('defer', None)                # a photo still landing on disk: next tick
+                media, notes = staged
+                if media or notes:
+                    parts = [body] if body else []
+                    if media and not body:
+                        parts.append(relay_media.placeholder(media))   # "📷 Photo" (the image rides along)
+                    body = '\n'.join(parts + notes)
             if not body:
                 # item 4: metadata-only placeholders (no bytes) for audio / attachments / unsent notices
                 if is_audio or has_att:
@@ -521,20 +575,61 @@ class Watcher:
         m = {'rowid': rowid, 'id': str(guid or rowid), 'contactName': name or rc.format_handle(h),
              'label': label, 'handle': h, 'text': body,
              'receivedAt': rc.iso_utc(received), 'route': h}
+        if reaction is None and media:
+            m['media'] = media
         if reaction is not None:
             m['reaction'] = True
-        if not chat['group'] and cfg.get('spamMode', 'tag') == 'tag' and reaction is None:
-            # v1.4.5 spamMode tag (1:1 only): not in Contacts (and not a relay contact), or flagged by
-            # Messages (chat.is_filtered / message.is_spam). Flags only; the text is never hidden.
-            if (not contact and not name) or self.flagged(con, chat_id, rowid, ctx):
-                m['unknown'] = True
-                counts['taggedUnknown'] = counts.get('taggedUnknown', 0) + 1
+            if mirror:
+                m['uiMirror'], m['uiMirrorAt'] = mirror, ctx['now']
+        mode = cfg.get('spamMode', 'follow-messages')
+        if not chat['group'] and mode != 'off' and reaction is None:
+            tag = None
+            if mode == 'follow-messages':
+                tag = self.messages_filter(con, chat_id, rowid, ctx)
+                if tag is None:
+                    mode = 'tag'                     # this Mac can't tell: the v1.4.5 behavior
+                    counts['spamFallback'] = counts.get('spamFallback', 0) + 1
+            if mode == 'tag':
+                # v1.4.5 spamMode tag (1:1 only): not in Contacts (and not a relay contact), or flagged by
+                # Messages (chat.is_filtered / message.is_spam). Flags only; the text is never hidden.
+                tag = 'unknown' if ((not contact and not name) or self.flagged(con, chat_id, rowid, ctx)) else ''
+            if tag == 'spam' and not contact:
+                # Messages hides spam (no notification, Spam folder): so does the relay. Counts only.
+                self._spam_held += 1
+                counts['spamHeld'] = counts.get('spamHeld', 0) + 1
+                relay_media.drop_staged(m.get('media'))   # a held spam photo is never kept
+                return ('skip', None)
+            if tag:
+                m['tag'] = tag
+                if tag == 'unknown':
+                    m['unknown'] = True
+                    counts['taggedUnknown'] = counts.get('taggedUnknown', 0) + 1
+                else:
+                    counts['tagged'] = counts.get('tagged', 0) + 1
+                if cfg.get('stripOptOut', True):
+                    m['text'] = strip_opt_out(m['text'])
         if chat['group']:
             glabel, ch = rc.roster_label(cfg, ctx['roster'], chat['key'], chat['name'], group=True)
             ctx['roster_changed'] |= ch
             m.update(group={'label': glabel, 'name': chat['name']}, route=chat['key'])
             counts['groupMessages'] += 1
         return ('relay', m)
+
+    def _stage_media(self, con, rowid, received, ctx, counts):
+        """v1.4.6: copy a 1:1 message's photos into the private outbox for the routine (mode 600, swept after
+        ~10 min). Returns (media_meta, notices), or None to retry while a photo is still downloading.
+        Logs counts, sizes and kinds only."""
+        rows = relay_media.attachment_rows(con, rowid)
+        if not rows:
+            return [], []
+        if relay_media.missing_images(rows) and ctx['now'] - received < relay_media.ATTACH_GRACE_S:
+            counts['deferredMedia'] = counts.get('deferredMedia', 0) + 1
+            return None
+        media, notes, _ = relay_media.materialize(rows, stage=True, runner=self.runner)
+        if media or notes:
+            rc.log_event('media_staged', images=len(media), notices=len(notes),
+                         bytes=sum(x['size'] for x in media), kinds=sorted({r['kind'] for r in rows}))
+        return media, notes
 
     def flagged(self, con, chat_id, rowid, ctx):
         """Messages' own junk / unknown-sender flags for a 1:1 row (read-only, no text)."""
@@ -623,6 +718,13 @@ class Watcher:
             p['group'] = dict(m['group'])
         if m.get('reaction'):
             p['reaction'] = True            # item 5: formats as "Alex ❤️ your message" (no colon)
+        if m.get('tag') in ('spam', 'promotion', 'transaction'):
+            p['tag'] = m['tag']             # v1.4.6 follow-messages: "🚫 Spam · " / "🏷️ Promo · " / "🧾 "
+        if m.get('quiet'):
+            p['quiet'] = True               # v1.4.6: same sender as the line just above -> no "Name:" prefix
+        if m.get('media'):
+            # v1.4.6: photo metadata for the routine (token, kind, mime, ext, size, sha256, macPath); no names
+            p['media'] = [dict(x) for x in m['media']]
         if m.get('unknown'):
             p['unknown'] = True             # v1.4.5 spamMode tag: posted as "⚠️ Unknown · <label>: <text>"
         return p
@@ -646,13 +748,75 @@ class Watcher:
             except Exception:
                 pass
 
+    def _resolve_mirrors(self, counts):
+        """v1.4.6: a tapback shown as a real reaction in X is done (no text line). One that failed, or is not
+        done within MIRROR_GRACE_S, is posted the old way. Returns the ones still waiting."""
+        t = self.now()
+        waiting, keep = [], []
+        for m in self.retry:
+            aid = m.get('uiMirror')
+            if not aid:
+                keep.append(m)
+                continue
+            st = relay_ui.state_of(aid)
+            if st == 'done':
+                relay_ui.forget(aid)
+                self.delivered.add(m['rowid'])
+                counts['mirrored'] = counts.get('mirrored', 0) + 1
+            elif st in ('failed', 'expired', 'gone') or t - float(m.get('uiMirrorAt') or t) > MIRROR_GRACE_S:
+                relay_ui.forget(aid)
+                m.pop('uiMirror', None)
+                keep.append(m)
+            else:
+                waiting.append(m)
+        self.retry = keep
+        return waiting
+
+    def _quiet(self, m, cfg, t):
+        """v1.4.6 quiet names: no "Name:" when the same 1:1 sender wrote the line just above, recently."""
+        w = cfg.get('quietNamesSeconds', 600)
+        same = (w > 0 and not m.get('group') and not m.get('reaction') and not m.get('unknown') and not m.get('tag')
+                and self._last_route == m.get('route') and t - self._last_route_at <= w)
+        if same:
+            m['quiet'] = True
+        else:
+            m.pop('quiet', None)
+        return same
+
+    def _after_post(self, m, t):
+        self._last_route, self._last_route_at = m.get('route'), t
+        if m.get('quiet'):
+            try:   # routing for a native quote of an unprefixed line: keyed HMACs of its text, never the text
+                rc.record_quote_keys(m['text'], m.get('route', ''), t)
+            except Exception:
+                pass
+
     def flush(self, cfg, counts):
+        waiting = self._resolve_mirrors(counts)
+        try:
+            self._flush_now(cfg, counts)
+        finally:
+            if waiting:
+                self.retry = sorted(self.retry + waiting, key=lambda m: m['rowid'])
+
+    def _flush_now(self, cfg, counts):
         t = self.now()
         if t < self.backoff_until:
             return
         failed = False
         posts = 0
         if self.held:                    # quiet hours just ended: one digest (chunked if huge)
+            for m in self.held:
+                if m.get('uiMirror'):           # v1.4.6: reactions are silent; a mirrored one needs no recap line
+                    st = relay_ui.state_of(m['uiMirror'])
+                    relay_ui.forget(m['uiMirror'])
+                    m.pop('uiMirror', None)
+                    if st == 'done':
+                        m['_mirrored'] = True
+            for m in [m for m in self.held if m.get('_mirrored')]:
+                self.delivered.add(m['rowid'])
+            self.held = [m for m in self.held if not m.get('_mirrored')]
+        if self.held:
             while self.held and posts < MAX_POSTS_PER_TICK:
                 chunk = self.held[:DIGEST_CHUNK]
                 payload = {'type': 'digest', 'count': len(chunk), 'quietHours': cfg['quietHours'],
@@ -664,6 +828,7 @@ class Watcher:
                 posts += 1
                 counts['digested'] += len(chunk)
                 rc.write_digest_marker(t)               # item 7: owner's first bare reply afterward must name a person
+                self._last_route = None                 # the next line after a recap always shows a name
                 for m in chunk:
                     self._bookkeep(m, t, counts)
         while not failed and self.retry and posts < MAX_POSTS_PER_TICK:
@@ -671,6 +836,11 @@ class Watcher:
                 # v1.4.5 speed: several texts waiting -> ONE webhook (one routine run on the box), still
                 # one X message per text there. Same retry rules: nothing is dropped, a 2xx is never re-sent.
                 chunk = self.retry[:BATCH_MAX]
+                saved = (self._last_route, self._last_route_at)
+                for m in chunk:
+                    self._quiet(m, cfg, t)
+                    self._last_route, self._last_route_at = m.get('route'), t
+                self._last_route, self._last_route_at = saved
                 payload = {'type': 'batch', 'count': len(chunk), 'messages': [self.public(m) for m in chunk],
                            'untrusted': True}
                 if not self.post(cfg, payload):
@@ -681,15 +851,18 @@ class Watcher:
                 counts['forwarded'] += len(chunk)
                 counts['batched'] += len(chunk)
                 for m in chunk:
+                    self._after_post(m, t)
                     self._bookkeep(m, t, counts)
                 continue
             m = self.retry[0]
+            self._quiet(m, cfg, t)
             if not self.post(cfg, dict(type='message', untrusted=True, **self.public(m))):
                 failed = True
                 break
             self.retry.pop(0)                           # remove immediately after 2xx, before bookkeeping
             posts += 1
             counts['forwarded'] += 1
+            self._after_post(m, t)
             self._bookkeep(m, t, counts)
         if (self.retry or self.held) and posts >= MAX_POSTS_PER_TICK:
             counts['rateLimited'] = 1
@@ -710,9 +883,13 @@ class Watcher:
         counts = dict.fromkeys(('taggedUnknown', 'batched', 'scanned', 'notAllowlisted', 'group', 'groupMessages', 'own', 'muted', 'shortCode', 'noHandle',
                                 'reactionsOrEvents', 'empty', 'deferredEmpty', 'tooOld', 'rowErrors', 'rosterWriteErrors',
                                 'new', 'held', 'forwarded', 'digested', 'webhookFailures', 'droppedPaused',
-                                'backpressure', 'rateLimited', 'rebaselined', 'dbBusy'), 0)
+                                'backpressure', 'rateLimited', 'rebaselined', 'dbBusy', 'mirrored', 'spamHeld', 'tagged'), 0)
         self.process_jobs(cfg)
         self.retry_notifications(cfg)
+        try:
+            relay_media.sweep_all(self.now())       # v1.4.6: in-flight attachment files never outlive their TTL
+        except Exception:
+            pass
         t = self.now()
         try:
             con = rc.open_chat_db(self.db_path)
@@ -739,6 +916,10 @@ class Watcher:
             rc.log_event('chat_db_ok')
             self.auto_detect_owner(con, cfg)
         self.process_pending(cfg)            # verify delivery of host sends (host has no FDA; the watcher does)
+        try:
+            self.process_reads(cfg, con)     # v1.4.6: \U0001f440 when a relayed 1:1 reply was read
+        except Exception:
+            pass
         try:
             max_rowid = con.execute('SELECT COALESCE(MAX(ROWID), 0) FROM message').fetchone()[0]
             if self.cursor is None:
@@ -780,6 +961,7 @@ class Watcher:
                 self._backpressure_notified = self.post_status(cfg, 'catching_up', CATCHING_UP_DETAIL)
             if not self.retry and not self.held:
                 self._backpressure_notified = False
+            self.spam_summary(cfg)
         self.save_state()
         self.write_status(cfg, chatDb='ok')
         if any(v for k, v in counts.items() if k not in ('scanned', 'notAllowlisted', 'own', 'noHandle')):
@@ -806,6 +988,13 @@ class Watcher:
         except OSError:
             return False
 
+    @staticmethod
+    def _drop_pending(e):
+        """Resolve a pending send: forget the record and delete its staged attachment copy (v1.4.6)."""
+        if e.get('stagedPath'):
+            relay_media.remove_staged(e['stagedPath'])
+        rc.remove_pending(e)
+
     def process_pending(self, cfg):
         """The host (run under Chrome, no chat.db access) left body-free pending records of its sends;
         the watcher checks chat.db for is_delivered / error, logs a counts-only 'delivery' event, and
@@ -822,11 +1011,19 @@ class Watcher:
         changed = False
 
         def confirm(e, delivered):
+            # v1.4.6: the extension put \u2705 on HIS message -> no text line on success. While its ack is
+            # still due (UI_ACK_GRACE_S), wait; a failed / missing reaction falls back to the text line.
+            if e.get('uiConfirmed'):
+                rc.log_event('confirm_suppressed', reason='ui')
+                return 'done'
+            if e.get('ui') and not e.get('uiFailed') and t - float(e.get('at') or 0) < UI_ACK_GRACE_S:
+                return 'wait'
             if cfg.get('confirmSends', True) and not cfg['paused'] and cfg['webhookUrl']:
                 p = {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered, 'dryRun': False, 'at': rc.iso_utc(t)}
                 if e.get('note'):
                     p['note'] = e['note']             # v1.4.1: "(new contact, •••0188)"
                 self.post(cfg, p)
+            return 'done'
 
         def fail(e, error=None, reason=None, superseded=False):
             if not cfg['paused'] and cfg['webhookUrl']:
@@ -846,19 +1043,23 @@ class Watcher:
             status, error, rowid = rc.check_delivery_once(
                 e['handle'], float(e['at']), db_path=self.db_path,
                 exclude_rowids=tick_claimed, text_length=e.get('textLength'),
-                chat_guid=e.get('chatGuid') or None)        # v1.4.5: a group send is proven in its chat
+                chat_guid=e.get('chatGuid') or None,        # v1.4.5: a group send is proven in its chat
+                part=e.get('part') or 'text')               # v1.4.6: an attachment is proven by an attachment row
             if rowid is not None:
                 tick_claimed.add(rowid)            # same-tick collision guard (even for a still-pending match)
+                if e.get('xUuid') and not e.get('mapped') and status in ('delivered', 'pending'):
+                    self._map_send(e, rowid)       # v1.4.6: iMessage guid <-> HIS X message (ids only)
             if status == 'delivered':
-                rc.log_event('delivery', status='delivered')
                 if not e.get('softSent'):          # W3: the ✓ sent soft-confirmation already went out; don't double-post
-                    confirm(e, True)
-                rc.remove_pending(e)
+                    if confirm(e, True) == 'wait':
+                        continue
+                rc.log_event('delivery', status='delivered')
+                self._drop_pending(e)
             elif status == 'failed':
                 # W3: a failure that arrives later still corrects an earlier ✓ sent with a send_failed line.
                 rc.log_event('delivery', status='failed', error=error)
                 fail(e, error=error, superseded=bool(e.get('softSent')))
-                rc.remove_pending(e)
+                self._drop_pending(e)
             elif age > rc.PENDING_TTL_S:
                 # W3: the 10-minute timeout. If a matching row was ever seen we already soft-confirmed it;
                 # if NO row ever appeared, the send likely never happened -> say so, do not claim ✓ sent.
@@ -867,13 +1068,14 @@ class Watcher:
                 else:
                     rc.log_event('delivery', status='unconfirmed')
                     fail(e, reason='unconfirmed')
-                rc.remove_pending(e)
+                self._drop_pending(e)
             elif (status == 'pending' and rowid is not None and age >= SEND_CONFIRM_FALLBACK_S
                   and not e.get('softSent')):
                 # W3: a matching chat.db row exists but delivery is still unconfirmed ~20s on -> post the
                 # soft "✓ sent" ONCE and KEEP the record, so a later delivered/failed can still correct it.
+                if confirm(e, False) == 'wait':
+                    continue
                 rc.log_event('delivery', status='soft_sent')
-                confirm(e, False)
                 rc.update_pending(e, softSent=True)
                 continue                           # keep waiting; nothing resolved yet
             else:
@@ -883,6 +1085,103 @@ class Watcher:
                 changed = True
         if changed:
             self._save_claimed(resolved)
+
+    def _map_send(self, e, rowid):
+        try:
+            con = rc.open_chat_db(self.db_path)
+            try:
+                row = con.execute('SELECT guid FROM message WHERE ROWID = ? AND is_from_me = 1', (rowid,)).fetchone()
+            finally:
+                con.close()
+        except Exception:
+            return
+        if row and row[0] and relay_ui.map_put(row[0], e['xUuid'], rowid=rowid, one_to_one=not e.get('chatGuid')):
+            rc.update_pending(e, mapped=True)
+
+    def process_reads(self, cfg, con):
+        """v1.4.6: \u2705 -> \U0001f440 on HIS X message once chat.db shows the 1:1 reply was read (only when the
+        other person shares read receipts; otherwise is_read never flips). Reads flags only."""
+        if cfg['paused'] or not (cfg.get('uiReactions', True) and cfg.get('readReceipts', True)):
+            return 0
+        n = 0
+        for g, v in relay_ui.map_unread()[:30]:
+            try:
+                r = con.execute('SELECT is_read, date_read FROM message WHERE ROWID = ? AND is_from_me = 1 AND guid = ?',
+                                (v['rowid'], g)).fetchone()
+            except sqlite3.Error:
+                return n
+            if r is None:
+                relay_ui.map_update(g, read=True, gone=True)
+            elif (r[0] or 0) or (r[1] or 0) > 0:
+                relay_ui.enqueue_react(v['x'], '\U0001f440', 'read')
+                relay_ui.map_update(g, read=True)
+                n += 1
+        return n
+
+    # ----- v1.4.6 spamMode follow-messages: Messages' own filtering, read-only -----
+    def filter_prefs(self):
+        """{'unknown': bool|None, 'spam': bool|None} from com.apple.MobileSMS (FilterMessageRequests =
+        Screen Unknown Senders, EnableJunkFiltering = Filter Spam). Read-only; never written."""
+        t = self.now()
+        if self._prefs is not None and t - self._prefs_at < PREFS_TTL_S:
+            return self._prefs
+        out = {}
+        for k, key in (('unknown', 'FilterMessageRequests'), ('spam', 'EnableJunkFiltering')):
+            try:
+                r = self.runner(['/usr/bin/defaults', 'read', 'com.apple.MobileSMS', key],
+                                capture_output=True, text=True, timeout=3)
+                v = str(getattr(r, 'stdout', '') or '').strip()
+                out[k] = (v == '1') if getattr(r, 'returncode', 1) == 0 and v in ('0', '1') else None
+            except Exception:
+                out[k] = None
+        self._prefs, self._prefs_at = out, t
+        return out
+
+    def messages_filter(self, con, chat_id, rowid, ctx):
+        """How Messages itself filed a 1:1 row: 'spam' | 'unknown' | 'promotion' | 'transaction' | '' (main
+        list), or None when this Mac's chat.db can't tell (then spamMode falls back to 'tag').
+        chat.is_filtered: 0 main list, 1 Unknown Senders, 2 Junk/Spam. message.filter_action uses
+        ILMessageFilterAction: 2 junk, 3 promotion, 4 transaction. message.is_spam (macOS 27)."""
+        if 'is_filtered' not in ctx['chat_cols'] or chat_id is None:
+            return None
+        try:
+            r = con.execute('SELECT is_filtered FROM chat WHERE ROWID = ?', (chat_id,)).fetchone()
+            f = int(r[0] or 0) if r else 0
+            spam_flag = fa = 0
+            if ctx.get('spam_col'):
+                rr = con.execute('SELECT is_spam FROM message WHERE ROWID = ?', (rowid,)).fetchone()
+                spam_flag = int((rr or [0])[0] or 0)
+            if ctx.get('fa_col'):
+                rr = con.execute('SELECT filter_action FROM message WHERE ROWID = ?', (rowid,)).fetchone()
+                fa = int((rr or [0])[0] or 0)
+        except Exception:
+            return None
+        prefs = self.filter_prefs()
+        if (f == 2 or spam_flag or fa == 2) and prefs.get('spam') is not False:
+            return 'spam'
+        if fa == 3:
+            return 'promotion'
+        if fa == 4:
+            return 'transaction'
+        if f == 1 and prefs.get('unknown') is not False:
+            return 'unknown'
+        return ''
+
+    def spam_summary(self, cfg):
+        t = self.now()
+        if self._spam_summary_at is None:
+            self._spam_summary_at = t
+        if not self._spam_held or cfg['paused'] or not cfg['webhookUrl']:
+            return
+        if t - self._spam_summary_at < SPAM_SUMMARY_EVERY_S or rc.in_quiet_hours(cfg['quietHours'], t):
+            return
+        n = self._spam_held
+        detail = ('\U0001f6ab %d text%s went to Messages \u203a Spam in the last hour (not relayed; open Messages to review).'
+                  % (n, '' if n == 1 else 's'))
+        if self.post(cfg, {'type': 'status', 'status': 'spam_summary', 'detail': detail, 'count': n, 'at': rc.iso_utc(t)}):
+            rc.log_event('spam_summary', count=n)
+            self._spam_held = 0
+            self._spam_summary_at = t
 
     # ----- v1.3.8 guided setup: the owner's own handles, detected once Full Disk Access works -----
     def auto_detect_owner(self, con, cfg):
