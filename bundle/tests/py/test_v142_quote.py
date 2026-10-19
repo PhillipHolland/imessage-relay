@@ -85,7 +85,7 @@ class FastDeliveryCheck(Base):
 
         def sl(s):
             sleeps.append(s)
-            if len(sleeps) >= 10:
+            if sum(sleeps) >= 10:
                 raise Stop()
         w.sleeper = sl
         os.makedirs(self.m.rc.PENDING_DIR, exist_ok=True)
@@ -110,7 +110,7 @@ class FastDeliveryCheck(Base):
 
         def sl(s):
             sleeps.append(s)
-            if len(sleeps) >= 10:
+            if sum(sleeps) >= 10:
                 raise Stop()
         w.sleeper = sl
         import signal as _s

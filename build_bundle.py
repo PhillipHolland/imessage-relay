@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.12, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.13, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=46b23012a8ead9b7b5247bd29548e5ca22b73c8acc88be6af7e700197b574733 nl=1
-# iMessage Relay v1.4.12
+@@@@ FILE README.md mode=644 sha256=0865d4a8dec0683a16ba261adb443e6548ec39f06ba7146e429e156f93f8d5b6 nl=1
+# iMessage Relay v1.4.13
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,12 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.13 (Mac helper + extension): speed + a pick fix. A reply to a numbered pick prompt ("2", the last 4
+  digits, an email start) is checked against the pick first and never turns into "Reply to <last texter>?";
+  a pick stays answerable 10 minutes. New texts reach X Chat in ~1 s (the watcher wakes on a chat.db change
+  instead of waiting up to pollSeconds), Contacts lookups for pick/confirm prompts answer ~1 s sooner, and the
+  ✅ sent reaction is polled every 1 s right after a send. Install on the Mac, then reload the extension and
+  press Cmd+R.
 - v1.4.12 (Mac helper + extension): the Contacts pick prompt is one choice per line ("❓ Text Jordan Rivera at
   which?" / "1 · •••0188 mobile" / … / "Reply 1–4, or no."), phones first (most recently relayed, then
   mobile/iPhone/pref), work/school emails dropped when a better option exists, at most 4. Answer with the number,
@@ -140,7 +146,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.12)
+## Limits (v1.4.13)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -1135,7 +1141,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=724af962922b58dd6d07006feee27fc0d9f8bd042c18b9865e23dc8082b159a6 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=4b45ea49044db4557cff90d4495d6befe06d1ee440ebf0964fb29825c2a97c3e nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1164,6 +1170,8 @@ const MAX_ITEM_AGE_MS = 130 * 1000;     // only live items are forwarded (conten
 const CONFIG_TTL_MS = 30 * 1000;
 const DEDUPE_MS = 10 * 60 * 1000;
 const GUESS_WINDOW_MS = 2 * 60 * 1000;   // item 3: the owner has 2 minutes to confirm a guessed reply
+const PICK_WINDOW_MS = 10 * 60 * 1000;   // v1.4.13: a numbered pick prompt (shows no time limit) stays answerable 10 min (host: PICK_WINDOW_S)
+function guessWindow(g) { return g && Array.isArray(g.options) && g.options.length ? PICK_WINDOW_MS : GUESS_WINDOW_MS; }
 const YES_RE = /^\s*\/yes\b\s*(.*)$/i; // "/yes" or "/yes <Name>" confirms the pending guessed reply
 // v1.4.1: while a confirmation is pending, a plain "yes"/"ok"/"send"/"do it" confirms and "no"/"cancel"
 // cancels (any case, punctuation or emoji around it). Never sent as a text while a prompt is pending.
@@ -1387,7 +1395,7 @@ function pickOption(options, t) {
 async function handleYes(item, nameArg, src) {
   const seenAt = Date.now();
   const g = await getPendingGuess();
-  if (!g || Date.now() - (g.at || 0) > GUESS_WINDOW_MS) {
+  if (!g || Date.now() - (g.at || 0) > guessWindow(g)) {
     await clearPendingGuess();
     await addEvent({ kind: 'reply', key: item.key, contactName: '', status: 'skipped', detail: 'nothing to confirm' });
     return;
@@ -1428,7 +1436,7 @@ const UI_TAG = '\u{1F916}';
 const UI_TAG_RE = /^\s*\u{1F916}/u;
 const UI_TIMEOUT_MS = 12000;
 let uiSrc = null;                    // last tab/frame showing the relay chat (ids only)
-let uiArmedUntil = 0, uiPollTimer = null, uiPolling = false;
+let uiArmedUntil = 0, uiFastUntil = 0, uiPollTimer = null, uiPolling = false;
 function uuidFromKey(key) { const m = /id:uuid=([0-9a-f-]{8,64})$/i.exec(String(key || '')); return m ? m[1].toLowerCase() : ''; }
 async function tabUi(src, msg) {
   if (!src || typeof src.tabId !== 'number' || !chrome.tabs || !chrome.tabs.sendMessage) return null;
@@ -1456,7 +1464,8 @@ async function applyUi(res, src, seenAt) {
 }
 function armUiPoll(ms) {
   uiArmedUntil = Math.max(uiArmedUntil, Date.now() + ms);
-  if (!uiPollTimer) uiPollTimer = setTimeout(uiPollLoop, 3000);
+  uiFastUntil = Date.now() + 60 * 1000;
+  if (!uiPollTimer) uiPollTimer = setTimeout(uiPollLoop, 1000);
 }
 async function uiPollOnce() {
   if (uiPolling || !uiSrc) return;
@@ -1474,7 +1483,8 @@ async function uiPollOnce() {
 async function uiPollLoop() {
   uiPollTimer = null;
   await uiPollOnce();
-  if (Date.now() < uiArmedUntil) uiPollTimer = setTimeout(uiPollLoop, 3000);   // fast for a while after a send
+  // v1.4.13: every 1 s for the first minute after a send (the \u2705 lands ~2 s sooner), then 3 s while armed
+  if (Date.now() < uiArmedUntil) uiPollTimer = setTimeout(uiPollLoop, Date.now() < uiFastUntil ? 1000 : 3000);
 }
 let lastSendAt = 0;
 
@@ -1625,7 +1635,7 @@ async function handleItem(item, src) {
   if (pickText && pickText.length <= 40 && !bareConfirmWord(pickText) && !/\s/.test(pickText)) {
     // v1.4.11/12: a pick prompt is answered by its index, a phone's last 4 digits, or an email's unique start
     const g = await getPendingGuess();
-    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS ? pickOption(g.options, pickText) : '';
+    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= guessWindow(g) ? pickOption(g.options, pickText) : '';
     if (h) {
       if (await isDuplicate(item.key)) return;
       await setPendingGuess(Object.assign({}, g, { handle: String(h) }));
@@ -1638,7 +1648,7 @@ async function handleItem(item, src) {
     const c0 = await getConfig(false);
     if (c0.ok && c0.relayConversationId && item.conversationId !== c0.relayConversationId) return;
     const g = await getPendingGuess();
-    if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
+    if (g && Date.now() - (g.at || 0) <= guessWindow(g)) {
       if (await isDuplicate(item.key)) return;
       if (bw === 'yes') await handleYes(item, '', src);
       else await handleCancel(item, g);
@@ -1702,7 +1712,7 @@ async function handleItem(item, src) {
                               conversationId: item.conversationId, quotedText: item.quotedText || '', at: Date.now(),
                               xUuid: payload.xUuid || '', attachments: payload.attachments || null,
                               options: Array.isArray(res.options) ? res.options.slice(0, 9).map(String) : null });
-      try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: 2 }); } catch (e) { /* tests */ }
+      try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: Array.isArray(res.options) && res.options.length ? 10 : 2 }); } catch (e) { /* tests */ }
       status = 'needs-confirm';
       detail = (res.reason === 'new_contact')
         ? 'text ' + (res.label || 'them') + ' (from Contacts)? reply yes within 2 min'
@@ -1747,7 +1757,7 @@ async function handleReaction(r) {
   }
   const item = { key, conversationId: cfg.relayConversationId, ts: String(r.ts || new Date().toISOString()), text: '' };
   const g = await getPendingGuess();
-  if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
+  if (g && Date.now() - (g.at || 0) <= guessWindow(g)) {
     if (word === 'yes') await handleYes(item, '', uiSrc);
     else await handleCancel(item, g);
     return;
@@ -1850,7 +1860,7 @@ async function reloadChatTabs() {
 async function onGuessExpiry() {
   const g = await getPendingGuess();
   if (!g) return;
-  if (Date.now() - (g.at || 0) < GUESS_WINDOW_MS) return;   // a newer guess reset the clock
+  if (Date.now() - (g.at || 0) < guessWindow(g)) return;   // a newer guess reset the clock
   await clearPendingGuess();
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_expired', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }
@@ -3526,11 +3536,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=95e9ff80a18e359e0c1a0e56476bc040f4ec008179465f5838b3a5c7dea34c5d nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=8fa20c3e9e03df8d8a9195389058e5c6889fb715de6c313e5724bb5608c27f7b nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.12",
+  "version": "1.4.13",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -3742,10 +3752,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=7e8a9199343717ba7e3de062eb76c00eaf2a838f490d49f1a9edbb05bff88bc0 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=26b713ee5c9480b4468130b1d348f649a15e2b70b3d0f1d4eabfa2718f993c49 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.8.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.13.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -3801,6 +3811,7 @@ MAX_MSG_BYTES = 1024 * 1024
 SELFTEST_MAX_AGE_S = 15 * 60
 NOTIFY_TIMEOUT_S = 12            # v1.4.0: was 4 s; the webhook trigger often takes ~4 s to answer
 NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')   # body-free events the watcher re-posts
+PICK_WINDOW_S = 600.0            # v1.4.13: a numbered pick prompt (no time limit shown) stays answerable 10 min
 NEW_CONTACT_WINDOW_S = 130.0     # the /yes window for texting someone new from Contacts (2 min + slack)
 CONTACTS_WAIT_S = 8.0
 CONTACTS_WAIT_QUICK_S = 3.0      # v1.4.2: a lower-case / comma / "text x" candidate waits less (often ordinary text)
@@ -4404,7 +4415,7 @@ def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S, fuzzy=None):
             return res if res.get('ok') else None
         if now() >= deadline:
             break
-        sleeper(0.5)
+        sleeper(0.1)                           # v1.4.13: was 0.5 s (the watcher now answers in ~0.25 s)
     for p in (job_p, res_p):
         try:
             os.unlink(p)
@@ -4435,7 +4446,7 @@ def group_guid_lookup(key, sleeper, now, wait_s=GROUP_GUID_WAIT_S):
             return g if re.match(r'^[A-Za-z0-9;:+@._-]{3,160}$', g) else None
         if now() >= deadline:
             break
-        sleeper(0.25)
+        sleeper(0.1)
     for p in (job_p, res_p):
         try:
             os.unlink(p)
@@ -4532,9 +4543,49 @@ def _store_pending_new(handle, name, at, prefix='', existing=False, options=None
 def _peek_pending_new(handle, now_t):
     p = load_state().get('pendingNewContact')
     if (isinstance(p, dict) and (p.get('handle') == handle or handle in (p.get('options') or []))
-            and now_t - float(p.get('at') or 0) <= NEW_CONTACT_WINDOW_S):
+            and now_t - float(p.get('at') or 0) <= (PICK_WINDOW_S if handle in (p.get('options') or []) else NEW_CONTACT_WINDOW_S)):
         return p
     return None
+
+
+def pick_answer(text, options):
+    """v1.4.13: (looks_like_pick, handle) for a reply to a numbered pick prompt: an index 1-9, a phone's
+    last 4 digits, or the unique start of an email. Same rules as the extension's pickOption."""
+    s = str(text or '').strip().rstrip('.)!').lower()
+    opts = [str(h) for h in (options or [])]
+    if re.match(r'^[1-9]$', s):
+        i = int(s) - 1
+        return True, (opts[i] if i < len(opts) else '')
+    if re.match(r'^\d{4}$', s):
+        hits = [h for h in opts if '@' not in h and re.sub(r'\D', '', h).endswith(s)]
+        return bool(hits), (hits[0] if len(hits) == 1 else '')   # "2026" matching no option is ordinary text
+    if re.match(r'^[a-z0-9._%+-]{2,}@?[a-z0-9.-]*$', s):
+        hits = [h for h in opts if '@' in h and h.lower().startswith(s)]
+        if len(hits) == 1:
+            return True, hits[0]
+    return False, ''
+
+
+def handle_pending_pick(text, cfg, now, poster):
+    """v1.4.13: while a pick prompt is waiting, an answer to it ("2", "0188", "alex@") is checked against
+    the pick FIRST and never routed as a new text (it used to become "Reply to <last texter>?"). The
+    extension holds the message text and resolves a valid pick itself; one that reaches the host means
+    the extension no longer has it (restarted, or the pick was out of range): say so, send nothing."""
+    p = load_state().get('pendingNewContact')
+    if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
+        return None
+    like, h = pick_answer(text, p['options'])
+    if not like:
+        return None
+    name = rc.clean_label(p.get('name') or '') or 'them'
+    if h:
+        detail = ('That pick came in, but the message waiting for it is gone (the extension restarted?), so '
+                  'nothing was sent. Send it again starting with %s:' % name)
+    else:
+        detail = 'That isn\u2019t one of the choices. Reply 1\u2013%d, or no. Nothing was sent.' % len(p['options'])
+    rc.log_event('pick_unresolved', resolved=bool(h))
+    notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
+    return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
 
 
 def _finish_new_contact(handle, name, cfg):
@@ -4845,6 +4896,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if bw and not msg.get('confirmed'):
         r = handle_bare_confirm(bw, quoted, cfg, now, poster)
         if r is not None:                     # a confirm/cancel word answered a prompt: never an iMessage
+            return r
+    if not msg.get('confirmed'):
+        r = handle_pending_pick(text, cfg, now, poster)
+        if r is not None:                     # v1.4.13: an answer to a pick prompt is never a new text
             return r
     cmd = parse_command(text)
     if cmd:                                   # an explicit /block|/mute|/unblock never becomes an outgoing iMessage
@@ -5395,7 +5450,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=1d41e7f9d28e11d73a884b76621b57370f8f010ce985c3d6763ae43f7f05fd04 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=35c2aeff547f104c846749de31ebf9e02ffa8bbaaed3583ddf569414fda91f20 nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -5498,6 +5553,7 @@ REOPEN_EVERY_S = 300
 NOT_RUNNING_LOG_EVERY_S = 300
 FDA_LOG_EVERY_S = 3600
 JOB_MAX_AGE_S = 600
+LOOP_STEP_S = 0.25           # v1.4.13: idle loop granularity (jobs, chat.db change check)
 GROUP_STYLE = 43          # chat.style: 43 = group, 45 = 1:1
 MESSAGES_NOT_RUNNING_DETAIL = ('Messages is not running on the Mac. New iMessages and replies may stall '
                                'until it is opened again.')
@@ -6746,6 +6802,17 @@ class Watcher:
         return {'ok': True, 'senders': out, 'contactsDb': bool(names)}
 
     # ----- loop -----
+    def db_signature(self):
+        """(mtime_ns, size) of chat.db and its -wal: metadata only (stat), never the contents. None if unreadable."""
+        out = []
+        for p in (self.db_path, self.db_path + '-wal'):
+            try:
+                st = os.stat(p)
+                out.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                out.append(None)
+        return tuple(out) if any(out) else None
+
     def run_forever(self):
         stop = {'flag': False}
         signal.signal(signal.SIGTERM, lambda *a: stop.update(flag=True))
@@ -6757,13 +6824,16 @@ class Watcher:
                 cfg = self.load_config()
             except Exception as e:
                 rc.log_event('watch_error', error=type(e).__name__)
-            for i in range((cfg or rc.DEFAULT_CONFIG)['pollSeconds']):
+            # v1.4.13 latency: wait in 0.25 s steps. A Contacts / group job is answered within ~0.25 s (was up
+            # to 1 s); a pending delivery proof is checked every ~1 s (was 2 s); and a change to chat.db
+            # (or its -wal) ends the wait at once, so a new text relays in ~1 s instead of up to pollSeconds.
+            sig = self.db_signature()
+            steps = int((cfg or rc.DEFAULT_CONFIG)['pollSeconds'] / LOOP_STEP_S)
+            for i in range(steps):
                 if stop['flag']:
                     break
-                self.sleeper(1)
-                # v1.4.2 latency: while a reply is waiting for its delivery proof, check chat.db every ~2 s
-                # instead of once per pollSeconds (was up to 10 s before "\u2713\u2713 delivered" could post).
-                if i % 2 == 1 and self.has_pending():
+                self.sleeper(LOOP_STEP_S)
+                if i % 4 == 3 and self.has_pending():
                     try:
                         self.process_pending(self.load_config())
                     except Exception as e:
@@ -6773,6 +6843,8 @@ class Watcher:
                         self.process_jobs(self.load_config())
                     except Exception as e:
                         rc.log_event('job_error', error=type(e).__name__)
+                if i >= 3 and sig is not None and self.db_signature() != sig:
+                    break                              # chat.db changed: tick now (at most ~1 tick per second)
         rc.log_event('watch_stop')
 
 
@@ -6782,7 +6854,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=23671c3eedbe604f430e1a35d27667d6b841d68f6d4940423e649a38e98abe63 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=b7526d492912da826bcd7822ea0d3ee386258d76dea0bfc9a5ae3728b153a377 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -6808,8 +6880,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.12'
-EXTENSION_VERSION = '1.4.12'   # v1.4.12: pick by last 4 digits / email start (reload + Cmd+R)
+VERSION = '1.4.13'
+EXTENSION_VERSION = '1.4.13'   # v1.4.13: pick answerable 10 min, faster ✅ polling (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -14367,7 +14439,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=1859cb8247798095facda6d0938dcf9ed484401d20c0a8c5135f846d83a6cb62 nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=962e521090982861048f145f7bb7620953a53882bfd834a1947dfde81b234e3a nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -14422,7 +14494,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.12');
+  assert.strictEqual(m.version, '1.4.13');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -19713,7 +19785,7 @@ class HostSendPath(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v140.py mode=644 sha256=615406e3bf93252a6e3630d91ef8fadb7edf2ab2b16dffafa6c9bf1d95ee8795 nl=1
+@@@@ FILE tests/py/test_v140.py mode=644 sha256=617fc4ac36e1c73ab29d2d195c2e2d2d74410874dfe3713eee0f828567a8b79b nl=1
 """v1.4.0: multi-word names, a reply to someone new (Contacts lookup + /yes), and host notifications
 that no longer vanish when the webhook is slow (the needs_target notify ok:false bug)."""
 import json
@@ -19846,7 +19918,7 @@ class NewContact(Base):
 
     def test_yes_after_window_refused(self):
         self.send('Jordan: hey')
-        self.clock.t += 200
+        self.clock.t += 700           # v1.4.13: a pick prompt stays answerable 10 min
         r = self.send('Jordan: hey', confirmed=True, handle='+15555550188')
         self.assertFalse(r['ok'])
         self.assertEqual(self.osa(), [])
@@ -20087,6 +20159,31 @@ class Rank(Base):
         self.assertFalse(ui.get('react'), ui)
         self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 \u2753 Text Jordan Rivera at which?'))
         self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_confirm'], 'routine copy is deferred')
+@@@@ END
+@@@@ FILE tests/py/test_v1413_pick.py mode=644 sha256=7802d92548da6f1a8dced819edeb619be45a341af162a380b207afda8225a10e nl=1
+"""v1.4.13: an answer to a pending pick prompt is checked against the pick first, never routed as a new text."""
+from test_v140 import Base
+
+
+class PendingPick(Base):
+    def test_index_reply_never_becomes_a_new_guess(self):
+        r = self.send('Jordan Rivera: hey there')
+        self.assertTrue(r.get('needsConfirm') and r.get('options'), r)
+        n = len(self.posts)
+        r2 = self.send('2')
+        self.assertTrue(r2.get('ok') and r2.get('skipped'), r2)
+        self.assertFalse(r2.get('needsConfirm'), r2)
+        self.assertEqual(self.osa(), [])
+        self.assertFalse([p for p, _ in self.posts[n:] if p['type'] == 'needs_confirm'])
+
+    def test_four_digits_matching_no_option_is_ordinary_text(self):
+        import imessage_relay_host as h
+        self.assertEqual(h.pick_answer('2026', ['+15555550188', '+15555550101']), (False, ''))
+        self.assertEqual(h.pick_answer('0101', ['+15555550188', '+15555550101']), (True, '+15555550101'))
+        self.assertEqual(h.pick_answer('7', ['+15555550188']), (True, ''))
+
+
+del Base
 @@@@ END
 @@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=c445fb291fdea4cdc89b2bd5f7ab91094df5a633c64ffa6e67098166e2e4446c nl=1
 """v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),
@@ -20384,7 +20481,7 @@ class Reactions(Base):
         self.assertFalse(r['ok'])
         self.assertFalse(self.cfg().get('mute'))
 @@@@ END
-@@@@ FILE tests/py/test_v142_quote.py mode=644 sha256=d189228efa44a6eec437442a0e62e291f12b43f07f02b83152be2582ececa5eb nl=1
+@@@@ FILE tests/py/test_v142_quote.py mode=644 sha256=b283b8eb4ebd3e979eb9bd3583ba69f93646ce1d6a9493803fa1566c036f2879 nl=1
 """v1.4.2: X's native Reply ("Replied to <name>" + preview) routes to the quoted person; a roster-only
 last texter (relay-all) gets a confirm instead of "Who's this for?"; an unresolved quote falls back to the
 last texter (always confirmed); the "Who's this for?" example is generic."""
@@ -20472,7 +20569,7 @@ class FastDeliveryCheck(Base):
 
         def sl(s):
             sleeps.append(s)
-            if len(sleeps) >= 10:
+            if sum(sleeps) >= 10:
                 raise Stop()
         w.sleeper = sl
         os.makedirs(self.m.rc.PENDING_DIR, exist_ok=True)
@@ -20497,7 +20594,7 @@ class FastDeliveryCheck(Base):
 
         def sl(s):
             sleeps.append(s)
-            if len(sleeps) >= 10:
+            if sum(sleeps) >= 10:
                 raise Stop()
         w.sleeper = sl
         import signal as _s
@@ -22163,7 +22260,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=276fc4a4a91ea9100766ebb4af0fae345f0a0b9475059b21768e2274ce95a882 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=fcbd6deb1d224c457e04b383581611c8f2848583f6c44e7f554de5ae720b7def nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -22356,7 +22453,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.12')
+        self.assertEqual(m.rc.VERSION, '1.4.13')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

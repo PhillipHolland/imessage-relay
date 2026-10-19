@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.12)
+# iMessage Relay: operator reference (v1.4.13)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -844,6 +844,8 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.13 (Mac helper + extension)**: speed + a pick fix. A reply to a numbered pick prompt ("2", the last 4 digits, an email start) is checked against the pick first and never turns into "Reply to <last texter>?"; a pick stays answerable 10 minutes. New texts reach X Chat in ~1 s (the watcher wakes on a chat.db change instead of waiting up to pollSeconds), Contacts lookups for pick/confirm prompts answer ~1 s sooner, and the ✅ sent reaction is polled every 1 s right after a send. Install on the Mac, then reload the extension and press Cmd+R.
+
 **v1.4.12 (Mac helper + extension)**: the Contacts pick prompt is one choice per line ("❓ Text Jordan Rivera at
 which?" / "1 · •••0188 mobile" / … / "Reply 1–4, or no."), phones first (most recently relayed, then
 mobile/iPhone/pref), work/school emails dropped when a better option exists, at most 4. Answer with the number,

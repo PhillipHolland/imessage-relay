@@ -130,7 +130,7 @@ class NewContact(Base):
 
     def test_yes_after_window_refused(self):
         self.send('Jordan: hey')
-        self.clock.t += 200
+        self.clock.t += 700           # v1.4.13: a pick prompt stays answerable 10 min
         r = self.send('Jordan: hey', confirmed=True, handle='+15555550188')
         self.assertFalse(r['ok'])
         self.assertEqual(self.osa(), [])

@@ -26,6 +26,8 @@ const MAX_ITEM_AGE_MS = 130 * 1000;     // only live items are forwarded (conten
 const CONFIG_TTL_MS = 30 * 1000;
 const DEDUPE_MS = 10 * 60 * 1000;
 const GUESS_WINDOW_MS = 2 * 60 * 1000;   // item 3: the owner has 2 minutes to confirm a guessed reply
+const PICK_WINDOW_MS = 10 * 60 * 1000;   // v1.4.13: a numbered pick prompt (shows no time limit) stays answerable 10 min (host: PICK_WINDOW_S)
+function guessWindow(g) { return g && Array.isArray(g.options) && g.options.length ? PICK_WINDOW_MS : GUESS_WINDOW_MS; }
 const YES_RE = /^\s*\/yes\b\s*(.*)$/i; // "/yes" or "/yes <Name>" confirms the pending guessed reply
 // v1.4.1: while a confirmation is pending, a plain "yes"/"ok"/"send"/"do it" confirms and "no"/"cancel"
 // cancels (any case, punctuation or emoji around it). Never sent as a text while a prompt is pending.
@@ -249,7 +251,7 @@ function pickOption(options, t) {
 async function handleYes(item, nameArg, src) {
   const seenAt = Date.now();
   const g = await getPendingGuess();
-  if (!g || Date.now() - (g.at || 0) > GUESS_WINDOW_MS) {
+  if (!g || Date.now() - (g.at || 0) > guessWindow(g)) {
     await clearPendingGuess();
     await addEvent({ kind: 'reply', key: item.key, contactName: '', status: 'skipped', detail: 'nothing to confirm' });
     return;
@@ -290,7 +292,7 @@ const UI_TAG = '\u{1F916}';
 const UI_TAG_RE = /^\s*\u{1F916}/u;
 const UI_TIMEOUT_MS = 12000;
 let uiSrc = null;                    // last tab/frame showing the relay chat (ids only)
-let uiArmedUntil = 0, uiPollTimer = null, uiPolling = false;
+let uiArmedUntil = 0, uiFastUntil = 0, uiPollTimer = null, uiPolling = false;
 function uuidFromKey(key) { const m = /id:uuid=([0-9a-f-]{8,64})$/i.exec(String(key || '')); return m ? m[1].toLowerCase() : ''; }
 async function tabUi(src, msg) {
   if (!src || typeof src.tabId !== 'number' || !chrome.tabs || !chrome.tabs.sendMessage) return null;
@@ -318,7 +320,8 @@ async function applyUi(res, src, seenAt) {
 }
 function armUiPoll(ms) {
   uiArmedUntil = Math.max(uiArmedUntil, Date.now() + ms);
-  if (!uiPollTimer) uiPollTimer = setTimeout(uiPollLoop, 3000);
+  uiFastUntil = Date.now() + 60 * 1000;
+  if (!uiPollTimer) uiPollTimer = setTimeout(uiPollLoop, 1000);
 }
 async function uiPollOnce() {
   if (uiPolling || !uiSrc) return;
@@ -336,7 +339,8 @@ async function uiPollOnce() {
 async function uiPollLoop() {
   uiPollTimer = null;
   await uiPollOnce();
-  if (Date.now() < uiArmedUntil) uiPollTimer = setTimeout(uiPollLoop, 3000);   // fast for a while after a send
+  // v1.4.13: every 1 s for the first minute after a send (the \u2705 lands ~2 s sooner), then 3 s while armed
+  if (Date.now() < uiArmedUntil) uiPollTimer = setTimeout(uiPollLoop, Date.now() < uiFastUntil ? 1000 : 3000);
 }
 let lastSendAt = 0;
 
@@ -487,7 +491,7 @@ async function handleItem(item, src) {
   if (pickText && pickText.length <= 40 && !bareConfirmWord(pickText) && !/\s/.test(pickText)) {
     // v1.4.11/12: a pick prompt is answered by its index, a phone's last 4 digits, or an email's unique start
     const g = await getPendingGuess();
-    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS ? pickOption(g.options, pickText) : '';
+    const h = g && Array.isArray(g.options) && Date.now() - (g.at || 0) <= guessWindow(g) ? pickOption(g.options, pickText) : '';
     if (h) {
       if (await isDuplicate(item.key)) return;
       await setPendingGuess(Object.assign({}, g, { handle: String(h) }));
@@ -500,7 +504,7 @@ async function handleItem(item, src) {
     const c0 = await getConfig(false);
     if (c0.ok && c0.relayConversationId && item.conversationId !== c0.relayConversationId) return;
     const g = await getPendingGuess();
-    if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
+    if (g && Date.now() - (g.at || 0) <= guessWindow(g)) {
       if (await isDuplicate(item.key)) return;
       if (bw === 'yes') await handleYes(item, '', src);
       else await handleCancel(item, g);
@@ -564,7 +568,7 @@ async function handleItem(item, src) {
                               conversationId: item.conversationId, quotedText: item.quotedText || '', at: Date.now(),
                               xUuid: payload.xUuid || '', attachments: payload.attachments || null,
                               options: Array.isArray(res.options) ? res.options.slice(0, 9).map(String) : null });
-      try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: 2 }); } catch (e) { /* tests */ }
+      try { if (chrome.alarms) chrome.alarms.create('relay-guess-expiry', { delayInMinutes: Array.isArray(res.options) && res.options.length ? 10 : 2 }); } catch (e) { /* tests */ }
       status = 'needs-confirm';
       detail = (res.reason === 'new_contact')
         ? 'text ' + (res.label || 'them') + ' (from Contacts)? reply yes within 2 min'
@@ -609,7 +613,7 @@ async function handleReaction(r) {
   }
   const item = { key, conversationId: cfg.relayConversationId, ts: String(r.ts || new Date().toISOString()), text: '' };
   const g = await getPendingGuess();
-  if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
+  if (g && Date.now() - (g.at || 0) <= guessWindow(g)) {
     if (word === 'yes') await handleYes(item, '', uiSrc);
     else await handleCancel(item, g);
     return;
@@ -712,7 +716,7 @@ async function reloadChatTabs() {
 async function onGuessExpiry() {
   const g = await getPendingGuess();
   if (!g) return;
-  if (Date.now() - (g.at || 0) < GUESS_WINDOW_MS) return;   // a newer guess reset the clock
+  if (Date.now() - (g.at || 0) < guessWindow(g)) return;   // a newer guess reset the clock
   await clearPendingGuess();
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_expired', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }

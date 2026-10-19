@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.8.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.13.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -56,6 +56,7 @@ MAX_MSG_BYTES = 1024 * 1024
 SELFTEST_MAX_AGE_S = 15 * 60
 NOTIFY_TIMEOUT_S = 12            # v1.4.0: was 4 s; the webhook trigger often takes ~4 s to answer
 NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')   # body-free events the watcher re-posts
+PICK_WINDOW_S = 600.0            # v1.4.13: a numbered pick prompt (no time limit shown) stays answerable 10 min
 NEW_CONTACT_WINDOW_S = 130.0     # the /yes window for texting someone new from Contacts (2 min + slack)
 CONTACTS_WAIT_S = 8.0
 CONTACTS_WAIT_QUICK_S = 3.0      # v1.4.2: a lower-case / comma / "text x" candidate waits less (often ordinary text)
@@ -659,7 +660,7 @@ def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S, fuzzy=None):
             return res if res.get('ok') else None
         if now() >= deadline:
             break
-        sleeper(0.5)
+        sleeper(0.1)                           # v1.4.13: was 0.5 s (the watcher now answers in ~0.25 s)
     for p in (job_p, res_p):
         try:
             os.unlink(p)
@@ -690,7 +691,7 @@ def group_guid_lookup(key, sleeper, now, wait_s=GROUP_GUID_WAIT_S):
             return g if re.match(r'^[A-Za-z0-9;:+@._-]{3,160}$', g) else None
         if now() >= deadline:
             break
-        sleeper(0.25)
+        sleeper(0.1)
     for p in (job_p, res_p):
         try:
             os.unlink(p)
@@ -787,9 +788,49 @@ def _store_pending_new(handle, name, at, prefix='', existing=False, options=None
 def _peek_pending_new(handle, now_t):
     p = load_state().get('pendingNewContact')
     if (isinstance(p, dict) and (p.get('handle') == handle or handle in (p.get('options') or []))
-            and now_t - float(p.get('at') or 0) <= NEW_CONTACT_WINDOW_S):
+            and now_t - float(p.get('at') or 0) <= (PICK_WINDOW_S if handle in (p.get('options') or []) else NEW_CONTACT_WINDOW_S)):
         return p
     return None
+
+
+def pick_answer(text, options):
+    """v1.4.13: (looks_like_pick, handle) for a reply to a numbered pick prompt: an index 1-9, a phone's
+    last 4 digits, or the unique start of an email. Same rules as the extension's pickOption."""
+    s = str(text or '').strip().rstrip('.)!').lower()
+    opts = [str(h) for h in (options or [])]
+    if re.match(r'^[1-9]$', s):
+        i = int(s) - 1
+        return True, (opts[i] if i < len(opts) else '')
+    if re.match(r'^\d{4}$', s):
+        hits = [h for h in opts if '@' not in h and re.sub(r'\D', '', h).endswith(s)]
+        return bool(hits), (hits[0] if len(hits) == 1 else '')   # "2026" matching no option is ordinary text
+    if re.match(r'^[a-z0-9._%+-]{2,}@?[a-z0-9.-]*$', s):
+        hits = [h for h in opts if '@' in h and h.lower().startswith(s)]
+        if len(hits) == 1:
+            return True, hits[0]
+    return False, ''
+
+
+def handle_pending_pick(text, cfg, now, poster):
+    """v1.4.13: while a pick prompt is waiting, an answer to it ("2", "0188", "alex@") is checked against
+    the pick FIRST and never routed as a new text (it used to become "Reply to <last texter>?"). The
+    extension holds the message text and resolves a valid pick itself; one that reaches the host means
+    the extension no longer has it (restarted, or the pick was out of range): say so, send nothing."""
+    p = load_state().get('pendingNewContact')
+    if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
+        return None
+    like, h = pick_answer(text, p['options'])
+    if not like:
+        return None
+    name = rc.clean_label(p.get('name') or '') or 'them'
+    if h:
+        detail = ('That pick came in, but the message waiting for it is gone (the extension restarted?), so '
+                  'nothing was sent. Send it again starting with %s:' % name)
+    else:
+        detail = 'That isn\u2019t one of the choices. Reply 1\u2013%d, or no. Nothing was sent.' % len(p['options'])
+    rc.log_event('pick_unresolved', resolved=bool(h))
+    notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
+    return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
 
 
 def _finish_new_contact(handle, name, cfg):
@@ -1100,6 +1141,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if bw and not msg.get('confirmed'):
         r = handle_bare_confirm(bw, quoted, cfg, now, poster)
         if r is not None:                     # a confirm/cancel word answered a prompt: never an iMessage
+            return r
+    if not msg.get('confirmed'):
+        r = handle_pending_pick(text, cfg, now, poster)
+        if r is not None:                     # v1.4.13: an answer to a pick prompt is never a new text
             return r
     cmd = parse_command(text)
     if cmd:                                   # an explicit /block|/mute|/unblock never becomes an outgoing iMessage

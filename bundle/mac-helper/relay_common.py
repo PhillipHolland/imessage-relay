@@ -23,8 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.12'
-EXTENSION_VERSION = '1.4.12'   # v1.4.12: pick by last 4 digits / email start (reload + Cmd+R)
+VERSION = '1.4.13'
+EXTENSION_VERSION = '1.4.13'   # v1.4.13: pick answerable 10 min, faster ✅ polling (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')

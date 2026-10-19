@@ -100,6 +100,7 @@ REOPEN_EVERY_S = 300
 NOT_RUNNING_LOG_EVERY_S = 300
 FDA_LOG_EVERY_S = 3600
 JOB_MAX_AGE_S = 600
+LOOP_STEP_S = 0.25           # v1.4.13: idle loop granularity (jobs, chat.db change check)
 GROUP_STYLE = 43          # chat.style: 43 = group, 45 = 1:1
 MESSAGES_NOT_RUNNING_DETAIL = ('Messages is not running on the Mac. New iMessages and replies may stall '
                                'until it is opened again.')
@@ -1348,6 +1349,17 @@ class Watcher:
         return {'ok': True, 'senders': out, 'contactsDb': bool(names)}
 
     # ----- loop -----
+    def db_signature(self):
+        """(mtime_ns, size) of chat.db and its -wal: metadata only (stat), never the contents. None if unreadable."""
+        out = []
+        for p in (self.db_path, self.db_path + '-wal'):
+            try:
+                st = os.stat(p)
+                out.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                out.append(None)
+        return tuple(out) if any(out) else None
+
     def run_forever(self):
         stop = {'flag': False}
         signal.signal(signal.SIGTERM, lambda *a: stop.update(flag=True))
@@ -1359,13 +1371,16 @@ class Watcher:
                 cfg = self.load_config()
             except Exception as e:
                 rc.log_event('watch_error', error=type(e).__name__)
-            for i in range((cfg or rc.DEFAULT_CONFIG)['pollSeconds']):
+            # v1.4.13 latency: wait in 0.25 s steps. A Contacts / group job is answered within ~0.25 s (was up
+            # to 1 s); a pending delivery proof is checked every ~1 s (was 2 s); and a change to chat.db
+            # (or its -wal) ends the wait at once, so a new text relays in ~1 s instead of up to pollSeconds.
+            sig = self.db_signature()
+            steps = int((cfg or rc.DEFAULT_CONFIG)['pollSeconds'] / LOOP_STEP_S)
+            for i in range(steps):
                 if stop['flag']:
                     break
-                self.sleeper(1)
-                # v1.4.2 latency: while a reply is waiting for its delivery proof, check chat.db every ~2 s
-                # instead of once per pollSeconds (was up to 10 s before "\u2713\u2713 delivered" could post).
-                if i % 2 == 1 and self.has_pending():
+                self.sleeper(LOOP_STEP_S)
+                if i % 4 == 3 and self.has_pending():
                     try:
                         self.process_pending(self.load_config())
                     except Exception as e:
@@ -1375,6 +1390,8 @@ class Watcher:
                         self.process_jobs(self.load_config())
                     except Exception as e:
                         rc.log_event('job_error', error=type(e).__name__)
+                if i >= 3 and sig is not None and self.db_signature() != sig:
+                    break                              # chat.db changed: tick now (at most ~1 tick per second)
         rc.log_event('watch_stop')
 
 
