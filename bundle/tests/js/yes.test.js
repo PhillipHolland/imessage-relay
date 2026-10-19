@@ -81,6 +81,30 @@ function relayLog(text) {
   const last = sends()[sends().length - 1];
   assert.strictEqual(last.text, 'yes');
   assert.ok(!last.confirmed);
-  console.log('5 passed, 0 failed (v1.4.1 plain yes/no)');
+  // 6) v1.4.2: a thumbs-up reaction on the prompt confirms a pending reply; a thumbs-down cancels
+  const reactMsg = (word, conv) => new Promise(res => { bgListeners.forEach(f => f({ type: 'relay-reaction', item: { word, conversationId: conv || '111-222', key: 'reaction:' + Math.random() } }, { id: 'ext', tab: { id: 1 } }, () => {})); setTimeout(res, 40); });
+  nextSendResponse = { ok: false, needsConfirm: true, guess: true, label: 'Sam', handle: '+15555550123' };
+  await relayLog('on my way');
+  nextSendResponse = { ok: true, dryRun: true };
+  const c6 = sends().filter(c => c.confirmed === true).length;
+  await reactMsg('yes');
+  assert.strictEqual(sends().filter(c => c.confirmed === true).length, c6 + 1, 'thumbs-up confirmed');
+  assert.strictEqual(sends().filter(c => c.confirmed === true).slice(-1)[0].text, 'on my way');
+  nextSendResponse = { ok: false, needsConfirm: true, guess: true, label: 'Sam', handle: '+15555550123' };
+  await relayLog('later');
+  const n7 = sends().length;
+  await reactMsg('no');
+  assert.strictEqual(sends().length, n7, 'thumbs-down sends nothing');
+  assert.ok(!session.pendingGuess, 'cleared');
+  // 7) nothing pending here: the host gets a body-free reaction (it may hold a /block or /add)
+  await reactMsg('yes');
+  const rc = hostCalls.filter(c => c.type === 'reaction');
+  assert.strictEqual(rc.length, 1);
+  assert.deepStrictEqual(Object.keys(rc[0]).sort(), ['conversationId', 'type', 'word']);
+  // 8) a reaction from another conversation does nothing
+  await reactMsg('yes', '999-000');
+  assert.strictEqual(hostCalls.filter(c => c.type === 'reaction').length, 1);
+  assert.strictEqual(sends().length, n7);
+  console.log('8 passed, 0 failed (v1.4.1 plain yes/no + v1.4.2 reactions)');
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });

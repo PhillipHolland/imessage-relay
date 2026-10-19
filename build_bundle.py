@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.1, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.2, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=7933e64beb9b60c1c27c4cfa088071bac7bbabc3dfd8b759920bf978dce8adb0 nl=1
-# iMessage Relay v1.4.1
+@@@@ FILE README.md mode=644 sha256=47af0fa0bbe9c89eabf73a8356908f3edbf84e54155eb2fd0c715ab97ed4fd1d nl=1
+# iMessage Relay v1.4.2
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -38,14 +38,20 @@ Your reply in the relay chat (x.com in Chrome)
   If that is unclear (nobody recent, two contacts within `ambiguousSeconds`, a name that fits two
   contacts), nothing is sent and the bot asks "Who's this for? Start with a name, like Alex: …".
 - Full names work as the prefix ("Mary Ann Jones: hi"). A name that nobody on the relay list has
-  ("Austin Robinson: hey") is never guessed: the Mac looks it up in your Contacts and asks first
-  ("Austin isn't on your relay list yet. Reply yes within 2 min to text the Austin Robinson in your
-  Contacts (•••0177), or /add Austin <number>."). `yes` sends "hey" and saves Austin as a contact.
+  ("Jordan Rivera: hey") is never guessed: the Mac looks it up in your Contacts and asks first
+  ("Jordan isn't on your relay list yet. Reply yes within 2 min to text the Jordan Rivera in your
+  Contacts (•••0188), or /add Jordan <number>."). `yes` sends "hey" and saves Jordan as a contact.
   Two matches list the names only; a card with several numbers lists them masked.
-  v1.4.1: an **exact full name** ("Austin Robinson: hey", any case) that matches exactly one Contacts
+  v1.4.1: an **exact full name** ("Jordan Rivera: hey", any case) that matches exactly one Contacts
   card with exactly one number or email sends right away, saves the contact and reports
-  "→ Austin Robinson ✓ (new contact, •••0177)". `relayctl set confirmNewContacts always` asks every time
-  (default `exact-skip`). `/add Austin +1 555 555 0177` adds someone directly.
+  "→ Jordan Rivera ✓ (new contact, •••0188)". `relayctl set confirmNewContacts always` asks every time
+  (default `exact-skip`). `/add Jordan +1 555 555 0188` adds someone directly.
+- v1.4.2: X Chat's native Reply ("Replied to …" + preview) routes to the quoted person again; a quote
+  that can't be placed, or a bare reply to a roster-only last texter (relay-all), asks "Reply to <label>?"
+  instead of "Who's this for?". "✓✓ delivered" is checked every ~2 s while a reply is waiting.
+- v1.4.2: names in any case ("jordan rivera: hey", "text jordan hey"). A prefix is a name only when your
+  relay list or Contacts know it (a nickname or a close typo asks first; a typo is never sent unasked);
+  anything else ("Breakfast plan: eggs") is ordinary text. A 👍 on the pending prompt confirms it, 👎 cancels.
 - v1.4.1: while the relay is waiting for a confirmation (a reply prompt, `/block`, `/add`), a plain
   `yes` / `y` / `yep` / `ok` / `send` / `do it` confirms and `no` / `cancel` cancels (any case, with
   punctuation or emoji). Those words are never texted to anyone while a prompt is pending, nor within
@@ -66,7 +72,7 @@ Your reply in the relay chat (x.com in Chrome)
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.1)
+## Limits (v1.4.2)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -111,8 +117,8 @@ Run the new `./install.sh` (no flags needed). It keeps config.json, roster.json 
 watcher app (never rebuilt or re-signed, wherever it lives, so Full Disk Access stays), keeps
 the LaunchAgent pointing at that app, and turns an old `~/.imessage-relay/fdatest.py` into a
 shim to `bin/watch_launcher.py`. It prints which version it found and upgrades in place. Then
-reload the extension card in chrome://extensions (v1.4.1 changes the extension: a plain "yes"/"no"
-answers a reply prompt; v1.4.0 and v1.3.9 changed it too) and press Cmd+R
+reload the extension card in chrome://extensions (v1.4.2 changes the extension: 👍/👎 on a prompt;
+v1.4.1, v1.4.0 and v1.3.9 changed it too) and press Cmd+R
 on the x.com chat tab.
 
 ## Operations
@@ -163,9 +169,9 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing","detail","at"}` (no message body)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=a1b35bb86d6af2d9469b0273f50a54a808648d1e0107ab5735d9570089a06922 nl=1
+@@@@ FILE install.sh mode=755 sha256=6dc0e0f72900c2d78b6f7a49cbdcf109030a6ed67c49c871335c204785779fbb nl=1
 #!/bin/bash
-# iMessage Relay v1.4.1 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
+# iMessage Relay v1.4.2 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
 # roster.json, and the existing "iMessage Relay Watcher" app (never rebuilt or re-signed, so
 # its Full Disk Access grant survives), and keeps the LaunchAgent pointing at that app.
@@ -594,7 +600,7 @@ cat <<NEXT
 Log (counts only, never message text): $LOGS/imessage-relay.log
 NEXT
 @@@@ END
-@@@@ FILE run_tests.sh mode=755 sha256=8a2d62179e3f3d368aab93b84ab6c28eeb3ef7e348fdcaf311d9060ed13f5373 nl=1
+@@@@ FILE run_tests.sh mode=755 sha256=44a1211765dbef0fb96802503e6f19e542c3876b14a882c6b18c9c7edb22f54d nl=1
 #!/bin/bash
 # Runs every test. Needs python3 (3.9+); the JS tests also need node and jsdom
 # (NODE_PATH pointing at a node_modules with jsdom, or `npm i jsdom` here).
@@ -614,7 +620,7 @@ if command -v node >/dev/null 2>&1 && ! node -e "require('jsdom')" >/dev/null 2>
   _gr="$(npm root -g 2>/dev/null)"; [[ -n "$_gr" ]] && export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$_gr"
 fi
 if command -v node >/dev/null 2>&1 && node -e "require('jsdom')" >/dev/null 2>&1; then
-  for t in detect frames owner native guess yes e2etest chips smoke-chrome; do
+  for t in detect frames owner native guess yes reaction quote e2etest chips smoke-chrome; do
     echo "== JS: $t =="
     node "tests/js/$t.test.js" 2>&1 | grep -E 'passed|FAIL|PASS chrome' ; [[ ${PIPESTATUS[0]} -eq 0 ]] || fail=1
   done
@@ -710,9 +716,9 @@ Also, by hand if you like:
   - System Settings > Privacy & Security > Automation -> turn off Messages for Google Chrome
 DONE
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=57f4b39bbe3d731051bff477354dd4ce1446b95347006472a5171a300d643d3b nl=1
+@@@@ FILE extension/background.js mode=644 sha256=241f5b2d8a232b350ef205819657c08065124364dbc1b3daf36051eafbdce4c2 nl=1
 /*
- * iMessage Relay v1.4.1: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.2: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -1081,6 +1087,8 @@ async function handleItem(item) {
   }
   const bw = bareConfirmWord(item.text);
   if (bw) {                                   // v1.4.1: plain "yes" / "no" answers a pending reply prompt
+    const c0 = await getConfig(false);
+    if (c0.ok && c0.relayConversationId && item.conversationId !== c0.relayConversationId) return;
     const g = await getPendingGuess();
     if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
       if (await isDuplicate(item.key)) return;
@@ -1133,6 +1141,26 @@ async function handleItem(item) {
   await updateEvent(item.key, patch);
 }
 
+// v1.4.2: the owner put a thumbs-up / thumbs-down on the newest pending prompt (content.js checks the
+// prompt, the 2-minute window and the owner identity). A pending reply prompt is answered here (the text
+// is held here); a /block or /add prompt is answered by the host. A reaction is never sent as a message.
+async function handleReaction(r) {
+  const word = r && (r.word === 'yes' || r.word === 'no') ? r.word : '';
+  if (!word) return;
+  const cfg = await getConfig(false);
+  if (!cfg.ok || !cfg.relayConversationId || String(r.conversationId || '') !== cfg.relayConversationId || cfg.paused) return;
+  const key = String(r.key || '').slice(0, 300);
+  if (await isDuplicate(key)) return;
+  const item = { key, conversationId: cfg.relayConversationId, ts: String(r.ts || new Date().toISOString()), text: '' };
+  const g = await getPendingGuess();
+  if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
+    if (word === 'yes') await handleYes(item, '');
+    else await handleCancel(item, g);
+    return;
+  }
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, conversationId: cfg.relayConversationId }); } catch (e) { /* host down */ }
+}
+
 function sanitizeItem(raw) {
   const dirs = ['outbound', 'inbound', 'unknown'];
   const out = {
@@ -1182,6 +1210,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     else if (msg.signal.status === 'account_ok') setWrongAccount(false).catch(() => {});
     return false;
   }
+  if (msg.type === 'relay-reaction' && msg.item && sender.tab) {
+    handleReaction(msg.item).catch(e => console.warn(LOG_PREFIX, 'reaction handling failed', e));
+    return false;
+  }
   if (msg.type === 'relay-hello') return false;   // frame instance announced itself; no coordination needed
   if (msg.type === 'relay-status') {
     getConfig(true).then(async () => {
@@ -1220,7 +1252,7 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=3967bc8a38320abc4aac3a402dd4b01a6a921ae2f77a4fde5c2d2e113d4ac15a nl=1
+@@@@ FILE extension/content.js mode=644 sha256=0809e64948ac3f7657a073d30619b2e0bfa30ba90d793144a57dffbeb013bce1 nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -1331,6 +1363,7 @@ chrome.runtime.onStartup.addListener(boot);
     const cfg = Object.assign({}, CONFIG, opts.config || {});
     const now = opts.now || (() => Date.now());
     const emit = opts.onEmit || (() => {});
+    const onReaction = opts.onReaction || (() => {});    // v1.4.2: owner thumbs-up/down on a pending prompt
     const onStatus = opts.onStatus || (() => {});
     const getState = opts.getState || (() => ({ paused: false, conversationFilter: '' }));
     // Owner-identity gate. Default: confirmed (unit tests of pure detection don't wire it);
@@ -1560,10 +1593,68 @@ chrome.runtime.onStartup.addListener(boot);
       const el = bodyEl(entry);
       return { textEl: el, text: el ? extractText(el) : '' };
     }
+    // v1.4.2: X Chat's current native Reply shows "Replied to <name>" plus a preview of the replied-to
+    // message, which may carry no quote-like testid. Three more ways to find it, in order:
+    //  (1) an element carrying ANOTHER message's uuid (message-<u2> / message-text-<u2>) inside the bubble,
+    //      or a link/attribute naming that uuid: the replied-to message. Its text is read from the page.
+    //  (2) a "Replied to ..." / "Replying to ..." label outside the bubble's own text: the preview is the
+    //      label's container minus the label.
+    //  (3) the same label just above the bubble (a sibling row of the entry).
+    const REPLIED_RE = /^\s*(?:you\s+)?(?:replied|replying|reply)\s+to\b/i;
+    const UUID_ANY_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+    function ownText(el) { let t = ''; for (let n = el.firstChild; n; n = n.nextSibling) if (n.nodeType === 3) t += n.nodeValue; return t; }
+    function foreignUuidQuote(entry) {
+      const own = uuidOf(entry);
+      const textEl = bodyEl(entry);
+      let other = '';
+      walkElements(entry, el => {
+        if (other || (textEl && deepContains(textEl, el))) return;
+        for (const at of ['data-testid', 'href', 'data-message-id', 'data-reply-to', 'aria-describedby']) {
+          const v = el.getAttribute(at);
+          const m = v && UUID_ANY_RE.exec(v);
+          if (m && m[1].toLowerCase() !== String(own).toLowerCase()) { other = m[1]; return; }
+        }
+      });
+      if (!other) return '';
+      const src = safeAll(doc, '[data-testid="' + cfg.textTestIdPrefix + other + '"]').find(x => !deepContains(entry, x)) ||
+        safeAll(entry, '[data-testid="' + cfg.textTestIdPrefix + other + '"]')[0];
+      return src ? extractText(src) : '';
+    }
+    function repliedLabelQuote(scope, textEl) {
+      let label = null;
+      walkElements(scope, el => {
+        if (label || (textEl && deepContains(textEl, el))) return;
+        if (REPLIED_RE.test(ownText(el)) || (REPLIED_RE.test(el.textContent || '') && el.children.length === 0)) label = el;
+      });
+      if (!label) return '';
+      // climb to the smallest container that holds more than the label (the preview), never the reply text
+      let box = label;
+      for (let i = 0; i < 5; i++) {
+        const up = parentOf(box);
+        if (!up || up === scope.parentNode || (textEl && deepContains(up, textEl))) break;
+        box = up;
+        if (String(box.textContent || '').trim().length > String(label.textContent || '').trim().length + 1) break;
+      }
+      const full = String(box.textContent || '').replace(/\s+/g, ' ').trim();
+      const lab = String(label.textContent || '').replace(/\s+/g, ' ').trim();
+      return full.indexOf(lab) === 0 ? full.slice(lab.length).trim() : full.replace(lab, '').trim();
+    }
     function entryQuote(entry) {
       const q = findQuote(entry);
-      if (!q) return '';
-      return extractText(q).replace(/\n+/g, ' ').trim().slice(0, cfg.maxQuoteLength);
+      let t = q ? extractText(q) : '';
+      if (!t) t = foreignUuidQuote(entry);
+      if (!t) t = repliedLabelQuote(entry, bodyEl(entry));
+      const scanAbove = start => {
+        let sib = start && start.previousElementSibling;
+        for (let i = 0; !t && sib && i < 2; i++, sib = sib.previousElementSibling) {
+          if (isUuidEntry(sib) || collectEntries(sib).length) break;     // another message, not a preview
+          t = repliedLabelQuote(sib, null);
+        }
+      };
+      if (!t) scanAbove(entry);
+      const wrap = parentOf(entry);
+      if (!t && wrap && wrap !== doc.body && collectEntries(wrap).length === 1) scanAbove(wrap);
+      return String(t || '').replace(/\n+/g, ' ').trim().slice(0, cfg.maxQuoteLength);
     }
     function timeEl(entry) { return safeAll(entry, 'time[datetime],time,[datetime]')[0] || null; }
     function entryTimeIso(entry) {
@@ -1700,6 +1791,7 @@ chrome.runtime.onStartup.addListener(boot);
       const list = allEntries();
       for (const e of list) { processed.add(e); seenKeys.add(conversationId() + '|id:uuid=' + uuidOf(e)); }
       stats.baselined += list.length;
+      try { scanReactions(list); } catch (e) { /* prompts get marked on their next change */ }
       settleUntil = now() + cfg.settleMs;
       recentEmits = [];
       info('baseline (' + reason + '): context=' + contextPath() + ' conversation=' + (conversationId() || '(none)') + ' mode=' + mode + ' root=' + chatRoot().selector + ' existing=' + list.length);
@@ -1722,6 +1814,79 @@ chrome.runtime.onStartup.addListener(boot);
       if (pending.size) schedule();
     }
 
+    // ---------- v1.4.2: a thumbs-up / thumbs-down on a pending "Reply yes" prompt ----------
+    // The bot's prompts are inbound bubbles whose text says "reply yes within 2 min". A reaction is an
+    // emoji drawn on that bubble OUTSIDE its message text. Only a reaction that APPEARS after the prompt
+    // was first seen counts (never one already there at page load), only on the newest prompt, only
+    // within 2 minutes of it, only once, and only with the owner's identity confirmed. The extension
+    // reads the prompt's own text only to recognise it (prompts carry no message bodies).
+    const PROMPT_RE = /reply yes within 2 min/i;
+    const UP_RE = /\u{1F44D}/u, DOWN_RE = /\u{1F44E}/u;
+    const PICT_RE = /\p{Extended_Pictographic}/gu;
+    const PROMPT_WINDOW_MS = 120000;
+    const promptMarks = new Map();   // uuid -> { at, up, down, fired }
+    function reactionState(entry) {
+      const textEl = bodyEl(entry);
+      const quoteEl = findQuote(entry);
+      const kinds = new Set();
+      let up = false, down = false;
+      const look = s => {
+        if (!s) return;
+        if (UP_RE.test(s)) up = true;
+        if (DOWN_RE.test(s)) down = true;
+        const m = s.match(PICT_RE); if (m) m.forEach(k => kinds.add(k));
+      };
+      walkElements(entry, el => {
+        if ((textEl && deepContains(textEl, el)) || (quoteEl && deepContains(quoteEl, el))) return;
+        if (el.closest && el.closest('[role="menu"],[role="menuitem"],[role="dialog"],[role="toolbar"],[role="tooltip"],[role="listbox"]')) return;
+        for (let n = el.firstChild; n; n = n.nextSibling) if (n.nodeType === 3) look(n.nodeValue);
+        look(el.getAttribute('alt')); look(el.getAttribute('aria-label'));
+      });
+      if (kinds.size >= 4) return { up: false, down: false };    // an emoji picker / hover bar, not a reaction
+      return { up, down };
+    }
+    function isPrompt(entry) {
+      const tEl = bodyEl(entry);
+      if (!tEl) return false;
+      const t = String(tEl.textContent || '');
+      return PROMPT_RE.test(t) && t.length < 600;
+    }
+    function scanReactions(roots) {
+      const conv = conversationId();
+      const state = getState() || {};
+      const filter = normalizeFilter(state.conversationFilter);
+      if (!conv || state.paused || (filter && filter !== conv)) return;
+      const entries = new Set();
+      for (const r of roots) {
+        if (!r || !r.isConnected) continue;
+        const e = closestEntry(r); if (e) entries.add(e);
+        for (const x of collectEntries(r)) entries.add(x);
+      }
+      for (const e of entries) {
+        const u = uuidOf(e);
+        if (!u || !isPrompt(e)) continue;
+        if (!ownerCheck()) return;
+        const st = reactionState(e);
+        const mk = promptMarks.get(u);
+        if (!mk) {
+          const iso = entryTimeIso(e);
+          const t = iso ? (Date.parse(iso) || now()) : now();
+          promptMarks.set(u, { at: Math.min(t, now()), up: st.up, down: st.down, fired: false });
+          continue;
+        }
+        if (mk.fired) continue;
+        const word = (st.up && !mk.up) ? 'yes' : (st.down && !mk.down) ? 'no' : '';
+        mk.up = mk.up || st.up; mk.down = mk.down || st.down;
+        if (!word) continue;
+        if (now() - mk.at > PROMPT_WINDOW_MS) continue;
+        const newer = Array.from(promptMarks.values()).some(o => o !== mk && o.at > mk.at);
+        if (newer) continue;
+        if (analyze(e).direction === 'outbound') continue;   // the owner's own message is never a prompt
+        mk.fired = true;
+        try { onReaction({ conversationId: conv, key: 'reaction:' + u, word, ts: new Date(now()).toISOString() }); } catch (err) { info('reaction emit failed', err); }
+      }
+    }
+
     function flush() { try { flushInner(); } finally { flushCache = null; } }
     function flushInner() {
       const roots = Array.from(pending);
@@ -1731,6 +1896,7 @@ chrome.runtime.onStartup.addListener(boot);
       const prevMode = mode;
       if (mode === 'none') mode = detectMode(root.el || doc.body);
       if (prevMode === 'none' && mode !== 'none') { baseline('first messages rendered'); return; }
+      try { scanReactions(roots); } catch (e) { info('reaction scan failed', e); }
       const found = new Set();
       for (const r of roots) {
         if (!r.isConnected) continue;
@@ -1928,7 +2094,7 @@ chrome.runtime.onStartup.addListener(boot);
         ', roles=' + JSON.stringify(f.roles) + ', hasShadow=' + f.hasShadow + ', iframes=' + f.iframes + ', mode=' + f.mode + ', entries=' + f.entriesMatched);
     }
 
-    const OBS_OPTS = { childList: true, subtree: true, characterData: true };
+    const OBS_OPTS = { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'alt'] };
     return {
       config: cfg,
       doc,
@@ -2046,6 +2212,7 @@ chrome.runtime.onStartup.addListener(boot);
     send({ type: 'relay-log', item });
   }
   function onStatus(sig) { send({ type: 'relay-signal', signal: sig }); }
+  function onReaction(r) { console.log(CONFIG.logPrefix, 'reaction on a prompt:', r.word); send({ type: 'relay-reaction', item: r }); }
 
   // Cross-session dedupe of already-relayed uuids, persisted in chrome.storage.local (keys only,
   // 24h TTL). Loaded once; writes are best-effort and debounced.
@@ -2081,7 +2248,7 @@ chrome.runtime.onStartup.addListener(boot);
     if (mainDetector) return;
     mainDetector = createRelayDetector({
       window, document, getState: () => state, getContextUrl: contextUrl, source: role,
-      onEmit, onStatus, ownerCheck: ownerConfirmed, seen: seenStore,
+      onEmit, onStatus, onReaction, ownerCheck: ownerConfirmed, seen: seenStore,
     });
     mainDetector.start();
     console.log(CONFIG.logPrefix, '(' + role + ') started (read-only).', { frameHref: location.href, context: contextUrl(), paused: state.paused });
@@ -2128,11 +2295,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=b13d4363a9d1439975546e7c0d6dc49abef2fe6c1ed1632f2f3f04f6e773707c nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=d062d8218fc9095d9d6ff3b91114607b41771134e27a47268c33fd15f3f9ad44 nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open chat page only; never posts, types, or calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -2315,10 +2482,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=3236637261f043c9220b4fefd7c11796eca650bcf58d73def5b6de1b81c1cc75 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=8eadb8b1e65511ef7de157029a5e44b808c2cc850fb49f7b1b8d257a8452ba64 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.1.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.2.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -2374,6 +2541,7 @@ NOTIFY_TIMEOUT_S = 12            # v1.4.0: was 4 s; the webhook trigger often ta
 NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')   # body-free events the watcher re-posts
 NEW_CONTACT_WINDOW_S = 130.0     # the /yes window for texting someone new from Contacts (2 min + slack)
 CONTACTS_WAIT_S = 8.0
+CONTACTS_WAIT_QUICK_S = 3.0      # v1.4.2: a lower-case / comma / "text x" candidate waits less (often ordinary text)
 
 
 # ---------- native messaging framing ----------
@@ -2702,7 +2870,7 @@ def parse_owner_command(text):
             confirm, rest = True, rest[:-4].strip()
         m = re.match(r'^(.*?)\s+(\+?[0-9][0-9().\s-]{5,}[0-9]|[^\s@]+@[^\s@]+\.[^\s@]+)$', rest)
         if m and m.group(1).strip():
-            # v1.4.0: "/add Austin +1 555 555 0123" adds that person directly (no text is sent).
+            # v1.4.0: "/add Jordan +1 555 555 0123" adds that person directly (no text is sent).
             return {'cmd': 'add', 'name': m.group(1).strip()[:80], 'handle': m.group(2).strip(), 'confirm': False}
         return {'cmd': 'add', 'name': rest[:80], 'confirm': confirm}
     if cmd == 'test':                         # "/test" or "/test send" (own handle only); never routed
@@ -2896,14 +3064,19 @@ def guess_is_risky(contact, cfg, now_t):
     return False
 
 
-# ---------- v1.4.0: a reply to someone on no relay list ("Austin Robinson: hey") ----------
-def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S):
+# ---------- v1.4.0: a reply to someone on no relay list ("Jordan Rivera: hey") ----------
+def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S, fuzzy=None):
     """Ask the watcher (it can read Contacts) for exact / unique name matches. None when it does not
     answer in time. The job result holds handles, so it is deleted the moment it is read."""
     jobs = os.path.join(rc.APP_DIR, 'jobs')
     jid = 'contacts' + uuid.uuid4().hex[:10]
     job_p, res_p = os.path.join(jobs, jid + '.job.json'), os.path.join(jobs, jid + '.result.json')
-    rc.write_json_atomic(job_p, {'id': jid, 'type': 'contacts_lookup', 'name': str(name)[:80], 'createdAt': now()})
+    job = {'id': jid, 'type': 'contacts_lookup', 'createdAt': now()}
+    if isinstance(name, (list, tuple)):          # v1.4.2: several candidate names in one job
+        job.update(names=[str(n)[:80] for n in name][:4], fuzzy=[bool(x) for x in (fuzzy or [])][:4])
+    else:
+        job['name'] = str(name)[:80]
+    rc.write_json_atomic(job_p, job)
     deadline = now() + wait_s
     while True:
         res = rc.read_json(res_p)
@@ -2924,10 +3097,14 @@ def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S):
     return None
 
 
-def _store_pending_new(handle, name, at):
+def _store_pending_new(handle, name, at, prefix='', existing=False):
     def fn():
         state = load_state()
         state['pendingNewContact'] = {'handle': handle, 'name': name, 'at': float(at)}
+        if prefix:
+            state['pendingNewContact']['prefix'] = str(prefix)[:80]     # which candidate name was offered
+        if existing:
+            state['pendingNewContact']['existing'] = True               # a typo of someone already on the list
         rc.write_json_atomic(STATE_PATH, state)
     _with_host_lock(fn)
 
@@ -2941,7 +3118,7 @@ def _peek_pending_new(handle, now_t):
 
 def _finish_new_contact(handle, name, cfg):
     """After the confirmed first text went out: they become a relay contact (same as /add), so the
-    owner's later "Austin: ..." replies and Austin's texts flow without asking again. Name + handle only."""
+    owner's later "Jordan: ..." replies and Jordan's texts flow without asking again. Name + handle only."""
     def fn():
         state = load_state()
         state.pop('pendingNewContact', None)
@@ -2953,22 +3130,70 @@ def _finish_new_contact(handle, name, cfg):
 
 
 def handle_unknown_name(route, cfg, sleeper, now, poster, base):
-    """The reply starts with a name nobody on the relay list has. Look it up in Contacts and ask; never
-    send on a guess. Names only in the prompts (a unique match shows the number's last 4 digits)."""
-    name = route['unknownName']
+    """The reply starts with a possible name nobody on the relay list has. Look it up in Contacts and ask;
+    never send on a guess. Names only in the prompts (a unique match shows the number's last 4 digits).
+    v1.4.2: any case. Only a Contacts (or relay-list typo) match makes it a name: with no match at all the
+    result is {'_fallback': True} and the caller routes the text as ordinary (no name)."""
+    cands = route.get('candidates') or [{'name': route['unknownName'], 'body': route.get('body', ''),
+                                         'fuzzy': False, 'nameLike': True}]
+    name_like = any(c.get('nameLike') for c in cands)
+    res = contacts_lookup([c['name'] for c in cands], sleeper, now,
+                          wait_s=CONTACTS_WAIT_S if name_like else CONTACTS_WAIT_QUICK_S,
+                          fuzzy=[c.get('fuzzy') for c in cands])
+    results = (res or {}).get('results')
+    if results is None and res is not None:      # an older watcher answers one name
+        results = [{'matches': res.get('matches') or []}]
+    results = results or []
+    chosen, matches = cands[0], []
+    for i, c in enumerate(cands):                # exact / first name / nickname, most specific candidate first
+        ms = [m for m in ((results[i] if i < len(results) else {}).get('matches') or []) if not m.get('fuzzy')]
+        if ms:
+            chosen, matches = c, ms
+            break
+    fuzzy = []
+    if not matches:
+        for i, c in enumerate(cands):
+            ms = [m for m in ((results[i] if i < len(results) else {}).get('matches') or []) if m.get('fuzzy')]
+            if ms:
+                chosen, fuzzy = c, ms
+                break
+    name = chosen['name']
     first = rc.first_name(name)
-    res = contacts_lookup(name, sleeper, now)
-    matches = (res or {}).get('matches') or []
-    rc.log_event('needs_target', reason='unknown-name', contactsMatches=len(matches), contactsChecked=res is not None)
+    rc.log_event('needs_target', reason='unknown-name', contactsMatches=len(matches), fuzzyMatches=len(fuzzy),
+                 dirFuzzy=bool(route.get('dirFuzzy')), candidates=len(cands), contactsChecked=res is not None)
+    if not matches and route.get('dirFuzzy'):
+        # a close typo of someone already on the relay list ("Jordn:" for Jordan): ask, never send unasked
+        df = route['dirFuzzy']
+        _store_pending_new(df['handle'], df['label'], now(), prefix=df['name'], existing=True)
+        _note_prompt(now())
+        detail = '\u2753 Did you mean %s? Reply yes within 2 min to send it to %s (no to cancel).' % (df['label'], df['label'])
+        notify(cfg, poster, {'type': 'needs_confirm', 'label': df['label'], 'reason': 'new_contact', 'detail': detail,
+                             'at': rc.iso_utc(now())})
+        return dict(base, ok=False, needsConfirm=True, label=df['label'], handle=df['handle'], reason='new_contact',
+                    contact=df['label'], routedBy='contacts')
+    if not matches and len(fuzzy) == 1:
+        m = fuzzy[0]
+        _store_pending_new(m['handle'], m['name'], now(), prefix=name)
+        _note_prompt(now())
+        detail = ('\u2753 Did you mean %s? Reply yes within 2 min to text the %s in your Contacts (%s), or no to '
+                  'cancel.' % (m['name'], m['name'], rc.mask_handle(m['handle'])))
+        notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
+                             'at': rc.iso_utc(now())})
+        return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
+                    contact=m['name'], routedBy='contacts')
+    if not matches and fuzzy:
+        matches = fuzzy                          # several close names: list them (names only), send nothing
+    if not matches and not (res is None and any(c.get('nameLike') and c.get('form', 'colon') == 'colon' for c in cands)):
+        return dict(base, _fallback=True)        # not a name anyone knows: ordinary text
     if len(matches) == 1:
         m = matches[0]
         hs = m.get('handles') or [{'handle': m['handle'], 'label': ''}]
         if cfg['confirmNewContacts'] == 'exact-skip' and m.get('exact') and len(hs) == 1:
-            # v1.4.1: "Austin Robinson: hey" names exactly one Contacts card, by its full name, with one
+            # v1.4.1: "Jordan Rivera: hey" names exactly one Contacts card, by its full name, with one
             # number/email: no question to ask. The caller sends it and adds them as a contact.
             rc.log_event('new_contact_direct')
-            return dict(base, _direct={'handle': m['handle'], 'name': m['name']})
-        _store_pending_new(m['handle'], m['name'], now())
+            return dict(base, _direct={'handle': m['handle'], 'name': m['name'], 'body': chosen['body']})
+        _store_pending_new(m['handle'], m['name'], now(), prefix=name)
         _note_prompt(now())
         if len(hs) > 1:
             def opt(x):
@@ -3063,8 +3288,28 @@ def handle_bare_confirm(word, quoted, cfg, now, poster):
     return dict(base, ok=True, skipped=detail)
 
 
+def handle_reaction(msg, cfg, now, poster):
+    """v1.4.2: the owner put a thumbs-up (confirm) or thumbs-down (cancel) on a pending prompt in the relay
+    chat. The extension only sends this for a reaction it saw appear on the newest "Reply yes" prompt within
+    2 minutes of it; a pending reply prompt is answered in the extension itself. Here: /block and /add.
+    Nothing pending -> ignored silently (a reaction is never a message and never texted)."""
+    word = 'yes' if msg.get('word') == 'yes' else 'no' if msg.get('word') == 'no' else None
+    conv = str(msg.get('conversationId') or '').strip()
+    if not word or (cfg.get('relayConversationId') and conv != cfg['relayConversationId']):
+        return {'ok': False, 'error': 'not a relay-chat reaction'}
+    if cfg['paused']:
+        return {'ok': False, 'error': 'paused'}
+    t = now()
+    state = load_state()
+    if not (_fresh(state, 'pendingBlock', t, CONFIRM_WINDOW_S) or _fresh(state, 'pendingAdd', t, ADD_WINDOW_S)):
+        rc.log_event('reaction_ignored', word=word)
+        return {'ok': True, 'ignored': True}
+    rc.log_event('reaction_confirm', word=word)
+    return handle_bare_confirm(word, '', cfg, now, poster)
+
+
 def _short_mask(handle):
-    """'+1 \u2022\u2022\u20220177' -> '\u2022\u2022\u20220177' for the "(new contact, ...)" note; emails stay masked as is."""
+    """'+1 \u2022\u2022\u20220188' -> '\u2022\u2022\u20220188' for the "(new contact, ...)" note; emails stay masked as is."""
     m = rc.mask_handle(handle)
     return m.split(' ', 1)[1] if m.startswith('+') and ' ' in m else m
 
@@ -3140,7 +3385,11 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if not route.get('needsTarget') and route['contact']['handle'] == hint_norm:
             contact, body, by = route['contact'], route['body'], route['by']   # same target: use its stripped body
         elif new_contact and route.get('unknownName'):
-            contact, body, by = tgt, route['body'], 'contacts'                  # "Austin Robinson: hey" -> "hey"
+            # "Jordan Rivera: hey" -> "hey" (v1.4.2: the body of the candidate name that was offered)
+            pick = next((c for c in route.get('candidates') or [] if c['name'] == new_contact.get('prefix')), None)
+            contact, body, by = tgt, (pick['body'] if pick else route['body']), 'contacts'
+            if new_contact.get('existing'):
+                new_contact = None                                              # a typo of someone on the list
         else:
             contact, body, by = tgt, text, 'confirmed'                         # target drifted: send the full reply
         handle = contact['handle']
@@ -3148,15 +3397,23 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         direct = None
         if route.get('needsTarget') and route.get('unknownName'):
             r = handle_unknown_name(route, cfg, sleeper, now, poster, base)
-            if '_direct' not in r:
+            if r.get('_fallback'):
+                route = route['fallback']            # v1.4.2: no one by that name: ordinary text
+            elif '_direct' not in r:
                 return r
-            direct = r['_direct']
+            else:
+                direct = r['_direct']
         if direct:
             # v1.4.1 exact-skip: one Contacts card by its exact full name with one number -> send now.
             new_contact = {'handle': direct['handle'], 'name': direct['name']}
             route = {'contact': {'kind': 'new', 'label': rc.clean_label(direct['name']) or rc.format_handle(direct['handle']),
                                  'name': direct['name'], 'handle': direct['handle'], 'lastInboundAt': None},
-                     'body': route['body'], 'by': 'contacts'}
+                     'body': direct.get('body', route.get('body', '')), 'by': 'contacts'}
+            known = next((e for e in rc.build_directory(cfg, rc.load_roster()) if e['handle'] == direct['handle']), None)
+            if known and (known.get('kind') == 'contact' or (known.get('kind') == 'roster' and cfg['relayAll'])):
+                # already on the relay list under another label (e.g. "Mom"): send there, not as a new contact
+                new_contact = None
+                route['contact'] = known
         if route.get('needsTarget'):
             rc.log_event('needs_target', textLength=len(text), quoted=bool(quoted))   # reason may name a label; owner gets it via webhook, not the log
             notify(cfg, poster, {'type': 'needs_target', 'detail': route['error'], 'reason': route['reason'],
@@ -3194,8 +3451,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         # Confirm-when-guessed (item 3): a 'recent'-routed reply may be going to the wrong person. Ask first
         # per the confirmGuessed policy. The host never holds the text; the extension keeps it in session
         # storage and re-sends it with confirmed:true (and the handle) on "/yes".
-        if (by == 'recent' and cfg['confirmGuessed'] != 'off'
-                and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
+        # v1.4.2: an unresolved quote, or a roster-only last texter, is always asked first
+        must_ask = by == 'recent' and (route.get('quoteUnresolved') or contact.get('kind') == 'roster')
+        if must_ask or (by == 'recent' and cfg['confirmGuessed'] != 'off'
+                        and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
             detail = '❓ Reply to %s? Reply yes within 2 min.' % contact['label']
             rc.log_event('needs_confirm', routedBy=by, reason='guessed', textLength=len(body))
             _note_prompt(now())
@@ -3362,6 +3621,8 @@ def handle_request(msg, cfg=None, runner=subprocess.run, sleeper=time.sleep, now
         return handle_signal(msg, cfg, now, poster)
     if typ == 'test':
         return handle_test(msg, cfg, runner, sleeper, now, poster)
+    if typ == 'reaction':
+        return handle_reaction(msg, cfg, now, poster)
     return {'ok': False, 'error': 'unknown request type'}
 
 
@@ -3387,10 +3648,10 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=c43e580a74c14da6160e8fc5d963e2f56330989e2300e32bd5a2ca15530ff0a7 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=f659348e4d9b7ba0f7d056dd3c2d69c43abddeb28f8def9fc84d2464abc14d02 nl=1
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.1: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.2: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -4120,6 +4381,12 @@ class Watcher:
         except Exception:
             pass
 
+    def has_pending(self):
+        try:
+            return any(n.endswith('.json') for n in os.listdir(rc.PENDING_DIR))
+        except OSError:
+            return False
+
     def process_pending(self, cfg):
         """The host (run under Chrome, no chat.db access) left body-free pending records of its sends;
         the watcher checks chat.db for is_delivered / error, logs a counts-only 'delivery' event, and
@@ -4139,7 +4406,7 @@ class Watcher:
             if cfg.get('confirmSends', True) and not cfg['paused'] and cfg['webhookUrl']:
                 p = {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered, 'dryRun': False, 'at': rc.iso_utc(t)}
                 if e.get('note'):
-                    p['note'] = e['note']             # v1.4.1: "(new contact, •••0177)"
+                    p['note'] = e['note']             # v1.4.1: "(new contact, •••0188)"
                 self.post(cfg, p)
 
         def fail(e, error=None, reason=None, superseded=False):
@@ -4269,7 +4536,10 @@ class Watcher:
             return self.recent_senders(cfg, int(job.get('days') or 30), int(job.get('limit') or 20))
         if typ == 'test_probe':                       # v1.3.8 /test: am I alive, can I read chat.db?
             return self.test_probe()
-        if typ == 'contacts_lookup':                  # v1.4.0: host asks who "Austin Robinson" is (no FDA there)
+        if typ == 'contacts_lookup':                  # v1.4.0: host asks who "Jordan Rivera" is (no FDA there)
+            if isinstance(job.get('names'), list):     # v1.4.2: several candidate names, typo matches allowed per name
+                names = [str(n or '')[:80] for n in job['names'][:4]]
+                return relay_contacts.lookup_many(names, cfg, globs=ADDRESSBOOK_GLOBS, fuzzy=job.get('fuzzy'))
             return relay_contacts.lookup(str(job.get('name') or '')[:80], cfg, globs=ADDRESSBOOK_GLOBS)
         if typ == 'detect_owner_handles':             # v1.3.8 guided setup (relayctl owner-handles detect)
             return self.detect_owner_job(cfg, bool(job.get('apply')))
@@ -4352,10 +4622,17 @@ class Watcher:
                 cfg = self.load_config()
             except Exception as e:
                 rc.log_event('watch_error', error=type(e).__name__)
-            for _ in range((cfg or rc.DEFAULT_CONFIG)['pollSeconds']):
+            for i in range((cfg or rc.DEFAULT_CONFIG)['pollSeconds']):
                 if stop['flag']:
                     break
                 self.sleeper(1)
+                # v1.4.2 latency: while a reply is waiting for its delivery proof, check chat.db every ~2 s
+                # instead of once per pollSeconds (was up to 10 s before "\u2713\u2713 delivered" could post).
+                if i % 2 == 1 and self.has_pending():
+                    try:
+                        self.process_pending(self.load_config())
+                    except Exception as e:
+                        rc.log_event('watch_error', error=type(e).__name__)
                 if os.path.isdir(JOBS_DIR) and any(n.endswith('.job.json') for n in os.listdir(JOBS_DIR)):
                     try:
                         self.process_jobs(self.load_config())
@@ -4370,9 +4647,9 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=0bb2ad937b9f5d9450d3d97abc5d2495b89e71489c93f68b7ea910778049e035 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=000799f761a807df4d3c3a23374752ce29f5cc2c2d16abeee55f8d0d7f1795b1 nl=1
 """
-iMessage Relay v1.4.1: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.2: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -4396,7 +4673,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.1'
+VERSION = '1.4.2'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -4634,7 +4911,7 @@ def sanitize_config(user):
     cfg['redactCodes'] = truthy(cfg.get('redactCodes'), True)
     cfg['relayAll'] = truthy(cfg.get('relayAll'), False)
     cfg['skipShortCodes'] = truthy(cfg.get('skipShortCodes'), True)
-    cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()
+    cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
     mute = []
     for m in cfg.get('mute') if isinstance(cfg.get('mute'), list) else []:
@@ -4919,7 +5196,7 @@ def read_digest_marker():
 # ---------- reply routing ----------
 PREFIX_RE = re.compile(r'^\s*([^\n:]{1,60}?)\s*:\s*', re.S)
 # v1.4.0: a "Name:" / "First Last:" prefix that names nobody we know is NOT ordinary text: it must never
-# fall through to the "recent" guess (that would text "Austin: hey" to whoever wrote last). A name-like
+# fall through to the "recent" guess (that would text "Jordan: hey" to whoever wrote last). A name-like
 # prefix is 1-3 capitalized words of letters (apostrophes/hyphens/periods allowed), not a common
 # "Note:"-style label word.
 NAME_PREFIX_RE = re.compile(r"^[A-Z][A-Za-z\u00c0-\u024f'\u2019.-]{0,23}(?: [A-Z][A-Za-z\u00c0-\u024f'\u2019.-]{0,23}){0,2}$")
@@ -4943,6 +5220,78 @@ def unknown_name_prefix(text):
     if not NAME_PREFIX_RE.match(word) or word.lower() in NOT_A_NAME or word.split(' ')[0].lower() in NOT_A_NAME:
         return None
     return word, text[m.end():]
+# v1.4.2: smart name recognition. A leading "x:" / "x," / "text x ..." / "tell x ..." in ANY case is a
+# CANDIDATE name; it only counts as a name when the relay list or the Mac's Contacts know it (exactly,
+# by first name / nickname, or as a close typo, which always asks). Otherwise the text is ordinary.
+NAME_WORD_RE = re.compile(r"^[A-Za-z\u00c0-\u024f][A-Za-z\u00c0-\u024f'\u2019.-]{0,23}$")
+NOT_A_NAME_EXTRA = frozenset("""
+me you him her them us it this that these those everyone everybody someone anyone all back later again
+sounds good great nice cool sure yeah yep nope lol haha ha omg wow well yo k kk np ty thx pls please love
+the a an my your our his their its i i'm im we ok, so, but, and, also, actually anyway honestly
+""".split())
+_CAND_VERB_RE = re.compile(r'^\s*(?:text|tell|message|msg)\s+(.+)$', re.I | re.S)
+_CAND_COMMA_RE = re.compile(r'^\s*([^,\n]{1,60}?)\s*,\s*(\S.*)$', re.S)
+
+
+def _cand_ok(words):
+    if not 1 <= len(words) <= 3 or not all(NAME_WORD_RE.match(w) for w in words):
+        return False
+    low = [w.lower() for w in words]
+    stop = NOT_A_NAME | NOT_A_NAME_EXTRA
+    return ' '.join(low) not in stop and low[0] not in stop and low[-1] not in stop
+
+
+def name_candidates(text):
+    """v1.4.2: possible names at the start of a reply, most specific first. Each is
+    {'name','body','form','fuzzy','nameLike'}: form colon|comma|verb; `fuzzy` = a close-typo match may be
+    offered (only where the name's end is unambiguous); `nameLike` = the old capitalized-name shape (when
+    the Contacts check cannot run, only those hold the message instead of sending it as ordinary text)."""
+    t = text or ''
+    out = []
+    m = PREFIX_RE.match(t)
+    if m:
+        w = re.sub(r'\s+', ' ', m.group(1).strip())
+        w = re.sub(r'^(?:text|tell|message|msg|to)\s+', '', w, flags=re.I)
+        words = w.split(' ')
+        if _cand_ok(words):
+            out.append({'name': w, 'body': t[m.end():], 'form': 'colon', 'fuzzy': True,
+                        'nameLike': bool(NAME_PREFIX_RE.match(w))})
+        return out
+    m = _CAND_VERB_RE.match(t)
+    if m:
+        rest = m.group(1)
+        toks = rest.split()
+        for n in (3, 2, 1):
+            if len(toks) <= n:
+                continue                       # the name must leave a message behind it
+            words = [x.rstrip(',:.\u2013\u2014-') for x in toks[:n]]
+            if not _cand_ok(words):
+                continue
+            body = re.sub(r'^\s*(?:\S+\s+){%d}' % n, '', rest + ' ', count=1).strip()
+            body = re.sub(r'^[\s,:.\u2013\u2014-]+', '', body) if toks[n - 1][-1:] in ',:.' else body
+            if body:
+                out.append({'name': ' '.join(words), 'body': body, 'form': 'verb', 'fuzzy': False, 'nameLike': False})
+        return out
+    m = _CAND_COMMA_RE.match(t)
+    if m:
+        w = re.sub(r'\s+', ' ', m.group(1).strip())
+        if _cand_ok(w.split(' ')):
+            out.append({'name': w, 'body': m.group(2), 'form': 'comma', 'fuzzy': True, 'nameLike': False})
+    return out
+
+
+def close_name_score(a, b):
+    """0..1 similarity of two names (case/space-insensitive); a typo-level match is >= 0.85."""
+    import difflib
+    a, b = ' '.join(str(a).lower().split()), ' '.join(str(b).lower().split())
+    if not a or not b or a == b:
+        return 1.0 if a == b and a else 0.0
+    if a[0] != b[0] or abs(len(a) - len(b)) > 2 or min(len(a), len(b)) < 4:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+FUZZY_MIN = 0.85
 EMAIL_WORD_RE = re.compile(r'^\S+@\S+$')
 
 
@@ -5128,11 +5477,9 @@ def record_inbound(handle, at, path=None, label=''):
 
 
 
-def example_label(cfg, directory=None):
-    d = directory or build_directory(cfg, [])
-    people = [e for e in d if e['kind'] == 'contact'] or sorted(
-        [e for e in d if e['kind'] == 'roster'], key=lambda e: -(e['lastInboundAt'] or 0))
-    return people[0]['label'] if people else 'Name'
+def example_label(cfg=None, directory=None):
+    """v1.4.2: always a generic example name, never one of the owner's contacts or roster labels."""
+    return 'Alex'
 
 
 def ask_for_name_message(cfg, directory=None):
@@ -5191,8 +5538,13 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
     muted = set(cfg.get('mute') or ())
     window = cfg['replyWindowMinutes'] * 60
 
+    # v1.4.2: with relay-all, a roster person who just texted is a "last texter" too (a bare reply to them
+    # is always confirmed first by the host); before, only configured contacts were, so a reply to a
+    # roster-only sender who had just written got "Who's this for?".
+    live_kinds = ('contact', 'roster') if cfg['relayAll'] else ('contact',)
+
     def recent_live():
-        return sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] == 'contact'
+        return sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] in live_kinds
                        and e['handle'] not in muted and 0 <= now - e['lastInboundAt'] <= window],
                       key=lambda e: -e['lastInboundAt'])
 
@@ -5242,23 +5594,48 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                 res = _maybe_confirm_directive(res, by_handle[p_handle], directive_form, directive_name, recent_live())
             return res
         return deliver(by_handle[p_handle], rest, 'prefix')
-    # A non-empty but unresolved quote must never fall through to "recent": the owner aimed at one message.
-    if quoted_present:
-        return need('could not tell which relayed message the reply quoted')
-    un = unknown_name_prefix(text) if p_status == 'none' else None
-    if un:
+    # v1.4.2: a quote we cannot resolve (X changed its reply preview, or the label is gone) falls back to
+    # whoever wrote last, but is ALWAYS confirmed first ("Reply to Rory? Reply yes within 2 min.").
+    quote_unresolved = quoted_present
+    def recent_route():
+        # The "recent" fallback: configured contacts, plus (v1.4.2, relay-all) roster people within the window.
+        live = recent_live()
+        if not live:
+            return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
+        if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
+            return need('two people wrote within %d seconds of each other' % cfg['ambiguousSeconds'])
+        return deliver(live[0], text, 'recent')
+
+    cands = name_candidates(text) if p_status == 'none' and not quote_unresolved else []
+    if cands:
+        # v1.4.2: a possible name nobody on the relay list has (any case). The host asks the Mac's Contacts;
+        # only a match makes it a name. No match -> `fallback` (ordinary text, routed as if no name).
+        c0 = cands[0]
         res = need('the name prefix matches no one on the relay list',
                    "%s isn't on your relay list yet. Start with a name from it, or /add %s <number>."
-                   % (un[0], first_name(un[0])))
-        res.update(unknownName=un[0], body=un[1])
+                   % (c0['name'], first_name(c0['name'])))
+        res.update(unknownName=c0['name'], body=c0['body'], candidates=cands, fallback=recent_route())
+        # a close typo of someone on the relay list ("Jordn:" for Jordan): offered, never sent unasked
+        ok_kinds = ('contact', 'roster') if cfg['relayAll'] else ('contact',)
+        for c in cands:
+            if not c['fuzzy']:
+                continue
+            hits = {}
+            for e in d:
+                if e['kind'] not in ok_kinds or e['handle'] in muted:
+                    continue
+                sc = max(close_name_score(c['name'], k) for k in (e['label'], e['name'], first_name(e['name'])) if k)
+                if sc >= FUZZY_MIN:
+                    hits[e['handle']] = e
+            if len(hits) == 1:
+                e = next(iter(hits.values()))
+                res['dirFuzzy'] = {'handle': e['handle'], 'label': e['label'], 'name': c['name'], 'body': c['body']}
+                break
         return res
-    # The "recent" fallback is only for configured contacts; roster-only people need a Name: prefix or quote.
-    live = recent_live()
-    if not live:
-        return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
-    if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
-        return need('two people wrote within %d seconds of each other' % cfg['ambiguousSeconds'])
-    return deliver(live[0], text, 'recent')
+    res = recent_route()
+    if quote_unresolved and 'contact' in res:
+        res['quoteUnresolved'] = True
+    return res
 
 
 # ---------- webhook ----------
@@ -5452,10 +5829,10 @@ def __getattr__(name):
         return getattr(relay_echo, name)
     raise AttributeError("module 'relay_common' has no attribute %r" % name)
 @@@@ END
-@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=c4e0bbe25fba33b5cbeb1a404b6d40f6d8c701771de2ed3187c64bf45bbaa824 nl=1
-"""iMessage Relay v1.4.1 -- look a name up in the Mac's Contacts (for a reply to someone new).
+@@@@ FILE mac-helper/relay_contacts.py mode=644 sha256=f88db16015a5693bb2b6e2c03e94ffdd5dd7661f94a2ecb5ed061ceef46b2972 nl=1
+"""iMessage Relay v1.4.2 -- look a name up in the Mac's Contacts (for a reply to someone new).
 
-When the owner starts a reply with a name that is on no relay list ("Austin Robinson: hey"), the host
+When the owner starts a reply with a name that is on no relay list ("Jordan Rivera: hey"), the host
 asks the watcher (it holds Full Disk Access, which covers the Contacts database) to look that name up.
 Only an EXACT full-name match, or a first name that matches exactly one person, counts. The host then
 asks the owner to confirm with /yes (2 minutes) before a new 1:1 is started; nothing is ever sent on a
@@ -5498,8 +5875,17 @@ def _people(globs):
                         name = ' '.join(p for p in (first, last) if p) or (org or '')
                         if not name or not value:
                             continue
-                        e = people.setdefault((path, pk), {'name': name.strip(), 'first': str(first or '').strip(), 'handles': []})
+                        e = people.setdefault((path, pk), {'name': name.strip(), 'first': str(first or '').strip(),
+                                                           'nick': '', 'handles': []})
                         e['handles'].append((kind, str(label or ''), str(value)))
+                try:                                  # v1.4.2: nicknames count like first names (always asked)
+                    rcols = {r[1] for r in con.execute('PRAGMA table_info(ZABCDRECORD)')}
+                    if 'ZNICKNAME' in rcols:
+                        for pk, nick in con.execute('SELECT Z_PK, ZNICKNAME FROM ZABCDRECORD WHERE ZNICKNAME IS NOT NULL'):
+                            if (path, pk) in people:
+                                people[(path, pk)]['nick'] = str(nick or '').strip()
+                except sqlite3.Error:
+                    pass
             finally:
                 con.close()
     return people
@@ -5520,18 +5906,38 @@ def best_handle(handles, cc='1'):
     return ''
 
 
-def lookup(name, cfg, globs=None):
+def lookup_many(names, cfg, globs=None, fuzzy=None):
+    """v1.4.2: several candidate names in one pass over Contacts (read once). `fuzzy[i]` allows close-typo
+    matches for names[i]. Returns {'ok':True,'results':[{'matches':[...]}, ...]}."""
+    people = list(_people(globs or _globs()).values())
+    fz = list(fuzzy or [])
+    res = [lookup(n, cfg, people=people, fuzzy=bool(fz[i]) if i < len(fz) else False)
+           for i, n in enumerate(list(names or [])[:4])]
+    return {'ok': True, 'results': res}
+
+
+def lookup(name, cfg, globs=None, people=None, fuzzy=False):
     """Exact full name (case/space-insensitive), else a unique-or-several first-name match.
     Returns {'ok':True,'matches':[{'name','handle','exact','handles'}]} (at most MAX_RESULTS): `exact` is a
     full-name match, `handles` every valid number/email on that card (v1.4.1: one card with one handle
-    and an exact name may be texted without a /yes). The owner's own handles are never returned."""
+    and an exact name may be texted without a /yes). The owner's own handles are never returned.
+    v1.4.2: a nickname counts like a first name; with `fuzzy`, when nothing else matches, close typos of a
+    full name (or of a first name/nickname, for a one-word query) are returned marked 'fuzzy' (always asked)."""
     q = ' '.join(str(name or '').lower().split())
     if not q:
         return {'ok': True, 'matches': []}
-    people = _people(globs or _globs()).values()
+    if people is None:
+        people = _people(globs or _globs()).values()
     exact = [p for p in people if ' '.join(p['name'].lower().split()) == q]
     is_exact = bool(exact) and ' ' in q        # a one-word "name" is never an exact full-name match
-    hits = exact or ([p for p in people if p['first'].lower() == q] if ' ' not in q else [])
+    hits = exact or ([p for p in people if p['first'].lower() == q or p.get('nick', '').lower() == q]
+                     if ' ' not in q else [])
+    is_fuzzy = False
+    if not hits and fuzzy:
+        def keys(p):
+            return [p['name']] if ' ' in q else [p['first'], p.get('nick', '')]
+        hits = [p for p in people if max([rc.close_name_score(q, k) for k in keys(p) if k] or [0]) >= rc.FUZZY_MIN]
+        is_fuzzy = bool(hits)
     own = rc.owner_handle_set(cfg)
     out, seen = [], set()
     for p in sorted(hits, key=lambda p: p['name'].lower()):
@@ -5546,13 +5952,13 @@ def lookup(name, cfg, globs=None):
             if rc.valid_handle(n) and n not in own and n not in [x['handle'] for x in hs]:
                 hs.append({'handle': n, 'label': re.sub(r'[^A-Za-z ]', '', label).strip().lower()[:12]})
         out.append({'name': re.sub(r'[\x00-\x1f\x7f]', ' ', p['name'])[:60], 'handle': h, 'exact': is_exact,
-                    'handles': hs})
+                    'handles': hs, 'fuzzy': is_fuzzy})
         if len(out) >= MAX_RESULTS:
             break
     return {'ok': True, 'matches': out}
 @@@@ END
-@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=53eec98488ede59187f36c6d1d7904aefc4e4d9618068579c39c0f2a10b91059 nl=1
-"""iMessage Relay v1.4.1 -- conversational addressing (directive parsing).
+@@@@ FILE mac-helper/relay_directive.py mode=644 sha256=605ae542d35ad27fe9065c5c83a44200eb69b6d0afb6cb50e4832e2607fb891a nl=1
+"""iMessage Relay v1.4.2 -- conversational addressing (directive parsing).
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.parse_directive, rc.DIRECTIVE_DICT_WORDS, ...); relay_common re-exports these
 names lazily. Do not import relay_directive before relay_common.
@@ -5676,8 +6082,8 @@ def parse_directive(text, cfg, directory=None):
                 return h, text, 'unknown_handle', 'handle', ''
     return None, text, 'none', '', ''
 @@@@ END
-@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=047f6045797d9d91df375e4a88b45c993a72adc830eaa7cfc98d35d640e2aff7 nl=1
-"""iMessage Relay v1.4.1 -- echo guard + bot-output detection.
+@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=6c24c97076c79b50bc7bfdf1d4e945d5b2f27095926464dbaceaa47541cbdb01 nl=1
+"""iMessage Relay v1.4.2 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
 these names lazily. Do not import relay_echo before relay_common."""
@@ -5798,8 +6204,8 @@ def is_echoed_inbound(text, prefix_stripped=None, at=None, path=None, handle='')
             return True
     return False
 @@@@ END
-@@@@ FILE mac-helper/relay_send.py mode=644 sha256=aa898ca803cd4354f9e5e1ea592beb737839ea0430c6b708969710217218ffd2 nl=1
-"""iMessage Relay v1.4.1 -- delivery-proof queries and Messages.app sending.
+@@@@ FILE mac-helper/relay_send.py mode=644 sha256=f2f99c1f4546464a776cbe960888d955f38cdd0f589eee8064a8a5fd05234417 nl=1
+"""iMessage Relay v1.4.2 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
 re-exports these names lazily. Do not import relay_send before relay_common."""
@@ -5837,7 +6243,7 @@ DELIVERY_FALLBACK_WINDOW_S = 4.0
 # record. Records are body-free: handle, send time, text length and label only -- never the body or a hash.
 def add_pending_send(handle, at, text_length, label='', path=None, note=''):
     """Host (no chat.db access) records a send for the watcher to verify. NEVER stores the body.
-    v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0177")."""
+    v1.4.1: `note` is a short body-free tail for the confirmation ("new contact, •••0188")."""
     d = path or rc.PENDING_DIR
     rec = {'id': uuid.uuid4().hex, 'handle': rc.normalize_handle(handle), 'at': float(at),
            'textLength': int(text_length), 'label': rc.clean_label(label)}
@@ -6014,9 +6420,9 @@ def open_messages_hidden(runner=subprocess.run):
     except Exception:
         return False
 @@@@ END
-@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=dd0b13a5147bbe1ba1394e351008bc0d2a5189cd398b4660d19a621dfaed35f1 nl=1
+@@@@ FILE mac-helper/relay_setup.py mode=644 sha256=f1f0047d1d7bbf52639f68e026bf81e43b21dbf9dfb498cb269ab35fe9d53e7e nl=1
 """
-iMessage Relay v1.4.1: guided-setup helpers shared by relayctl and the watcher.
+iMessage Relay v1.4.2: guided-setup helpers shared by relayctl and the watcher.
 
   detect_owner_handles(con, cc)   the owner's OWN iMessage/SMS addresses, read from chat.db rows the
                                   owner sent (message.account / destination_caller_id). Handles only;
@@ -6168,9 +6574,9 @@ def apply_setup(values, token=None):
     rc.with_host_lock(_do)
     return out
 @@@@ END
-@@@@ FILE mac-helper/relay_test.py mode=644 sha256=30cae9afb5841d62c447013d503daf75d009227ab7b3013eff5b77a2b5b278e7 nl=1
+@@@@ FILE mac-helper/relay_test.py mode=644 sha256=ff4dad5eea8e5f597aa249c46822bee2ffb7b85d3bd9b586c293a1a4ace9e779 nl=1
 """
-iMessage Relay v1.4.1: the /test end-to-end check (runs inside the native host).
+iMessage Relay v1.4.2: the /test end-to-end check (runs inside the native host).
 
 The owner types "/test" (or "/test send") in the relay chat. The extension intercepts it before any
 reply routing and asks the host for {type:"test"}. The host then checks, each with its own timeout:
@@ -7239,9 +7645,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=44a690c4d6e1c6ad95a2f91f64a5e937c677268c6a918226639d76f67941d8fa nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=8b5a1ee1dfe1c8514db2e9faebd73715496552da5e73c42830240a28b41f6cf8 nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.1 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.2 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -7376,7 +7782,7 @@ def format_event(payload):
         # item 6: ONE confirmation, posted by the watcher: \u2713\u2713 when chat.db shows delivered, else \u2713
         # after the ~20s fallback. (Dry runs and delivery-check-off still come from the host.)
         label = _label(payload)
-        note = str(payload.get('note') or '').strip()[:60]     # v1.4.1: "new contact, \u2022\u2022\u20220177"
+        note = str(payload.get('note') or '').strip()[:60]     # v1.4.1: "new contact, \u2022\u2022\u20220188"
         if payload.get('dryRun'):
             line = '\u2192 ' + label + ' (dry run, not sent)'
         elif note:
@@ -8892,7 +9298,307 @@ t('T10 no twid, no switcher, account-nav avatar outside any panel -> true', chec
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=aea6076dbcf55f25ab10a32ca2499c54f9e2e13454d76378bf1055b4c0932d11 nl=1
+@@@@ FILE tests/js/quote.test.js mode=644 sha256=636cc3e193898e86787f97a1b32cff212383cecef4ba0aece3c95e71227d689e nl=1
+/* v1.4.2: X Chat's current native Reply ('Replied to <name>' + preview). Harness from detect.test.js. Run:
+ *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+const { JSDOM } = require('jsdom');
+const { CONFIG, createRelayDetector } = require('../../extension/content.js');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+
+function setup(html, url, opts = {}) {
+  const dom = new JSDOM(html || fixture, { url: url || 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
+  const { window } = dom;
+  window.Element.prototype.getBoundingClientRect = function () {
+    const v = this.getAttribute('data-fake-rect');
+    if (!v) return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    const [l, t, w, h] = v.split(',').map(Number);
+    return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
+  };
+  const state = Object.assign({ paused: false, conversationFilter: '' }, opts.state);
+  const logs = [];
+  const statuses = [];
+  const seenSet = opts.seenSet || new Set();
+  const det = createRelayDetector({
+    window, document: window.document, config: Object.assign({}, FAST, opts.config), getState: () => state,
+    onEmit: i => logs.push(i), onStatus: s => statuses.push(s), log: () => {},
+    now: opts.now, ownerCheck: opts.ownerCheck,
+    seen: { has: u => seenSet.has(u), add: u => seenSet.add(u) },
+  });
+  det.start();
+  return { window, doc: window.document, det, logs, statuses, state, dom, seenSet };
+}
+
+// uuid helpers
+const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
+function msg(doc, n, dir, build, opts = {}) {
+  const e = doc.createElement('div');
+  e.setAttribute('data-testid', 'message-' + uuid(n));
+  e.style.display = 'flex';
+  e.style.justifyContent = dir === 'out' ? 'flex-end' : 'flex-start';
+  const left = dir === 'out' ? 780 : 420;
+  const b = doc.createElement('div');
+  b.setAttribute('data-fake-rect', `${left},0,200,40`);
+  if (dir === 'in') b.innerHTML = '<a href="/SenderBot"><img alt="SenderBot"></a>';
+  const span = doc.createElement('span');
+  span.setAttribute('data-testid', 'message-text-' + uuid(n));
+  if (typeof build === 'function') build(span, doc); else span.textContent = build;
+  b.appendChild(span);
+  if (opts.time) { const t = doc.createElement('time'); t.setAttribute('datetime', opts.time); t.textContent = 't'; b.appendChild(t); }
+  e.appendChild(b);
+  return e;
+}
+const panel = doc => doc.querySelector('[data-testid="dm-conversation-panel"]');
+const fixture = '<html><body><div data-testid="dm-conversation-panel"><div data-testid="message-df48633d-6588-4b18-bc77-000000009999"><span data-testid="message-text-df48633d-6588-4b18-bc77-000000009999">earlier</span></div></div></body></html>';
+(async () => {
+  await test('"Replied to iMessage" + preview inside the bubble -> quotedText carries "Rory: ..."', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    const m = msg(doc, 1, 'out', 'Ha, true');
+    const pv = doc.createElement('div');
+    pv.innerHTML = '<div><span>Replied to iMessage</span></div><div><span>Rory: Not since the jump</span></div>';
+    m.querySelector('div').prepend(pv);
+    panel(doc).appendChild(m);
+    await sleep(80);
+    assert.strictEqual(logs.length, 1);
+    assert.strictEqual(logs[0].text, 'Ha, true');
+    assert.ok(/Rory: Not since/.test(logs[0].quotedText), JSON.stringify(logs[0].quotedText));
+    assert.ok(!/Replied to/.test(logs[0].quotedText));
+    det.stop();
+  });
+  await test('a reference to the replied-to message uuid resolves its text from the page', async () => {
+    const { doc, det, logs } = setup();
+    panel(doc).appendChild(msg(doc, 2, 'in', 'Rory: Not since the jump'));
+    await sleep(200);
+    const m = msg(doc, 3, 'out', 'Ha, true');
+    const ref = doc.createElement('a');
+    ref.setAttribute('href', '#message-' + uuid(2));
+    ref.textContent = 'Original message';
+    m.querySelector('div').prepend(ref);
+    panel(doc).appendChild(m);
+    await sleep(80);
+    assert.strictEqual(logs.length, 1);
+    assert.strictEqual(logs[0].text, 'Ha, true');
+    assert.strictEqual(logs[0].quotedText, 'Rory: Not since the jump');
+    det.stop();
+  });
+  await test('"Replied to" row just above the bubble (outside the entry)', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    const row = doc.createElement('div');
+    const label = doc.createElement('div');
+    label.innerHTML = '<span>You replied to iMessage</span><div>Rory: Not since the jump</div>';
+    row.appendChild(label);
+    row.appendChild(msg(doc, 4, 'out', 'Ha, true'));
+    panel(doc).appendChild(row);
+    await sleep(80);
+    assert.strictEqual(logs.length, 1);
+    assert.ok(/^Rory: Not since/.test(logs[0].quotedText), JSON.stringify(logs[0].quotedText));
+    det.stop();
+  });
+  await test('the owner typing "replied to" in the reply itself is not a quote', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 5, 'out', 'Replied to the landlord already'));
+    await sleep(80);
+    assert.strictEqual(logs.length, 1);
+    assert.ok(!logs[0].quotedText, JSON.stringify(logs[0].quotedText));
+    det.stop();
+  });
+  await test('the older reply-preview testid shape still works', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    const m = msg(doc, 6, 'out', 'yes, 7 works');
+    const q = doc.createElement('div');
+    q.setAttribute('data-testid', 'reply-preview');
+    q.innerHTML = '<span>Alex R.: dinner at 7?</span>';
+    m.querySelector('div').prepend(q);
+    panel(doc).appendChild(m);
+    await sleep(80);
+    assert.strictEqual(logs[0].quotedText, 'Alex R.: dinner at 7?');
+    det.stop();
+  });
+  console.log(passed + ' passed, ' + failed + ' failed (v1.4.2 native Reply quote)');
+  process.exit(failed ? 1 : 0);
+})();
+@@@@ END
+@@@@ FILE tests/js/reaction.test.js mode=644 sha256=1d19fa9662ce8385f91134d37ed69645697b7761263affcbe9e318bbdc09fbc2 nl=1
+/* v1.4.2: thumbs-up / thumbs-down on a pending prompt (content.js). Harness from detect.test.js. Run:
+ *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+const { JSDOM } = require('jsdom');
+const { CONFIG, createRelayDetector } = require('../../extension/content.js');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+
+function setup(html, url, opts = {}) {
+  const dom = new JSDOM(html || fixture, { url: url || 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
+  const { window } = dom;
+  window.Element.prototype.getBoundingClientRect = function () {
+    const v = this.getAttribute('data-fake-rect');
+    if (!v) return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    const [l, t, w, h] = v.split(',').map(Number);
+    return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
+  };
+  const state = Object.assign({ paused: false, conversationFilter: '' }, opts.state);
+  const logs = [];
+  const reacts = [];
+  const statuses = [];
+  const seenSet = opts.seenSet || new Set();
+  const det = createRelayDetector({
+    window, document: window.document, config: Object.assign({}, FAST, opts.config), getState: () => state,
+    onEmit: i => logs.push(i), onStatus: s => statuses.push(s), log: () => {}, onReaction: r => reacts.push(r),
+    now: opts.now, ownerCheck: opts.ownerCheck,
+    seen: { has: u => seenSet.has(u), add: u => seenSet.add(u) },
+  });
+  det.start();
+  return { window, doc: window.document, det, logs, statuses, state, dom, seenSet, reacts };
+}
+
+// uuid helpers
+const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
+function msg(doc, n, dir, build, opts = {}) {
+  const e = doc.createElement('div');
+  e.setAttribute('data-testid', 'message-' + uuid(n));
+  e.style.display = 'flex';
+  e.style.justifyContent = dir === 'out' ? 'flex-end' : 'flex-start';
+  const left = dir === 'out' ? 780 : 420;
+  const b = doc.createElement('div');
+  b.setAttribute('data-fake-rect', `${left},0,200,40`);
+  if (dir === 'in') b.innerHTML = '<a href="/SenderBot"><img alt="SenderBot"></a>';
+  const span = doc.createElement('span');
+  span.setAttribute('data-testid', 'message-text-' + uuid(n));
+  if (typeof build === 'function') build(span, doc); else span.textContent = build;
+  b.appendChild(span);
+  if (opts.time) { const t = doc.createElement('time'); t.setAttribute('datetime', opts.time); t.textContent = 't'; b.appendChild(t); }
+  e.appendChild(b);
+  return e;
+}
+const panel = doc => doc.querySelector('[data-testid="dm-conversation-panel"]');
+const fixture = '<html><body><div data-testid="dm-conversation-panel"></div></body></html>';
+const PROMPT = '\u2753 Reply to Sam? Reply yes within 2 min.';
+function react(doc, entry, emoji) {
+  const pill = doc.createElement('div');
+  pill.setAttribute('data-testid', 'reactions');
+  const s = doc.createElement('span'); s.textContent = emoji; pill.appendChild(s);
+  entry.appendChild(pill);
+  return pill;
+}
+const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
+
+(async () => {
+  await test('a new thumbs-up on a fresh prompt confirms once', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const p = msg(doc, 1, 'in', PROMPT, { time: nowIso(1000) });
+    panel(doc).appendChild(p);
+    await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+    react(doc, p, '\u{1F44D}');
+    await sleep(60);
+    assert.deepStrictEqual(reacts.map(r => r.word), ['yes']);
+    assert.strictEqual(reacts[0].conversationId, '111-222');
+    assert.ok(!JSON.stringify(reacts[0]).includes('Sam'), 'no prompt text in the event');
+    react(doc, p, '\u{1F44D}\u{1F3FD}');
+    await sleep(60);
+    assert.strictEqual(reacts.length, 1, 'only once');
+  });
+  await test('thumbs-down cancels', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const p = msg(doc, 2, 'in', PROMPT); panel(doc).appendChild(p); await sleep(60);
+    react(doc, p, '\u{1F44E}'); await sleep(60);
+    assert.deepStrictEqual(reacts.map(r => r.word), ['no']);
+  });
+  await test('a reaction already there at page load does nothing', async () => {
+    const html = '<html><body><div data-testid="dm-conversation-panel"></div></body></html>';
+    const dom0 = new (require('jsdom').JSDOM)(html);
+    const p0 = msg(dom0.window.document, 3, 'in', PROMPT, { time: nowIso(5000) });
+    react(dom0.window.document, p0, '\u{1F44D}');
+    dom0.window.document.querySelector('[data-testid="dm-conversation-panel"]').appendChild(p0);
+    const { doc, reacts } = setup(dom0.serialize());
+    await sleep(200);
+    const p = doc.querySelector('[data-testid="message-' + uuid(3) + '"]');
+    p.appendChild(doc.createElement('i'));      // any later change on it
+    await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+  });
+  await test('reactions on anything but a prompt do nothing', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const a = msg(doc, 4, 'in', 'Sam: running late'); panel(doc).appendChild(a); await sleep(60);
+    react(doc, a, '\u{1F44D}'); await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+  });
+  await test('an emoji in the text, or a hover picker, is not a reaction', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const p = msg(doc, 5, 'in', PROMPT); panel(doc).appendChild(p); await sleep(60);
+    p.querySelector('[data-testid^="message-text-"]').textContent = PROMPT + ' \u{1F44D}';
+    await sleep(60);
+    react(doc, p, '\u2764\uFE0F\u{1F602}\u{1F62E}\u{1F622}\u{1F44D}\u{1F44E}');
+    await sleep(60);
+    const menu = doc.createElement('div'); menu.setAttribute('role', 'menu'); menu.textContent = '\u{1F44D}'; p.appendChild(menu);
+    await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+  });
+  await test('an expired prompt (over 2 min) does nothing', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const p = msg(doc, 6, 'in', PROMPT, { time: nowIso(150000) }); panel(doc).appendChild(p); await sleep(60);
+    react(doc, p, '\u{1F44D}'); await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+  });
+  await test('only the newest prompt counts', async () => {
+    const { doc, reacts } = setup();
+    await sleep(200);
+    const p1 = msg(doc, 7, 'in', PROMPT, { time: nowIso(30000) }); panel(doc).appendChild(p1); await sleep(40);
+    const p2 = msg(doc, 8, 'in', '\u2753 Send to Alex? Reply yes within 2 min.', { time: nowIso(1000) }); panel(doc).appendChild(p2); await sleep(60);
+    react(doc, p1, '\u{1F44D}'); await sleep(60);
+    assert.strictEqual(reacts.length, 0, 'older prompt ignored');
+    react(doc, p2, '\u{1F44D}'); await sleep(60);
+    assert.strictEqual(reacts.length, 1);
+  });
+  await test('no owner identity -> nothing', async () => {
+    const { doc, reacts } = setup(null, null, { ownerCheck: () => false });
+    await sleep(200);
+    const p = msg(doc, 9, 'in', PROMPT); panel(doc).appendChild(p); await sleep(60);
+    react(doc, p, '\u{1F44D}'); await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+  });
+  await test('paused or another conversation -> nothing', async () => {
+    const { doc, reacts, state } = setup(null, null, { state: { conversationFilter: '999-000' } });
+    await sleep(200);
+    const p = msg(doc, 10, 'in', PROMPT); panel(doc).appendChild(p); await sleep(60);
+    react(doc, p, '\u{1F44D}'); await sleep(60);
+    assert.strictEqual(reacts.length, 0);
+  });
+  console.log(passed + ' passed, ' + failed + ' failed (v1.4.2 prompt reactions)');
+  process.exit(failed ? 1 : 0);
+})();
+@@@@ END
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=f3827210cd54cc018df3407bbd0aa7f437c95b6e2c9e5a13cdbb65dea6c4fb18 nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -8947,7 +9653,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.1');
+  assert.strictEqual(m.version, '1.4.2');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
@@ -8978,7 +9684,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/js/yes.test.js mode=644 sha256=aa718e6976e915a3aa8788351102664270a570dc18e2c347973d519c3f724071 nl=1
+@@@@ FILE tests/js/yes.test.js mode=644 sha256=7003b18eb80c237c83aa0e72a9939d9d176afa4253d2c787ffe771e889fccd99 nl=1
 /* v1.4.1: a plain "yes"/"ok" confirms a pending reply prompt and "no"/"cancel" cancels it; neither is texted.
  * (Header kept from the v1.3.4 guess test harness.)
  * A guessed reply (host returns needsConfirm) is held in chrome.storage.session (never in local),
@@ -9062,7 +9768,31 @@ function relayLog(text) {
   const last = sends()[sends().length - 1];
   assert.strictEqual(last.text, 'yes');
   assert.ok(!last.confirmed);
-  console.log('5 passed, 0 failed (v1.4.1 plain yes/no)');
+  // 6) v1.4.2: a thumbs-up reaction on the prompt confirms a pending reply; a thumbs-down cancels
+  const reactMsg = (word, conv) => new Promise(res => { bgListeners.forEach(f => f({ type: 'relay-reaction', item: { word, conversationId: conv || '111-222', key: 'reaction:' + Math.random() } }, { id: 'ext', tab: { id: 1 } }, () => {})); setTimeout(res, 40); });
+  nextSendResponse = { ok: false, needsConfirm: true, guess: true, label: 'Sam', handle: '+15555550123' };
+  await relayLog('on my way');
+  nextSendResponse = { ok: true, dryRun: true };
+  const c6 = sends().filter(c => c.confirmed === true).length;
+  await reactMsg('yes');
+  assert.strictEqual(sends().filter(c => c.confirmed === true).length, c6 + 1, 'thumbs-up confirmed');
+  assert.strictEqual(sends().filter(c => c.confirmed === true).slice(-1)[0].text, 'on my way');
+  nextSendResponse = { ok: false, needsConfirm: true, guess: true, label: 'Sam', handle: '+15555550123' };
+  await relayLog('later');
+  const n7 = sends().length;
+  await reactMsg('no');
+  assert.strictEqual(sends().length, n7, 'thumbs-down sends nothing');
+  assert.ok(!session.pendingGuess, 'cleared');
+  // 7) nothing pending here: the host gets a body-free reaction (it may hold a /block or /add)
+  await reactMsg('yes');
+  const rc = hostCalls.filter(c => c.type === 'reaction');
+  assert.strictEqual(rc.length, 1);
+  assert.deepStrictEqual(Object.keys(rc[0]).sort(), ['conversationId', 'type', 'word']);
+  // 8) a reaction from another conversation does nothing
+  await reactMsg('yes', '999-000');
+  assert.strictEqual(hostCalls.filter(c => c.type === 'reaction').length, 1);
+  assert.strictEqual(sends().length, n7);
+  console.log('8 passed, 0 failed (v1.4.1 plain yes/no + v1.4.2 reactions)');
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
@@ -9433,7 +10163,7 @@ class RosterTolerance(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_host.py mode=644 sha256=39e8c720314259d1d04672c99784f46fd020c76828d2708dad78e3878e9d2b30 nl=1
+@@@@ FILE tests/py/test_host.py mode=644 sha256=b076b5c0eb8822813c1c817f5c8db43f518a1c6d188be2861cef2f8d492f8449 nl=1
 """Native host: framing, get_config, send gating (paused / relay chat / routing / normalization /
 rate limit), confirmations and "who is this for?" webhooks, dry run, -1712 retry, self-test, and
 an end-to-end run of the real script."""
@@ -9497,7 +10227,7 @@ class GetConfig(Base):
         r = self.h.handle_request({'type': 'get_config'}, cfg=self.cfg(ownerXHandle='OwnerAcct', senderXHandle='SenderBot',
                                                                         ownerXUserId='99887766', webhookToken='tok'), now=self.clock.now)
         self.assertEqual(r['ok'], True)
-        self.assertEqual(r['version'], '1.4.1')
+        self.assertEqual(r['version'], '1.4.2')
         self.assertEqual((r['paused'], r['dryRun']), (False, True))
         self.assertEqual(r['contacts'], [{'name': 'Test Contact', 'label': 'Test', 'handle': '+15555550123'}])
         self.assertEqual(r['relayConversationId'], CONV)
@@ -10266,7 +10996,7 @@ class InstallDetectsExistingAndBrief(unittest.TestCase):
         self.assertIn('/test', p2.stdout)
         self.assertNotIn('== Next steps ==', p2.stdout)
 @@@@ END
-@@@@ FILE tests/py/test_regressions.py mode=644 sha256=5f3a8e3641fa120279197271859049485b9bc1a33402c84394a366b70f02f4f3 nl=1
+@@@@ FILE tests/py/test_regressions.py mode=644 sha256=17e22c5d79b97367de8a3b69a1fbdc7410861ba61304d2995235eb351b1cdfaf nl=1
 """Regression tests for the v1.3.2 audit fixes. Each test pins behavior that the adversarial probes
 showed was wrong in v1.2.1 (echo-back, unresolvable-quote fallthrough, lost inbound on scan errors,
 silent queue drops, group/ordered delivery matching, timeout double-send) and the new block/mute flow."""
@@ -10326,7 +11056,8 @@ class Routing(unittest.TestCase):
                   {'handle': B, 'label': '', 'lastInboundAt': now - 60}]
         for q in ('Al\u2026 running late', 'someone sent: running late', 'no name here'):
             r = self.rc.route_reply('ok see you then', q, self.cfg, roster, now)
-            self.assertTrue(r.get('needsTarget'), q)
+            # v1.4.2: never silent: either it asks, or it falls back to the last texter flagged for a confirm
+            self.assertTrue(r.get('needsTarget') or r.get('quoteUnresolved'), q)
 
     def test_typo_timezone_disables_quiet_hours(self):
         c = self.rc.sanitize_config({'quietHours': {'start': '22:00', 'end': '07:00', 'tz': 'America/Chcago'}})
@@ -10776,7 +11507,7 @@ class Process(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_relayctl.py mode=644 sha256=9fdcde4b90347a7d881dbfd925a370a51b117646fa749223c511a1e1f98afe5c nl=1
+@@@@ FILE tests/py/test_relayctl.py mode=644 sha256=addae276745131c55ce321737a5b912c5cced55b393b341c9135019241fd40cd nl=1
 """relayctl: config editing, contacts, self-test (via the Chrome host and --direct), jobs, status."""
 import contextlib
 import io
@@ -11045,11 +11776,11 @@ class SelfTestAndJobs(Base):
             self.ctl.cmd_selftest(direct=True)
 
     def test_recent_senders_job_roundtrip(self):
-        self.db.add('+15555550177', text='hi')
+        self.db.add('+15555550188', text='hi')
         cfg = self.m.rc.load_config()
         out = self.ctl.cmd_recent_senders(sleeper=lambda s: self.watcher.process_jobs(cfg))
         self.assertTrue(out['ok'])
-        self.assertEqual([s['handle'] for s in out['senders']], ['+15555550177'])
+        self.assertEqual([s['handle'] for s in out['senders']], ['+15555550188'])
         self.assertEqual(os.listdir(self.ctl.JOBS_DIR), [], 'job and result files removed')
 
     def test_job_without_watcher_times_out(self):
@@ -11062,7 +11793,7 @@ class SelfTestAndJobs(Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_routing.py mode=644 sha256=8305f411b83ff56a0a633f4b85d82c44d8a0c0a09250724572cd6960c54f7b90 nl=1
+@@@@ FILE tests/py/test_routing.py mode=644 sha256=4b6ddfc98c48d0f98006d88a3b8ee6640e88ba45c701e6b6660cf2c5f2920245 nl=1
 """Reply routing in ONE relay chat: labels (shared first names), "<name>:" prefix parsing,
 quote > prefix > most recent contact, reply window, ambiguity, and handle normalization."""
 import unittest
@@ -11179,7 +11910,7 @@ class Route(Base):
         r = self.route('ok')
         self.assertTrue(r['needsTarget'])
         self.assertIn('120 minutes', r['reason'])
-        self.assertEqual(r['error'], 'Who\'s this for? Start with a name, like "Alex R.: \u2026" or "text Alex R. \u2026".')
+        self.assertEqual(r['error'], 'Who\'s this for? Start with a name, like "Alex: \u2026" or "text Alex \u2026".')
 
     def test_two_contacts_close_together_is_ambiguous(self):
         self.inbound('+15555550123', 40)
@@ -11220,9 +11951,10 @@ class Route(Base):
         r = self.route('yes', quoted='Alex: hello')        # ambiguous quote -> ask, not recent
         self.assertTrue(r['needsTarget'])
         self.assertIn('more than one', r['reason'])
-        r = self.route('yes', quoted='no name here')       # unresolvable quote -> ask, not recent
-        self.assertTrue(r['needsTarget'])
-        self.assertIn('quoted', r['reason'])
+        r = self.route('yes', quoted='no name here')       # v1.4.2: unresolvable quote -> recent, flagged (host always asks)
+        self.assertTrue(r.get('quoteUnresolved') or r.get('needsTarget'), r)
+        if 'contact' in r:
+            self.assertEqual(r['by'], 'recent')
 
     def test_record_inbound_keeps_handles_labels_and_times_only(self):
         for i in range(3):
@@ -11299,22 +12031,21 @@ class Roster(Base):
             self.assertTrue(r['needsTarget'])
             self.assertEqual(r['reason'], "group replies aren't supported yet")
             self.assertIn("Group replies aren't supported yet", r['error'])
-        # a bare reply never routes to a group (recent is contacts-only), so it just asks for a name
+        # a bare reply never routes to a group (v1.4.2: recent is contacts + roster people, never groups)
         r = self.route('ok')
-        self.assertTrue(r['needsTarget'])
-        self.assertIn('no one has written', r['reason'])
+        self.assertFalse(str(r.get('contact', {}).get('handle', '')).startswith('group:'), r)
 
     def test_quote_of_a_roster_person(self):
         r = self.route('sounds good', quoted='Pat: lunch?')
         self.assertEqual((r['contact']['handle'], r['by']), ('+15555550150', 'quote'))
 
     def test_recent_roster_person_is_not_a_recent_target(self):
-        # item 2c: under relay-all the recent-sender fallback is still contacts-only. A roster-only
-        # person (here Pat) must be named or quoted; a bare reply never routes to them by recency.
+        # v1.4.2 (was item 2c): under relay-all a roster person who just texted IS the last texter; the
+        # route says by='recent' and the host always asks before sending to a roster-only person.
         self.roster[-1]['lastInboundAt'] = T0 - 99999            # group not recent
         r = self.route('on my way')
-        self.assertTrue(r['needsTarget'])
-        self.assertEqual(r['contact']['handle'] if 'contact' in r else None, None)
+        if 'contact' in r:
+            self.assertEqual((r['contact']['kind'], r['by']), ('roster', 'recent'))
         r = self.route('Pat: on my way')                         # naming them still works
         self.assertEqual((r['contact']['handle'], r['by']), ('+15555550150', 'prefix'))
 
@@ -13355,7 +14086,7 @@ class HostSendPath(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v140.py mode=644 sha256=a68830dbaa62a5860360162bea8108926079316698d4f914272b4e579e9fa560 nl=1
+@@@@ FILE tests/py/test_v140.py mode=644 sha256=3cb8155e880e97a8abd6fc84402e68ed59f3a0daa74b833b89c22b1854dc3d28 nl=1
 """v1.4.0: multi-word names, a reply to someone new (Contacts lookup + /yes), and host notifications
 that no longer vanish when the webhook is slow (the needs_target notify ok:false bug)."""
 import json
@@ -13367,7 +14098,7 @@ from helpers import fresh, tmpdir, read_log, FakeClock, FakeRunner
 
 CONV = '1111-2222'
 PEOPLE = [  # (first, last, [(label, number)])
-    ('Austin', 'Robinson', [('_$!<Home>!$_', '(555) 555-0101'), ('_$!<Mobile>!$_', '(555) 555-0177')]),
+    ('Jordan', 'Rivera', [('_$!<Home>!$_', '(555) 555-0101'), ('_$!<Mobile>!$_', '(555) 555-0188')]),
     ('Sam', 'Lee', [('', '555-555-0141')]),
     ('Sam', 'Ortiz', [('iPhone', '555-555-0142')]),
     ('Mary Ann', 'Jones', [('', '555-555-0150')]),
@@ -13440,7 +14171,7 @@ class MultiWordNames(Base):
 
     def test_name_like_detection(self):
         u = self.m.rc.unknown_name_prefix
-        self.assertEqual(u('Austin Robinson: hey')[0], 'Austin Robinson')
+        self.assertEqual(u('Jordan Rivera: hey')[0], 'Jordan Rivera')
         self.assertEqual(u("Mary Ann O'Neil: hi")[0], "Mary Ann O'Neil")
         for t in ('Note: buy milk', 'ok: sure', 'Update: running late', 'FYI: x', 'meet at 5:30', 'a b c d: x',
                   'Breakfast plan for today: eggs'):
@@ -13448,54 +14179,54 @@ class MultiWordNames(Base):
 
     def test_unknown_name_never_falls_to_recent(self):
         self.watcher_up = False
-        r = self.send('Austin: hey there')
+        r = self.send('Jordan: hey there')
         self.assertTrue(r.get('needsTarget'), r)
         self.assertEqual(self.osa(), [])
 
 
 class NewContact(Base):
     def test_unique_full_name_with_two_numbers_asks_then_yes_sends(self):
-        r = self.send('Austin Robinson: hey there')
+        r = self.send('Jordan Rivera: hey there')
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual(r['reason'], 'new_contact')
-        self.assertEqual(r['handle'], '+15555550177')          # the mobile number, not home
+        self.assertEqual(r['handle'], '+15555550188')          # the mobile number, not home
         self.assertEqual(self.osa(), [])
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]
-        self.assertIn('Austin Robinson has 2 numbers', ev['detail'])   # v1.4.1: choices listed (masked)
-        self.assertIn('\u2022\u2022\u20220177 mobile', ev['detail'])
+        self.assertIn('Jordan Rivera has 2 numbers', ev['detail'])   # v1.4.1: choices listed (masked)
+        self.assertIn('\u2022\u2022\u20220188 mobile', ev['detail'])
         self.assertIn('\u2022\u2022\u20220101 home', ev['detail'])
         self.assertIn('Reply yes', ev['detail'])
-        self.assertNotIn('5550177', ev['detail'])              # masked
+        self.assertNotIn('5550188', ev['detail'])              # masked
         self.assertNotIn('hey there', json.dumps(ev))
         self.clock.t += 30
-        r = self.send('Austin Robinson: hey there', confirmed=True, handle='+15555550177')
+        r = self.send('Jordan Rivera: hey there', confirmed=True, handle='+15555550188')
         self.assertTrue(r['ok'], r)
         self.assertEqual(self.osa()[0][2], 'hey there')
-        self.assertEqual(self.osa()[0][3], '+15555550177')
+        self.assertEqual(self.osa()[0][3], '+15555550188')
         names = [c['name'] for c in self.cfg()['contacts']]
-        self.assertIn('Austin Robinson', names)
+        self.assertIn('Jordan Rivera', names)
         log = read_log()
         self.assertNotIn('hey there', log)
-        self.assertNotIn('Robinson', log)
-        self.assertNotIn('5550177', log)
+        self.assertNotIn('Rivera', log)
+        self.assertNotIn('5550188', log)
         # no Contacts answer left behind on disk
         self.assertFalse([n for n in os.listdir(self.m.watch.JOBS_DIR) if n.startswith('contacts')])
 
     def test_unique_first_name(self):
-        r = self.send('Austin: hey')
+        r = self.send('Jordan: hey')
         self.assertTrue(r.get('needsConfirm'), r)
-        self.assertEqual(r['label'], 'Austin Robinson')
+        self.assertEqual(r['label'], 'Jordan Rivera')
 
     def test_yes_after_window_refused(self):
-        self.send('Austin: hey')
+        self.send('Jordan: hey')
         self.clock.t += 200
-        r = self.send('Austin: hey', confirmed=True, handle='+15555550177')
+        r = self.send('Jordan: hey', confirmed=True, handle='+15555550188')
         self.assertFalse(r['ok'])
         self.assertEqual(self.osa(), [])
 
     def test_yes_with_other_handle_refused(self):
-        self.send('Austin: hey')
-        r = self.send('Austin: hey', confirmed=True, handle='+15555550141')
+        self.send('Jordan: hey')
+        r = self.send('Jordan: hey', confirmed=True, handle='+15555550141')
         self.assertFalse(r['ok'])
         self.assertEqual(self.osa(), [])
 
@@ -13508,16 +14239,16 @@ class NewContact(Base):
         self.assertNotIn('555', ev['detail'])
         self.assertEqual(self.osa(), [])
 
-    def test_no_match(self):
+    def test_no_match_is_ordinary_text(self):
+        # v1.4.2: a prefix nobody knows (relay list or Contacts) is not a name: the text goes as is
         r = self.send('Zed Quark: hi')
-        self.assertTrue(r.get('needsTarget'), r)
-        ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
-        self.assertIn('didn\u2019t find', ev['detail'])
-        self.assertIn('/add Zed <number>', ev['detail'])
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][2], 'Zed Quark: hi')
+        self.assertFalse([p for p, _ in self.posts if p['type'] in ('needs_target', 'needs_confirm')])
 
     def test_watcher_down(self):
         self.watcher_up = False
-        r = self.send('Austin Robinson: hi')
+        r = self.send('Jordan Rivera: hi')
         self.assertTrue(r.get('needsTarget'), r)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
         self.assertIn('couldn\u2019t check', ev['detail'])
@@ -13525,23 +14256,24 @@ class NewContact(Base):
     def test_owner_never_offered(self):
         make_ab(self.tmp, [('Owen', 'Owner', [('mobile', '555-555-0199')])])
         r = self.send('Owen Owner: hi')
-        self.assertTrue(r.get('needsTarget'), r)
+        self.assertNotIn('+15555550199', [c[3] for c in self.osa()])   # never to the owner's own number
+        self.assertFalse(r.get('needsConfirm'))
 
     def test_dry_run_adds_nothing(self):
         self.raw['dryRun'] = True
         self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
-        self.send('Austin: hey')
-        r = self.send('Austin: hey', confirmed=True, handle='+15555550177')
+        self.send('Jordan: hey')
+        r = self.send('Jordan: hey', confirmed=True, handle='+15555550188')
         self.assertTrue(r['ok'] and r['dryRun'], r)
         self.assertEqual([c['name'] for c in self.cfg()['contacts']], ['Test Contact'])
 
     def test_add_with_number(self):
-        r = self.send('/add Austin +1 (555) 555-0177')
+        r = self.send('/add Jordan +1 (555) 555-0188')
         self.assertTrue(r['ok'], r)
-        c = [c for c in self.cfg()['contacts'] if c['name'] == 'Austin']
-        self.assertEqual(c[0]['handle'], '+15555550177')
+        c = [c for c in self.cfg()['contacts'] if c['name'] == 'Jordan']
+        self.assertEqual(c[0]['handle'], '+15555550188')
         self.assertEqual(self.osa(), [])
-        r = self.send('Austin: hi')
+        r = self.send('Jordan: hi')
         self.assertTrue(r['ok'], r)
         self.assertEqual(self.osa()[0][2], 'hi')
 
@@ -13588,15 +14320,15 @@ class RoutineNewContact(unittest.TestCase):
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'routine'))
         import relay_post
-        out = relay_post.format_event({'type': 'needs_confirm', 'reason': 'new_contact', 'label': 'Austin Robinson',
-                                       'detail': '\u2753 Austin isn\u2019t on your relay list yet.', 'id': 'e1'})
-        self.assertIn('Austin isn', out['lines'][0]['text'])
+        out = relay_post.format_event({'type': 'needs_confirm', 'reason': 'new_contact', 'label': 'Jordan Rivera',
+                                       'detail': '\u2753 Jordan isn\u2019t on your relay list yet.', 'id': 'e1'})
+        self.assertIn('Jordan isn', out['lines'][0]['text'])
 
 
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=8bc2a0e951996c6857e7ee426c79f52fbed08596ac7a4fe7756142e0271a291b nl=1
+@@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=c445fb291fdea4cdc89b2bd5f7ab91094df5a633c64ffa6e67098166e2e4446c nl=1
 """v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),
 and an exact full-name match to one Contacts card with one number sends without asking."""
 import json
@@ -13605,8 +14337,8 @@ import os
 from helpers import read_log
 from test_v140 import Base, make_ab
 
-SOLO = [('Austin', 'Robinson', [('_$!<Mobile>!$_', '(555) 555-0177')]),
-        ('Austin', 'Avery', [('', '555-555-0178')]),
+SOLO = [('Jordan', 'Rivera', [('_$!<Mobile>!$_', '(555) 555-0188')]),
+        ('Jordan', 'Avery', [('', '555-555-0178')]),
         ('Jo', 'Park', [('', '555-555-0161')])]
 
 
@@ -13656,7 +14388,7 @@ class BareWords(Base):
         self.assertEqual(self.osa()[0][2], 'ok')
 
     def test_new_contact_prompt_gives_one_notice(self):
-        self.send('Austin: hey')
+        self.send('Jordan: hey')
         types = [p['type'] for p, _ in self.posts]
         self.assertEqual(types.count('needs_confirm'), 1)
         self.assertNotIn('needs_target', types, 'no "Who\u2019s this for?" for the same message')
@@ -13673,15 +14405,15 @@ class ExactSkip(Base):
         make_ab(self.tmp, SOLO)
 
     def test_exact_full_name_one_number_sends_now(self):
-        r = self.send('Austin ROBINSON: on my way')
+        r = self.send('Jordan RIVERA: on my way')
         self.assertTrue(r['ok'], r)
         self.assertEqual(self.osa()[0][2], 'on my way')
-        self.assertEqual(self.osa()[0][3], '+15555550177')
-        self.assertIn('Austin Robinson', [c['name'] for c in self.cfg()['contacts']])
+        self.assertEqual(self.osa()[0][3], '+15555550188')
+        self.assertIn('Jordan Rivera', [c['name'] for c in self.cfg()['contacts']])
         self.assertFalse([p for p, _ in self.posts if p['type'] in ('needs_confirm', 'needs_target')])
-        self.assertEqual(r.get('note'), 'new contact, \u2022\u2022\u20220177')
+        self.assertEqual(r.get('note'), 'new contact, \u2022\u2022\u20220188')
         log = read_log()
-        for s in ('on my way', 'Robinson', '5550177'):
+        for s in ('on my way', 'Rivera', '5550188'):
             self.assertNotIn(s, log)
 
     def test_first_name_only_still_confirms(self):
@@ -13690,14 +14422,14 @@ class ExactSkip(Base):
         self.assertEqual(self.osa(), [])
 
     def test_two_cards_same_first_name_confirms(self):
-        r = self.send('Austin: hi')
+        r = self.send('Jordan: hi')
         self.assertFalse(r.get('ok'))
         self.assertEqual(self.osa(), [])
 
     def test_always_setting_confirms(self):
         raw = dict(self.raw, confirmNewContacts='always')
         self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, raw)
-        r = self.send('Austin Robinson: on my way')
+        r = self.send('Jordan Rivera: on my way')
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual(self.osa(), [])
 
@@ -13714,13 +14446,311 @@ class Routine(Base):
         spec = importlib.util.spec_from_file_location('rp141', os.path.join(here, '..', '..', 'routine', 'relay_post.py'))
         rp = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(rp)
-        out = json.dumps(rp.format_event({'type': 'sent', 'label': 'Austin Robinson', 'note': 'new contact, \u2022\u2022\u20220177',
+        out = json.dumps(rp.format_event({'type': 'sent', 'label': 'Jordan Rivera', 'note': 'new contact, \u2022\u2022\u20220188',
                                           'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
-        self.assertIn('Austin Robinson \u2713 (new contact, \u2022\u2022\u20220177)', out)
+        self.assertIn('Jordan Rivera \u2713 (new contact, \u2022\u2022\u20220188)', out)
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_watch.py mode=644 sha256=de87a498931bfa7b6a17dfe6d6900bea43df7afaf18677a19a34d8c42675a47f nl=1
+@@@@ FILE tests/py/test_v142_names.py mode=644 sha256=0f51c4d623671344ddc53984632ffd49d9aa4e699279755e0a1a5894760d5a00 nl=1
+"""v1.4.2: smart name recognition (any case; a name only when the relay list or Contacts know it, close
+typos always ask) and thumbs-up / thumbs-down reactions on a pending prompt."""
+import os
+import sqlite3
+
+from helpers import read_log
+from test_v140 import Base, make_ab
+
+PEOPLE = [('Jordan', 'Rivera', [('_$!<Mobile>!$_', '(555) 555-0188')]),
+          ('Jo', 'Park', [('', '555-555-0161')]),
+          ('Robert', 'Quill', [('', '555-555-0162')])]
+
+
+def add_nick(tmp, first, nick):
+    path = os.path.join(tmp, 'ab', 'x.abcddb')
+    con = sqlite3.connect(path)
+    con.execute('ALTER TABLE ZABCDRECORD ADD COLUMN ZNICKNAME TEXT')
+    con.execute('UPDATE ZABCDRECORD SET ZNICKNAME=? WHERE ZFIRSTNAME=?', (nick, first))
+    con.commit()
+    con.close()
+
+
+class Names(Base):
+    def setUp(self):
+        super().setUp()
+        make_ab(self.tmp, PEOPLE)
+
+    def sent(self):
+        return [(c[2], c[3]) for c in self.osa()]
+
+    def confirms(self):
+        return [p for p, _ in self.posts if p['type'] == 'needs_confirm']
+
+    def test_lowercase_exact_full_name_sends(self):
+        r = self.send('jordan rivera: on my way')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.sent(), [('on my way', '+15555550188')])
+        self.assertEqual(r.get('note'), 'new contact, \u2022\u2022\u20220188')
+        self.assertIn('Jordan Rivera', [c['name'] for c in self.cfg()['contacts']])
+        for s in ('on my way', 'Rivera', 'jordan', '5550188'):
+            self.assertNotIn(s, read_log())
+
+    def test_verb_and_comma_forms(self):
+        r = self.send('text jordan rivera hey there')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.sent(), [('hey there', '+15555550188')])
+
+    def test_comma_form(self):
+        r = self.send('jordan rivera, running late')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.sent(), [('running late', '+15555550188')])
+
+    def test_lowercase_first_name_asks(self):
+        r = self.send('jo: lunch?')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(self.osa(), [])
+        self.clock.t += 20
+        r = self.send('jo: lunch?', confirmed=True, handle='+15555550161')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.sent(), [('lunch?', '+15555550161')])
+
+    def test_tell_first_name_picks_the_known_word(self):
+        r = self.send('tell jo I am late')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.clock.t += 5
+        r = self.send('tell jo I am late', confirmed=True, handle='+15555550161')
+        self.assertEqual(self.sent(), [('I am late', '+15555550161')])
+
+    def test_non_names_stay_ordinary(self):
+        for t in ('Breakfast plan: eggs', 'breakfast menu ideas: eggs', 'sounds good, see you', 'text me later',
+                  'Zed Quark: hi', 'note to self: milk'):
+            self.posts.clear()
+            r = self.send(t)
+            self.assertTrue(r['ok'], (t, r))
+            self.assertEqual(self.sent(), [(t, '+15555550123')], t)
+            self.assertFalse([p for p, _ in self.posts if p['type'] in ('needs_target', 'needs_confirm')], t)
+
+    def test_typo_in_contacts_asks_never_sends(self):
+        r = self.send('jordn rivera: hi')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(self.osa(), [])
+        self.assertIn('Did you mean Jordan Rivera?', self.confirms()[-1]['detail'])
+        self.clock.t += 10
+        r = self.send('jordn rivera: hi', confirmed=True, handle='+15555550188')
+        self.assertEqual(self.sent(), [('hi', '+15555550188')])
+
+    def test_typo_never_skips_even_when_exact_skip(self):
+        self.assertEqual(self.cfg()['confirmNewContacts'], 'exact-skip')
+        r = self.send('Robrt Quill: hi')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(self.osa(), [])
+
+    def test_typo_of_relay_contact_asks(self):
+        self.raw['contacts'].append({'name': 'Samantha Vale', 'label': 'Samantha', 'handle': '+15555550144'})
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
+        r = self.send('samanta: hi there')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertIn('Did you mean Samantha?', self.confirms()[-1]['detail'])
+        self.assertEqual(self.osa(), [])
+        self.clock.t += 10
+        r = self.send('samanta: hi there', confirmed=True, handle='+15555550144')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.sent(), [('hi there', '+15555550144')])
+        self.assertEqual(len([c for c in self.cfg()['contacts'] if c['handle'] == '+15555550144']), 1)
+
+    def test_lowercase_relay_label_routes_directly(self):
+        r = self.send('test contact: hi')
+        self.assertEqual(self.sent(), [('hi', '+15555550123')])
+
+    def test_nickname_asks(self):
+        add_nick(self.tmp, 'Robert', 'Bobby')
+        r = self.send('bobby: hi')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(r['handle'], '+15555550162')
+        self.assertEqual(self.osa(), [])
+
+    def test_contacts_match_already_a_contact_under_another_label(self):
+        make_ab(self.tmp, PEOPLE + [('Pat', 'Testcard', [('', '555-555-0123')])])
+        r = self.send('pat testcard: hi')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.sent(), [('hi', '+15555550123')])
+        self.assertFalse(r.get('note'))
+        self.assertEqual(len(self.cfg()['contacts']), 1)
+
+    def test_watcher_down_lowercase_is_ordinary_and_quick(self):
+        self.watcher_up = False
+        t0 = self.clock.t
+        r = self.send('breakfast menu ideas: eggs')
+        self.assertTrue(r['ok'], r)
+        self.assertLessEqual(self.clock.t - t0, 4)
+        self.assertEqual(self.sent(), [('breakfast menu ideas: eggs', '+15555550123')])
+
+
+class Reactions(Base):
+    def react(self, word, conv=None):
+        return self.m.host.handle_request({'type': 'reaction', 'word': word, 'conversationId': conv or '1111-2222'},
+                                          cfg=self.cfg(), now=self.clock.now, poster=self.poster)
+
+    def test_thumbs_up_confirms_block(self):
+        self.send('/block Test Contact')
+        self.clock.t += 10
+        self.react('yes')
+        self.assertTrue(self.cfg().get('mute'))
+
+    def test_thumbs_down_cancels_block(self):
+        self.send('/block Test Contact')
+        self.clock.t += 10
+        self.react('no')
+        self.clock.t += 5
+        self.send('/block yes')
+        self.assertFalse(self.cfg().get('mute'))
+
+    def test_nothing_pending_is_ignored_silently(self):
+        n = len(self.posts)
+        r = self.react('yes')
+        self.assertTrue(r.get('ignored'), r)
+        self.assertEqual(len(self.posts), n)
+
+    def test_expired_prompt_ignored(self):
+        self.send('/block Test Contact')
+        self.clock.t += 200
+        r = self.react('yes')
+        self.assertTrue(r.get('ignored'), r)
+        self.assertFalse(self.cfg().get('mute'))
+
+    def test_other_conversation_refused(self):
+        self.send('/block Test Contact')
+        r = self.react('yes', conv='9999-0000')
+        self.assertFalse(r['ok'])
+        self.assertFalse(self.cfg().get('mute'))
+@@@@ END
+@@@@ FILE tests/py/test_v142_quote.py mode=644 sha256=d189228efa44a6eec437442a0e62e291f12b43f07f02b83152be2582ececa5eb nl=1
+"""v1.4.2: X's native Reply ("Replied to <name>" + preview) routes to the quoted person; a roster-only
+last texter (relay-all) gets a confirm instead of "Who's this for?"; an unresolved quote falls back to the
+last texter (always confirmed); the "Who's this for?" example is generic."""
+from helpers import read_log
+from test_v140 import Base
+
+RORY = '+15555550133'
+
+
+class Quote(Base):
+    def setUp(self):
+        super().setUp()
+        self.raw['relayAll'] = True
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
+        self.clock.t += 600                  # the configured contact wrote 11 min ago, Rory 30 s ago
+        self.m.rc.record_inbound(RORY, self.clock.t - 30, label='Rory')
+
+    def send_q(self, text, quoted, **kw):
+        msg = {'type': 'send', 'text': text, 'conversationId': '1111-2222', 'quotedText': quoted}
+        msg.update(kw)
+        from helpers import FakeRunner
+        self.runner = FakeRunner([(0, '')] * 5)
+        return self.m.host.handle_request(msg, cfg=self.cfg(), runner=self.runner, sleeper=self.sleeper,
+                                          now=self.clock.now, poster=self.poster)
+
+    def test_native_reply_preview_routes_to_tim(self):
+        r = self.send_q('Ha, true', 'Rory: Not since the jump')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][2:4], ['Ha, true', RORY])
+        self.assertNotIn('Ha, true', read_log())
+
+    def test_preview_with_reply_label_and_bot_name(self):
+        r = self.send_q('Ha, true', 'iMessage Rory: Not since the jump')
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][3], RORY)
+
+    def test_unresolved_quote_falls_back_to_last_texter_with_confirm(self):
+        r = self.send_q('Ha, true', 'something we cannot place')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(r['handle'], RORY)
+        self.assertEqual(self.osa(), [])
+        ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]
+        self.assertEqual(ev['detail'], '\u2753 Reply to Rory? Reply yes within 2 min.')
+        self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_target'])
+
+    def test_bare_reply_to_roster_last_texter_asks_not_whos_this_for(self):
+        r = self.send('Ha, true')
+        self.assertTrue(r.get('needsConfirm'), r)
+        self.assertEqual(r['handle'], RORY)
+        self.assertEqual(self.osa(), [])
+        self.clock.t += 10
+        r = self.send('Ha, true', confirmed=True, handle=RORY)
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][3], RORY)
+
+    def test_roster_fallback_needs_relay_all(self):
+        self.raw['relayAll'] = False
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
+        r = self.send('Ha, true')
+        self.assertNotEqual(r.get('handle'), RORY)
+
+
+class GenericExample(Base):
+    def test_whos_this_for_uses_a_generic_name(self):
+        self.clock.t += 3 * 3600           # nobody recent
+        r = self.send('hello there')
+        self.assertTrue(r.get('needsTarget'), r)
+        ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
+        self.assertIn('"Alex: \u2026"', ev['detail'])
+        self.assertNotIn('Test Contact', ev['detail'])
+        self.assertNotIn('Test', ev['detail'])
+
+
+class FastDeliveryCheck(Base):
+    """v1.4.2 latency: with a send awaiting proof, the watcher re-checks chat.db every ~2 s between polls."""
+    def test_pending_checked_every_two_seconds(self):
+        import os
+
+        class Stop(Exception):
+            pass
+        w = self.watcher
+        calls, sleeps = [], []
+        w.tick = lambda: None
+        w.process_pending = lambda cfg: calls.append(len(sleeps))
+
+        def sl(s):
+            sleeps.append(s)
+            if len(sleeps) >= 10:
+                raise Stop()
+        w.sleeper = sl
+        os.makedirs(self.m.rc.PENDING_DIR, exist_ok=True)
+        open(os.path.join(self.m.rc.PENDING_DIR, '1.json'), 'w').write('{}')
+        import signal as _s
+        old = _s.getsignal(_s.SIGTERM)
+        try:
+            w.run_forever()
+        except Stop:
+            pass
+        finally:
+            _s.signal(_s.SIGTERM, old)
+        self.assertGreaterEqual(len(calls), 4, calls)      # 10 s of sleeping -> ~5 checks, not 0-1
+
+    def test_no_pending_no_extra_checks(self):
+        class Stop(Exception):
+            pass
+        w = self.watcher
+        calls, sleeps = [], []
+        w.tick = lambda: None
+        w.process_pending = lambda cfg: calls.append(1)
+
+        def sl(s):
+            sleeps.append(s)
+            if len(sleeps) >= 10:
+                raise Stop()
+        w.sleeper = sl
+        import signal as _s
+        old = _s.getsignal(_s.SIGTERM)
+        try:
+            w.run_forever()
+        except Stop:
+            pass
+        finally:
+            _s.signal(_s.SIGTERM, old)
+        self.assertEqual(calls, [])
+@@@@ END
+@@@@ FILE tests/py/test_watch.py mode=644 sha256=69d496cdbfc99ee6f2e1c861e1a566e39e6c061c0800ee8563d0c2f21e325715 nl=1
 """Inbound watcher against a temp sqlite db shaped like chat.db."""
 import json
 import os
@@ -13732,7 +14762,7 @@ from datetime import datetime, timezone
 from helpers import fresh, tmpdir, read_log, FakeRunner, ChatDb, attributed_body
 
 ALLOWED = '+15555550123'
-OTHER = '+15555550177'
+OTHER = '+15555550188'
 OWNER = '+15555550199'
 
 
@@ -13864,7 +14894,7 @@ class RelayAll(Base):
           INSERT INTO ZABCDRECORD VALUES (1, 'Sam', 'Example', NULL);
           INSERT INTO ZABCDRECORD VALUES (2, 'Sam', 'Other', NULL);
           INSERT INTO ZABCDRECORD VALUES (3, 'Test', 'Person', NULL);
-          INSERT INTO ZABCDPHONENUMBER VALUES (1, '(555) 555-0177');
+          INSERT INTO ZABCDPHONENUMBER VALUES (1, '(555) 555-0188');
           INSERT INTO ZABCDPHONENUMBER VALUES (2, '555-555-0178');
           INSERT INTO ZABCDPHONENUMBER VALUES (3, '555-555-0179');""")
         con.commit()
@@ -13936,7 +14966,7 @@ class RelayAll(Base):
         self.assertEqual(self.roster(), {}, 'nothing rostered when nothing is relayed')
 
     def test_owner_from_me_mute_and_short_codes(self):
-        self.cfg['mute'] = ['555-555-0177', 'noisy@example.com']
+        self.cfg['mute'] = ['555-555-0188', 'noisy@example.com']
         self.db.add(OWNER, text='note to self')
         self.db.add(OTHER, text='muted text')
         self.db.add('noisy@example.com', text='muted email')
@@ -14166,7 +15196,7 @@ class Jobs(Base):
           CREATE TABLE ZABCDPHONENUMBER (ZOWNER INTEGER, ZFULLNUMBER TEXT);
           CREATE TABLE ZABCDEMAILADDRESS (ZOWNER INTEGER, ZADDRESS TEXT);
           INSERT INTO ZABCDRECORD VALUES (1, 'Sam', 'Example', NULL);
-          INSERT INTO ZABCDPHONENUMBER VALUES (1, '(555) 555-0177');""")
+          INSERT INTO ZABCDPHONENUMBER VALUES (1, '(555) 555-0188');""")
         con.commit(); con.close()
         res = self.job(type='recent_senders', days=30, limit=10)
         self.assertTrue(res['ok'])

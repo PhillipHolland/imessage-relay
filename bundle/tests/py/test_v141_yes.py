@@ -6,8 +6,8 @@ import os
 from helpers import read_log
 from test_v140 import Base, make_ab
 
-SOLO = [('Austin', 'Robinson', [('_$!<Mobile>!$_', '(555) 555-0177')]),
-        ('Austin', 'Avery', [('', '555-555-0178')]),
+SOLO = [('Jordan', 'Rivera', [('_$!<Mobile>!$_', '(555) 555-0188')]),
+        ('Jordan', 'Avery', [('', '555-555-0178')]),
         ('Jo', 'Park', [('', '555-555-0161')])]
 
 
@@ -57,7 +57,7 @@ class BareWords(Base):
         self.assertEqual(self.osa()[0][2], 'ok')
 
     def test_new_contact_prompt_gives_one_notice(self):
-        self.send('Austin: hey')
+        self.send('Jordan: hey')
         types = [p['type'] for p, _ in self.posts]
         self.assertEqual(types.count('needs_confirm'), 1)
         self.assertNotIn('needs_target', types, 'no "Who\u2019s this for?" for the same message')
@@ -74,15 +74,15 @@ class ExactSkip(Base):
         make_ab(self.tmp, SOLO)
 
     def test_exact_full_name_one_number_sends_now(self):
-        r = self.send('Austin ROBINSON: on my way')
+        r = self.send('Jordan RIVERA: on my way')
         self.assertTrue(r['ok'], r)
         self.assertEqual(self.osa()[0][2], 'on my way')
-        self.assertEqual(self.osa()[0][3], '+15555550177')
-        self.assertIn('Austin Robinson', [c['name'] for c in self.cfg()['contacts']])
+        self.assertEqual(self.osa()[0][3], '+15555550188')
+        self.assertIn('Jordan Rivera', [c['name'] for c in self.cfg()['contacts']])
         self.assertFalse([p for p, _ in self.posts if p['type'] in ('needs_confirm', 'needs_target')])
-        self.assertEqual(r.get('note'), 'new contact, \u2022\u2022\u20220177')
+        self.assertEqual(r.get('note'), 'new contact, \u2022\u2022\u20220188')
         log = read_log()
-        for s in ('on my way', 'Robinson', '5550177'):
+        for s in ('on my way', 'Rivera', '5550188'):
             self.assertNotIn(s, log)
 
     def test_first_name_only_still_confirms(self):
@@ -91,14 +91,14 @@ class ExactSkip(Base):
         self.assertEqual(self.osa(), [])
 
     def test_two_cards_same_first_name_confirms(self):
-        r = self.send('Austin: hi')
+        r = self.send('Jordan: hi')
         self.assertFalse(r.get('ok'))
         self.assertEqual(self.osa(), [])
 
     def test_always_setting_confirms(self):
         raw = dict(self.raw, confirmNewContacts='always')
         self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, raw)
-        r = self.send('Austin Robinson: on my way')
+        r = self.send('Jordan Rivera: on my way')
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual(self.osa(), [])
 
@@ -115,8 +115,8 @@ class Routine(Base):
         spec = importlib.util.spec_from_file_location('rp141', os.path.join(here, '..', '..', 'routine', 'relay_post.py'))
         rp = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(rp)
-        out = json.dumps(rp.format_event({'type': 'sent', 'label': 'Austin Robinson', 'note': 'new contact, \u2022\u2022\u20220177',
+        out = json.dumps(rp.format_event({'type': 'sent', 'label': 'Jordan Rivera', 'note': 'new contact, \u2022\u2022\u20220188',
                                           'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
-        self.assertIn('Austin Robinson \u2713 (new contact, \u2022\u2022\u20220177)', out)
+        self.assertIn('Jordan Rivera \u2713 (new contact, \u2022\u2022\u20220188)', out)
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)

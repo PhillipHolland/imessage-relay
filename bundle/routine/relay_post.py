@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.1 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.2 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -134,7 +134,7 @@ def format_event(payload):
         # item 6: ONE confirmation, posted by the watcher: \u2713\u2713 when chat.db shows delivered, else \u2713
         # after the ~20s fallback. (Dry runs and delivery-check-off still come from the host.)
         label = _label(payload)
-        note = str(payload.get('note') or '').strip()[:60]     # v1.4.1: "new contact, \u2022\u2022\u20220177"
+        note = str(payload.get('note') or '').strip()[:60]     # v1.4.1: "new contact, \u2022\u2022\u20220188"
         if payload.get('dryRun'):
             line = '\u2192 ' + label + ' (dry run, not sent)'
         elif note:

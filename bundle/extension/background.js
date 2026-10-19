@@ -1,5 +1,5 @@
 /*
- * iMessage Relay v1.4.1: service worker (/test end-to-end check added in v1.3.8).
+ * iMessage Relay v1.4.2: service worker (/test end-to-end check added in v1.3.8).
  *
  * Reply path: X Chat (owner's own reply, seen by content.js) -> this worker -> local Mac helper
  * (native messaging host com.imessage_relay.host) -> Messages.app -> iMessage.
@@ -368,6 +368,8 @@ async function handleItem(item) {
   }
   const bw = bareConfirmWord(item.text);
   if (bw) {                                   // v1.4.1: plain "yes" / "no" answers a pending reply prompt
+    const c0 = await getConfig(false);
+    if (c0.ok && c0.relayConversationId && item.conversationId !== c0.relayConversationId) return;
     const g = await getPendingGuess();
     if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
       if (await isDuplicate(item.key)) return;
@@ -420,6 +422,26 @@ async function handleItem(item) {
   await updateEvent(item.key, patch);
 }
 
+// v1.4.2: the owner put a thumbs-up / thumbs-down on the newest pending prompt (content.js checks the
+// prompt, the 2-minute window and the owner identity). A pending reply prompt is answered here (the text
+// is held here); a /block or /add prompt is answered by the host. A reaction is never sent as a message.
+async function handleReaction(r) {
+  const word = r && (r.word === 'yes' || r.word === 'no') ? r.word : '';
+  if (!word) return;
+  const cfg = await getConfig(false);
+  if (!cfg.ok || !cfg.relayConversationId || String(r.conversationId || '') !== cfg.relayConversationId || cfg.paused) return;
+  const key = String(r.key || '').slice(0, 300);
+  if (await isDuplicate(key)) return;
+  const item = { key, conversationId: cfg.relayConversationId, ts: String(r.ts || new Date().toISOString()), text: '' };
+  const g = await getPendingGuess();
+  if (g && Date.now() - (g.at || 0) <= GUESS_WINDOW_MS) {
+    if (word === 'yes') await handleYes(item, '');
+    else await handleCancel(item, g);
+    return;
+  }
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'reaction', word, conversationId: cfg.relayConversationId }); } catch (e) { /* host down */ }
+}
+
 function sanitizeItem(raw) {
   const dirs = ['outbound', 'inbound', 'unknown'];
   const out = {
@@ -467,6 +489,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'relay-signal' && msg.signal && sender.tab) {
     if (msg.signal.status === 'wrong_account') setWrongAccount(true).catch(() => {});
     else if (msg.signal.status === 'account_ok') setWrongAccount(false).catch(() => {});
+    return false;
+  }
+  if (msg.type === 'relay-reaction' && msg.item && sender.tab) {
+    handleReaction(msg.item).catch(e => console.warn(LOG_PREFIX, 'reaction handling failed', e));
     return false;
   }
   if (msg.type === 'relay-hello') return false;   // frame instance announced itself; no coordination needed

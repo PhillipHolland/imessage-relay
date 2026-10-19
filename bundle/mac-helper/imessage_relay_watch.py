@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-iMessage Relay v1.4.1: inbound watcher (LaunchAgent com.imessage-relay.watch).
+iMessage Relay v1.4.2: inbound watcher (LaunchAgent com.imessage-relay.watch).
 
 Every `pollSeconds` (default 10) it reads ~/Library/Messages/chat.db READ-ONLY for new rows
 with is_from_me = 0 and POSTs
@@ -730,6 +730,12 @@ class Watcher:
         except Exception:
             pass
 
+    def has_pending(self):
+        try:
+            return any(n.endswith('.json') for n in os.listdir(rc.PENDING_DIR))
+        except OSError:
+            return False
+
     def process_pending(self, cfg):
         """The host (run under Chrome, no chat.db access) left body-free pending records of its sends;
         the watcher checks chat.db for is_delivered / error, logs a counts-only 'delivery' event, and
@@ -749,7 +755,7 @@ class Watcher:
             if cfg.get('confirmSends', True) and not cfg['paused'] and cfg['webhookUrl']:
                 p = {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered, 'dryRun': False, 'at': rc.iso_utc(t)}
                 if e.get('note'):
-                    p['note'] = e['note']             # v1.4.1: "(new contact, •••0177)"
+                    p['note'] = e['note']             # v1.4.1: "(new contact, •••0188)"
                 self.post(cfg, p)
 
         def fail(e, error=None, reason=None, superseded=False):
@@ -879,7 +885,10 @@ class Watcher:
             return self.recent_senders(cfg, int(job.get('days') or 30), int(job.get('limit') or 20))
         if typ == 'test_probe':                       # v1.3.8 /test: am I alive, can I read chat.db?
             return self.test_probe()
-        if typ == 'contacts_lookup':                  # v1.4.0: host asks who "Austin Robinson" is (no FDA there)
+        if typ == 'contacts_lookup':                  # v1.4.0: host asks who "Jordan Rivera" is (no FDA there)
+            if isinstance(job.get('names'), list):     # v1.4.2: several candidate names, typo matches allowed per name
+                names = [str(n or '')[:80] for n in job['names'][:4]]
+                return relay_contacts.lookup_many(names, cfg, globs=ADDRESSBOOK_GLOBS, fuzzy=job.get('fuzzy'))
             return relay_contacts.lookup(str(job.get('name') or '')[:80], cfg, globs=ADDRESSBOOK_GLOBS)
         if typ == 'detect_owner_handles':             # v1.3.8 guided setup (relayctl owner-handles detect)
             return self.detect_owner_job(cfg, bool(job.get('apply')))
@@ -962,10 +971,17 @@ class Watcher:
                 cfg = self.load_config()
             except Exception as e:
                 rc.log_event('watch_error', error=type(e).__name__)
-            for _ in range((cfg or rc.DEFAULT_CONFIG)['pollSeconds']):
+            for i in range((cfg or rc.DEFAULT_CONFIG)['pollSeconds']):
                 if stop['flag']:
                     break
                 self.sleeper(1)
+                # v1.4.2 latency: while a reply is waiting for its delivery proof, check chat.db every ~2 s
+                # instead of once per pollSeconds (was up to 10 s before "\u2713\u2713 delivered" could post).
+                if i % 2 == 1 and self.has_pending():
+                    try:
+                        self.process_pending(self.load_config())
+                    except Exception as e:
+                        rc.log_event('watch_error', error=type(e).__name__)
                 if os.path.isdir(JOBS_DIR) and any(n.endswith('.job.json') for n in os.listdir(JOBS_DIR)):
                     try:
                         self.process_jobs(self.load_config())

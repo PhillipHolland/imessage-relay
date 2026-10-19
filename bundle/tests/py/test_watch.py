@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from helpers import fresh, tmpdir, read_log, FakeRunner, ChatDb, attributed_body
 
 ALLOWED = '+15555550123'
-OTHER = '+15555550177'
+OTHER = '+15555550188'
 OWNER = '+15555550199'
 
 
@@ -141,7 +141,7 @@ class RelayAll(Base):
           INSERT INTO ZABCDRECORD VALUES (1, 'Sam', 'Example', NULL);
           INSERT INTO ZABCDRECORD VALUES (2, 'Sam', 'Other', NULL);
           INSERT INTO ZABCDRECORD VALUES (3, 'Test', 'Person', NULL);
-          INSERT INTO ZABCDPHONENUMBER VALUES (1, '(555) 555-0177');
+          INSERT INTO ZABCDPHONENUMBER VALUES (1, '(555) 555-0188');
           INSERT INTO ZABCDPHONENUMBER VALUES (2, '555-555-0178');
           INSERT INTO ZABCDPHONENUMBER VALUES (3, '555-555-0179');""")
         con.commit()
@@ -213,7 +213,7 @@ class RelayAll(Base):
         self.assertEqual(self.roster(), {}, 'nothing rostered when nothing is relayed')
 
     def test_owner_from_me_mute_and_short_codes(self):
-        self.cfg['mute'] = ['555-555-0177', 'noisy@example.com']
+        self.cfg['mute'] = ['555-555-0188', 'noisy@example.com']
         self.db.add(OWNER, text='note to self')
         self.db.add(OTHER, text='muted text')
         self.db.add('noisy@example.com', text='muted email')
@@ -443,7 +443,7 @@ class Jobs(Base):
           CREATE TABLE ZABCDPHONENUMBER (ZOWNER INTEGER, ZFULLNUMBER TEXT);
           CREATE TABLE ZABCDEMAILADDRESS (ZOWNER INTEGER, ZADDRESS TEXT);
           INSERT INTO ZABCDRECORD VALUES (1, 'Sam', 'Example', NULL);
-          INSERT INTO ZABCDPHONENUMBER VALUES (1, '(555) 555-0177');""")
+          INSERT INTO ZABCDPHONENUMBER VALUES (1, '(555) 555-0188');""")
         con.commit(); con.close()
         res = self.job(type='recent_senders', days=30, limit=10)
         self.assertTrue(res['ok'])

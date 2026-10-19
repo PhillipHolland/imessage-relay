@@ -108,6 +108,7 @@
     const cfg = Object.assign({}, CONFIG, opts.config || {});
     const now = opts.now || (() => Date.now());
     const emit = opts.onEmit || (() => {});
+    const onReaction = opts.onReaction || (() => {});    // v1.4.2: owner thumbs-up/down on a pending prompt
     const onStatus = opts.onStatus || (() => {});
     const getState = opts.getState || (() => ({ paused: false, conversationFilter: '' }));
     // Owner-identity gate. Default: confirmed (unit tests of pure detection don't wire it);
@@ -337,10 +338,68 @@
       const el = bodyEl(entry);
       return { textEl: el, text: el ? extractText(el) : '' };
     }
+    // v1.4.2: X Chat's current native Reply shows "Replied to <name>" plus a preview of the replied-to
+    // message, which may carry no quote-like testid. Three more ways to find it, in order:
+    //  (1) an element carrying ANOTHER message's uuid (message-<u2> / message-text-<u2>) inside the bubble,
+    //      or a link/attribute naming that uuid: the replied-to message. Its text is read from the page.
+    //  (2) a "Replied to ..." / "Replying to ..." label outside the bubble's own text: the preview is the
+    //      label's container minus the label.
+    //  (3) the same label just above the bubble (a sibling row of the entry).
+    const REPLIED_RE = /^\s*(?:you\s+)?(?:replied|replying|reply)\s+to\b/i;
+    const UUID_ANY_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+    function ownText(el) { let t = ''; for (let n = el.firstChild; n; n = n.nextSibling) if (n.nodeType === 3) t += n.nodeValue; return t; }
+    function foreignUuidQuote(entry) {
+      const own = uuidOf(entry);
+      const textEl = bodyEl(entry);
+      let other = '';
+      walkElements(entry, el => {
+        if (other || (textEl && deepContains(textEl, el))) return;
+        for (const at of ['data-testid', 'href', 'data-message-id', 'data-reply-to', 'aria-describedby']) {
+          const v = el.getAttribute(at);
+          const m = v && UUID_ANY_RE.exec(v);
+          if (m && m[1].toLowerCase() !== String(own).toLowerCase()) { other = m[1]; return; }
+        }
+      });
+      if (!other) return '';
+      const src = safeAll(doc, '[data-testid="' + cfg.textTestIdPrefix + other + '"]').find(x => !deepContains(entry, x)) ||
+        safeAll(entry, '[data-testid="' + cfg.textTestIdPrefix + other + '"]')[0];
+      return src ? extractText(src) : '';
+    }
+    function repliedLabelQuote(scope, textEl) {
+      let label = null;
+      walkElements(scope, el => {
+        if (label || (textEl && deepContains(textEl, el))) return;
+        if (REPLIED_RE.test(ownText(el)) || (REPLIED_RE.test(el.textContent || '') && el.children.length === 0)) label = el;
+      });
+      if (!label) return '';
+      // climb to the smallest container that holds more than the label (the preview), never the reply text
+      let box = label;
+      for (let i = 0; i < 5; i++) {
+        const up = parentOf(box);
+        if (!up || up === scope.parentNode || (textEl && deepContains(up, textEl))) break;
+        box = up;
+        if (String(box.textContent || '').trim().length > String(label.textContent || '').trim().length + 1) break;
+      }
+      const full = String(box.textContent || '').replace(/\s+/g, ' ').trim();
+      const lab = String(label.textContent || '').replace(/\s+/g, ' ').trim();
+      return full.indexOf(lab) === 0 ? full.slice(lab.length).trim() : full.replace(lab, '').trim();
+    }
     function entryQuote(entry) {
       const q = findQuote(entry);
-      if (!q) return '';
-      return extractText(q).replace(/\n+/g, ' ').trim().slice(0, cfg.maxQuoteLength);
+      let t = q ? extractText(q) : '';
+      if (!t) t = foreignUuidQuote(entry);
+      if (!t) t = repliedLabelQuote(entry, bodyEl(entry));
+      const scanAbove = start => {
+        let sib = start && start.previousElementSibling;
+        for (let i = 0; !t && sib && i < 2; i++, sib = sib.previousElementSibling) {
+          if (isUuidEntry(sib) || collectEntries(sib).length) break;     // another message, not a preview
+          t = repliedLabelQuote(sib, null);
+        }
+      };
+      if (!t) scanAbove(entry);
+      const wrap = parentOf(entry);
+      if (!t && wrap && wrap !== doc.body && collectEntries(wrap).length === 1) scanAbove(wrap);
+      return String(t || '').replace(/\n+/g, ' ').trim().slice(0, cfg.maxQuoteLength);
     }
     function timeEl(entry) { return safeAll(entry, 'time[datetime],time,[datetime]')[0] || null; }
     function entryTimeIso(entry) {
@@ -477,6 +536,7 @@
       const list = allEntries();
       for (const e of list) { processed.add(e); seenKeys.add(conversationId() + '|id:uuid=' + uuidOf(e)); }
       stats.baselined += list.length;
+      try { scanReactions(list); } catch (e) { /* prompts get marked on their next change */ }
       settleUntil = now() + cfg.settleMs;
       recentEmits = [];
       info('baseline (' + reason + '): context=' + contextPath() + ' conversation=' + (conversationId() || '(none)') + ' mode=' + mode + ' root=' + chatRoot().selector + ' existing=' + list.length);
@@ -499,6 +559,79 @@
       if (pending.size) schedule();
     }
 
+    // ---------- v1.4.2: a thumbs-up / thumbs-down on a pending "Reply yes" prompt ----------
+    // The bot's prompts are inbound bubbles whose text says "reply yes within 2 min". A reaction is an
+    // emoji drawn on that bubble OUTSIDE its message text. Only a reaction that APPEARS after the prompt
+    // was first seen counts (never one already there at page load), only on the newest prompt, only
+    // within 2 minutes of it, only once, and only with the owner's identity confirmed. The extension
+    // reads the prompt's own text only to recognise it (prompts carry no message bodies).
+    const PROMPT_RE = /reply yes within 2 min/i;
+    const UP_RE = /\u{1F44D}/u, DOWN_RE = /\u{1F44E}/u;
+    const PICT_RE = /\p{Extended_Pictographic}/gu;
+    const PROMPT_WINDOW_MS = 120000;
+    const promptMarks = new Map();   // uuid -> { at, up, down, fired }
+    function reactionState(entry) {
+      const textEl = bodyEl(entry);
+      const quoteEl = findQuote(entry);
+      const kinds = new Set();
+      let up = false, down = false;
+      const look = s => {
+        if (!s) return;
+        if (UP_RE.test(s)) up = true;
+        if (DOWN_RE.test(s)) down = true;
+        const m = s.match(PICT_RE); if (m) m.forEach(k => kinds.add(k));
+      };
+      walkElements(entry, el => {
+        if ((textEl && deepContains(textEl, el)) || (quoteEl && deepContains(quoteEl, el))) return;
+        if (el.closest && el.closest('[role="menu"],[role="menuitem"],[role="dialog"],[role="toolbar"],[role="tooltip"],[role="listbox"]')) return;
+        for (let n = el.firstChild; n; n = n.nextSibling) if (n.nodeType === 3) look(n.nodeValue);
+        look(el.getAttribute('alt')); look(el.getAttribute('aria-label'));
+      });
+      if (kinds.size >= 4) return { up: false, down: false };    // an emoji picker / hover bar, not a reaction
+      return { up, down };
+    }
+    function isPrompt(entry) {
+      const tEl = bodyEl(entry);
+      if (!tEl) return false;
+      const t = String(tEl.textContent || '');
+      return PROMPT_RE.test(t) && t.length < 600;
+    }
+    function scanReactions(roots) {
+      const conv = conversationId();
+      const state = getState() || {};
+      const filter = normalizeFilter(state.conversationFilter);
+      if (!conv || state.paused || (filter && filter !== conv)) return;
+      const entries = new Set();
+      for (const r of roots) {
+        if (!r || !r.isConnected) continue;
+        const e = closestEntry(r); if (e) entries.add(e);
+        for (const x of collectEntries(r)) entries.add(x);
+      }
+      for (const e of entries) {
+        const u = uuidOf(e);
+        if (!u || !isPrompt(e)) continue;
+        if (!ownerCheck()) return;
+        const st = reactionState(e);
+        const mk = promptMarks.get(u);
+        if (!mk) {
+          const iso = entryTimeIso(e);
+          const t = iso ? (Date.parse(iso) || now()) : now();
+          promptMarks.set(u, { at: Math.min(t, now()), up: st.up, down: st.down, fired: false });
+          continue;
+        }
+        if (mk.fired) continue;
+        const word = (st.up && !mk.up) ? 'yes' : (st.down && !mk.down) ? 'no' : '';
+        mk.up = mk.up || st.up; mk.down = mk.down || st.down;
+        if (!word) continue;
+        if (now() - mk.at > PROMPT_WINDOW_MS) continue;
+        const newer = Array.from(promptMarks.values()).some(o => o !== mk && o.at > mk.at);
+        if (newer) continue;
+        if (analyze(e).direction === 'outbound') continue;   // the owner's own message is never a prompt
+        mk.fired = true;
+        try { onReaction({ conversationId: conv, key: 'reaction:' + u, word, ts: new Date(now()).toISOString() }); } catch (err) { info('reaction emit failed', err); }
+      }
+    }
+
     function flush() { try { flushInner(); } finally { flushCache = null; } }
     function flushInner() {
       const roots = Array.from(pending);
@@ -508,6 +641,7 @@
       const prevMode = mode;
       if (mode === 'none') mode = detectMode(root.el || doc.body);
       if (prevMode === 'none' && mode !== 'none') { baseline('first messages rendered'); return; }
+      try { scanReactions(roots); } catch (e) { info('reaction scan failed', e); }
       const found = new Set();
       for (const r of roots) {
         if (!r.isConnected) continue;
@@ -705,7 +839,7 @@
         ', roles=' + JSON.stringify(f.roles) + ', hasShadow=' + f.hasShadow + ', iframes=' + f.iframes + ', mode=' + f.mode + ', entries=' + f.entriesMatched);
     }
 
-    const OBS_OPTS = { childList: true, subtree: true, characterData: true };
+    const OBS_OPTS = { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'alt'] };
     return {
       config: cfg,
       doc,
@@ -823,6 +957,7 @@
     send({ type: 'relay-log', item });
   }
   function onStatus(sig) { send({ type: 'relay-signal', signal: sig }); }
+  function onReaction(r) { console.log(CONFIG.logPrefix, 'reaction on a prompt:', r.word); send({ type: 'relay-reaction', item: r }); }
 
   // Cross-session dedupe of already-relayed uuids, persisted in chrome.storage.local (keys only,
   // 24h TTL). Loaded once; writes are best-effort and debounced.
@@ -858,7 +993,7 @@
     if (mainDetector) return;
     mainDetector = createRelayDetector({
       window, document, getState: () => state, getContextUrl: contextUrl, source: role,
-      onEmit, onStatus, ownerCheck: ownerConfirmed, seen: seenStore,
+      onEmit, onStatus, onReaction, ownerCheck: ownerConfirmed, seen: seenStore,
     });
     mainDetector.start();
     console.log(CONFIG.logPrefix, '(' + role + ') started (read-only).', { frameHref: location.href, context: contextUrl(), paused: state.paused });

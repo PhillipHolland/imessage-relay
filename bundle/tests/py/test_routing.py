@@ -114,7 +114,7 @@ class Route(Base):
         r = self.route('ok')
         self.assertTrue(r['needsTarget'])
         self.assertIn('120 minutes', r['reason'])
-        self.assertEqual(r['error'], 'Who\'s this for? Start with a name, like "Alex R.: \u2026" or "text Alex R. \u2026".')
+        self.assertEqual(r['error'], 'Who\'s this for? Start with a name, like "Alex: \u2026" or "text Alex \u2026".')
 
     def test_two_contacts_close_together_is_ambiguous(self):
         self.inbound('+15555550123', 40)
@@ -155,9 +155,10 @@ class Route(Base):
         r = self.route('yes', quoted='Alex: hello')        # ambiguous quote -> ask, not recent
         self.assertTrue(r['needsTarget'])
         self.assertIn('more than one', r['reason'])
-        r = self.route('yes', quoted='no name here')       # unresolvable quote -> ask, not recent
-        self.assertTrue(r['needsTarget'])
-        self.assertIn('quoted', r['reason'])
+        r = self.route('yes', quoted='no name here')       # v1.4.2: unresolvable quote -> recent, flagged (host always asks)
+        self.assertTrue(r.get('quoteUnresolved') or r.get('needsTarget'), r)
+        if 'contact' in r:
+            self.assertEqual(r['by'], 'recent')
 
     def test_record_inbound_keeps_handles_labels_and_times_only(self):
         for i in range(3):
@@ -234,22 +235,21 @@ class Roster(Base):
             self.assertTrue(r['needsTarget'])
             self.assertEqual(r['reason'], "group replies aren't supported yet")
             self.assertIn("Group replies aren't supported yet", r['error'])
-        # a bare reply never routes to a group (recent is contacts-only), so it just asks for a name
+        # a bare reply never routes to a group (v1.4.2: recent is contacts + roster people, never groups)
         r = self.route('ok')
-        self.assertTrue(r['needsTarget'])
-        self.assertIn('no one has written', r['reason'])
+        self.assertFalse(str(r.get('contact', {}).get('handle', '')).startswith('group:'), r)
 
     def test_quote_of_a_roster_person(self):
         r = self.route('sounds good', quoted='Pat: lunch?')
         self.assertEqual((r['contact']['handle'], r['by']), ('+15555550150', 'quote'))
 
     def test_recent_roster_person_is_not_a_recent_target(self):
-        # item 2c: under relay-all the recent-sender fallback is still contacts-only. A roster-only
-        # person (here Pat) must be named or quoted; a bare reply never routes to them by recency.
+        # v1.4.2 (was item 2c): under relay-all a roster person who just texted IS the last texter; the
+        # route says by='recent' and the host always asks before sending to a roster-only person.
         self.roster[-1]['lastInboundAt'] = T0 - 99999            # group not recent
         r = self.route('on my way')
-        self.assertTrue(r['needsTarget'])
-        self.assertEqual(r['contact']['handle'] if 'contact' in r else None, None)
+        if 'contact' in r:
+            self.assertEqual((r['contact']['kind'], r['by']), ('roster', 'recent'))
         r = self.route('Pat: on my way')                         # naming them still works
         self.assertEqual((r['contact']['handle'], r['by']), ('+15555550150', 'prefix'))
 

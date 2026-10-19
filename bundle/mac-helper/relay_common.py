@@ -1,5 +1,5 @@
 """
-iMessage Relay v1.4.1: shared helpers for the native host, the inbound watcher and relayctl.
+iMessage Relay v1.4.2: shared helpers for the native host, the inbound watcher and relayctl.
 
 One config file: ~/.imessage-relay/config.json (see config.example.json). Every module reads
 it fresh, so edits by the bot apply without restarts.
@@ -23,7 +23,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.1'
+VERSION = '1.4.2'
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -261,7 +261,7 @@ def sanitize_config(user):
     cfg['redactCodes'] = truthy(cfg.get('redactCodes'), True)
     cfg['relayAll'] = truthy(cfg.get('relayAll'), False)
     cfg['skipShortCodes'] = truthy(cfg.get('skipShortCodes'), True)
-    cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()
+    cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
     mute = []
     for m in cfg.get('mute') if isinstance(cfg.get('mute'), list) else []:
@@ -546,7 +546,7 @@ def read_digest_marker():
 # ---------- reply routing ----------
 PREFIX_RE = re.compile(r'^\s*([^\n:]{1,60}?)\s*:\s*', re.S)
 # v1.4.0: a "Name:" / "First Last:" prefix that names nobody we know is NOT ordinary text: it must never
-# fall through to the "recent" guess (that would text "Austin: hey" to whoever wrote last). A name-like
+# fall through to the "recent" guess (that would text "Jordan: hey" to whoever wrote last). A name-like
 # prefix is 1-3 capitalized words of letters (apostrophes/hyphens/periods allowed), not a common
 # "Note:"-style label word.
 NAME_PREFIX_RE = re.compile(r"^[A-Z][A-Za-z\u00c0-\u024f'\u2019.-]{0,23}(?: [A-Z][A-Za-z\u00c0-\u024f'\u2019.-]{0,23}){0,2}$")
@@ -570,6 +570,78 @@ def unknown_name_prefix(text):
     if not NAME_PREFIX_RE.match(word) or word.lower() in NOT_A_NAME or word.split(' ')[0].lower() in NOT_A_NAME:
         return None
     return word, text[m.end():]
+# v1.4.2: smart name recognition. A leading "x:" / "x," / "text x ..." / "tell x ..." in ANY case is a
+# CANDIDATE name; it only counts as a name when the relay list or the Mac's Contacts know it (exactly,
+# by first name / nickname, or as a close typo, which always asks). Otherwise the text is ordinary.
+NAME_WORD_RE = re.compile(r"^[A-Za-z\u00c0-\u024f][A-Za-z\u00c0-\u024f'\u2019.-]{0,23}$")
+NOT_A_NAME_EXTRA = frozenset("""
+me you him her them us it this that these those everyone everybody someone anyone all back later again
+sounds good great nice cool sure yeah yep nope lol haha ha omg wow well yo k kk np ty thx pls please love
+the a an my your our his their its i i'm im we ok, so, but, and, also, actually anyway honestly
+""".split())
+_CAND_VERB_RE = re.compile(r'^\s*(?:text|tell|message|msg)\s+(.+)$', re.I | re.S)
+_CAND_COMMA_RE = re.compile(r'^\s*([^,\n]{1,60}?)\s*,\s*(\S.*)$', re.S)
+
+
+def _cand_ok(words):
+    if not 1 <= len(words) <= 3 or not all(NAME_WORD_RE.match(w) for w in words):
+        return False
+    low = [w.lower() for w in words]
+    stop = NOT_A_NAME | NOT_A_NAME_EXTRA
+    return ' '.join(low) not in stop and low[0] not in stop and low[-1] not in stop
+
+
+def name_candidates(text):
+    """v1.4.2: possible names at the start of a reply, most specific first. Each is
+    {'name','body','form','fuzzy','nameLike'}: form colon|comma|verb; `fuzzy` = a close-typo match may be
+    offered (only where the name's end is unambiguous); `nameLike` = the old capitalized-name shape (when
+    the Contacts check cannot run, only those hold the message instead of sending it as ordinary text)."""
+    t = text or ''
+    out = []
+    m = PREFIX_RE.match(t)
+    if m:
+        w = re.sub(r'\s+', ' ', m.group(1).strip())
+        w = re.sub(r'^(?:text|tell|message|msg|to)\s+', '', w, flags=re.I)
+        words = w.split(' ')
+        if _cand_ok(words):
+            out.append({'name': w, 'body': t[m.end():], 'form': 'colon', 'fuzzy': True,
+                        'nameLike': bool(NAME_PREFIX_RE.match(w))})
+        return out
+    m = _CAND_VERB_RE.match(t)
+    if m:
+        rest = m.group(1)
+        toks = rest.split()
+        for n in (3, 2, 1):
+            if len(toks) <= n:
+                continue                       # the name must leave a message behind it
+            words = [x.rstrip(',:.\u2013\u2014-') for x in toks[:n]]
+            if not _cand_ok(words):
+                continue
+            body = re.sub(r'^\s*(?:\S+\s+){%d}' % n, '', rest + ' ', count=1).strip()
+            body = re.sub(r'^[\s,:.\u2013\u2014-]+', '', body) if toks[n - 1][-1:] in ',:.' else body
+            if body:
+                out.append({'name': ' '.join(words), 'body': body, 'form': 'verb', 'fuzzy': False, 'nameLike': False})
+        return out
+    m = _CAND_COMMA_RE.match(t)
+    if m:
+        w = re.sub(r'\s+', ' ', m.group(1).strip())
+        if _cand_ok(w.split(' ')):
+            out.append({'name': w, 'body': m.group(2), 'form': 'comma', 'fuzzy': True, 'nameLike': False})
+    return out
+
+
+def close_name_score(a, b):
+    """0..1 similarity of two names (case/space-insensitive); a typo-level match is >= 0.85."""
+    import difflib
+    a, b = ' '.join(str(a).lower().split()), ' '.join(str(b).lower().split())
+    if not a or not b or a == b:
+        return 1.0 if a == b and a else 0.0
+    if a[0] != b[0] or abs(len(a) - len(b)) > 2 or min(len(a), len(b)) < 4:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+FUZZY_MIN = 0.85
 EMAIL_WORD_RE = re.compile(r'^\S+@\S+$')
 
 
@@ -755,11 +827,9 @@ def record_inbound(handle, at, path=None, label=''):
 
 
 
-def example_label(cfg, directory=None):
-    d = directory or build_directory(cfg, [])
-    people = [e for e in d if e['kind'] == 'contact'] or sorted(
-        [e for e in d if e['kind'] == 'roster'], key=lambda e: -(e['lastInboundAt'] or 0))
-    return people[0]['label'] if people else 'Name'
+def example_label(cfg=None, directory=None):
+    """v1.4.2: always a generic example name, never one of the owner's contacts or roster labels."""
+    return 'Alex'
 
 
 def ask_for_name_message(cfg, directory=None):
@@ -818,8 +888,13 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
     muted = set(cfg.get('mute') or ())
     window = cfg['replyWindowMinutes'] * 60
 
+    # v1.4.2: with relay-all, a roster person who just texted is a "last texter" too (a bare reply to them
+    # is always confirmed first by the host); before, only configured contacts were, so a reply to a
+    # roster-only sender who had just written got "Who's this for?".
+    live_kinds = ('contact', 'roster') if cfg['relayAll'] else ('contact',)
+
     def recent_live():
-        return sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] == 'contact'
+        return sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] in live_kinds
                        and e['handle'] not in muted and 0 <= now - e['lastInboundAt'] <= window],
                       key=lambda e: -e['lastInboundAt'])
 
@@ -869,23 +944,48 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                 res = _maybe_confirm_directive(res, by_handle[p_handle], directive_form, directive_name, recent_live())
             return res
         return deliver(by_handle[p_handle], rest, 'prefix')
-    # A non-empty but unresolved quote must never fall through to "recent": the owner aimed at one message.
-    if quoted_present:
-        return need('could not tell which relayed message the reply quoted')
-    un = unknown_name_prefix(text) if p_status == 'none' else None
-    if un:
+    # v1.4.2: a quote we cannot resolve (X changed its reply preview, or the label is gone) falls back to
+    # whoever wrote last, but is ALWAYS confirmed first ("Reply to Rory? Reply yes within 2 min.").
+    quote_unresolved = quoted_present
+    def recent_route():
+        # The "recent" fallback: configured contacts, plus (v1.4.2, relay-all) roster people within the window.
+        live = recent_live()
+        if not live:
+            return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
+        if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
+            return need('two people wrote within %d seconds of each other' % cfg['ambiguousSeconds'])
+        return deliver(live[0], text, 'recent')
+
+    cands = name_candidates(text) if p_status == 'none' and not quote_unresolved else []
+    if cands:
+        # v1.4.2: a possible name nobody on the relay list has (any case). The host asks the Mac's Contacts;
+        # only a match makes it a name. No match -> `fallback` (ordinary text, routed as if no name).
+        c0 = cands[0]
         res = need('the name prefix matches no one on the relay list',
                    "%s isn't on your relay list yet. Start with a name from it, or /add %s <number>."
-                   % (un[0], first_name(un[0])))
-        res.update(unknownName=un[0], body=un[1])
+                   % (c0['name'], first_name(c0['name'])))
+        res.update(unknownName=c0['name'], body=c0['body'], candidates=cands, fallback=recent_route())
+        # a close typo of someone on the relay list ("Jordn:" for Jordan): offered, never sent unasked
+        ok_kinds = ('contact', 'roster') if cfg['relayAll'] else ('contact',)
+        for c in cands:
+            if not c['fuzzy']:
+                continue
+            hits = {}
+            for e in d:
+                if e['kind'] not in ok_kinds or e['handle'] in muted:
+                    continue
+                sc = max(close_name_score(c['name'], k) for k in (e['label'], e['name'], first_name(e['name'])) if k)
+                if sc >= FUZZY_MIN:
+                    hits[e['handle']] = e
+            if len(hits) == 1:
+                e = next(iter(hits.values()))
+                res['dirFuzzy'] = {'handle': e['handle'], 'label': e['label'], 'name': c['name'], 'body': c['body']}
+                break
         return res
-    # The "recent" fallback is only for configured contacts; roster-only people need a Name: prefix or quote.
-    live = recent_live()
-    if not live:
-        return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
-    if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
-        return need('two people wrote within %d seconds of each other' % cfg['ambiguousSeconds'])
-    return deliver(live[0], text, 'recent')
+    res = recent_route()
+    if quote_unresolved and 'contact' in res:
+        res['quoteUnresolved'] = True
+    return res
 
 
 # ---------- webhook ----------

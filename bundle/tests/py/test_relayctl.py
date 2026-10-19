@@ -266,11 +266,11 @@ class SelfTestAndJobs(Base):
             self.ctl.cmd_selftest(direct=True)
 
     def test_recent_senders_job_roundtrip(self):
-        self.db.add('+15555550177', text='hi')
+        self.db.add('+15555550188', text='hi')
         cfg = self.m.rc.load_config()
         out = self.ctl.cmd_recent_senders(sleeper=lambda s: self.watcher.process_jobs(cfg))
         self.assertTrue(out['ok'])
-        self.assertEqual([s['handle'] for s in out['senders']], ['+15555550177'])
+        self.assertEqual([s['handle'] for s in out['senders']], ['+15555550188'])
         self.assertEqual(os.listdir(self.ctl.JOBS_DIR), [], 'job and result files removed')
 
     def test_job_without_watcher_times_out(self):

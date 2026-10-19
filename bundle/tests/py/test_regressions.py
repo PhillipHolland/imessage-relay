@@ -57,7 +57,8 @@ class Routing(unittest.TestCase):
                   {'handle': B, 'label': '', 'lastInboundAt': now - 60}]
         for q in ('Al\u2026 running late', 'someone sent: running late', 'no name here'):
             r = self.rc.route_reply('ok see you then', q, self.cfg, roster, now)
-            self.assertTrue(r.get('needsTarget'), q)
+            # v1.4.2: never silent: either it asks, or it falls back to the last texter flagged for a confirm
+            self.assertTrue(r.get('needsTarget') or r.get('quoteUnresolved'), q)
 
     def test_typo_timezone_disables_quiet_hours(self):
         c = self.rc.sanitize_config({'quietHours': {'start': '22:00', 'end': '07:00', 'tz': 'America/Chcago'}})

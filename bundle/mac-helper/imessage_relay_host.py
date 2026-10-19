@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.1.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.2.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -56,6 +56,7 @@ NOTIFY_TIMEOUT_S = 12            # v1.4.0: was 4 s; the webhook trigger often ta
 NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')   # body-free events the watcher re-posts
 NEW_CONTACT_WINDOW_S = 130.0     # the /yes window for texting someone new from Contacts (2 min + slack)
 CONTACTS_WAIT_S = 8.0
+CONTACTS_WAIT_QUICK_S = 3.0      # v1.4.2: a lower-case / comma / "text x" candidate waits less (often ordinary text)
 
 
 # ---------- native messaging framing ----------
@@ -384,7 +385,7 @@ def parse_owner_command(text):
             confirm, rest = True, rest[:-4].strip()
         m = re.match(r'^(.*?)\s+(\+?[0-9][0-9().\s-]{5,}[0-9]|[^\s@]+@[^\s@]+\.[^\s@]+)$', rest)
         if m and m.group(1).strip():
-            # v1.4.0: "/add Austin +1 555 555 0123" adds that person directly (no text is sent).
+            # v1.4.0: "/add Jordan +1 555 555 0123" adds that person directly (no text is sent).
             return {'cmd': 'add', 'name': m.group(1).strip()[:80], 'handle': m.group(2).strip(), 'confirm': False}
         return {'cmd': 'add', 'name': rest[:80], 'confirm': confirm}
     if cmd == 'test':                         # "/test" or "/test send" (own handle only); never routed
@@ -578,14 +579,19 @@ def guess_is_risky(contact, cfg, now_t):
     return False
 
 
-# ---------- v1.4.0: a reply to someone on no relay list ("Austin Robinson: hey") ----------
-def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S):
+# ---------- v1.4.0: a reply to someone on no relay list ("Jordan Rivera: hey") ----------
+def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S, fuzzy=None):
     """Ask the watcher (it can read Contacts) for exact / unique name matches. None when it does not
     answer in time. The job result holds handles, so it is deleted the moment it is read."""
     jobs = os.path.join(rc.APP_DIR, 'jobs')
     jid = 'contacts' + uuid.uuid4().hex[:10]
     job_p, res_p = os.path.join(jobs, jid + '.job.json'), os.path.join(jobs, jid + '.result.json')
-    rc.write_json_atomic(job_p, {'id': jid, 'type': 'contacts_lookup', 'name': str(name)[:80], 'createdAt': now()})
+    job = {'id': jid, 'type': 'contacts_lookup', 'createdAt': now()}
+    if isinstance(name, (list, tuple)):          # v1.4.2: several candidate names in one job
+        job.update(names=[str(n)[:80] for n in name][:4], fuzzy=[bool(x) for x in (fuzzy or [])][:4])
+    else:
+        job['name'] = str(name)[:80]
+    rc.write_json_atomic(job_p, job)
     deadline = now() + wait_s
     while True:
         res = rc.read_json(res_p)
@@ -606,10 +612,14 @@ def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S):
     return None
 
 
-def _store_pending_new(handle, name, at):
+def _store_pending_new(handle, name, at, prefix='', existing=False):
     def fn():
         state = load_state()
         state['pendingNewContact'] = {'handle': handle, 'name': name, 'at': float(at)}
+        if prefix:
+            state['pendingNewContact']['prefix'] = str(prefix)[:80]     # which candidate name was offered
+        if existing:
+            state['pendingNewContact']['existing'] = True               # a typo of someone already on the list
         rc.write_json_atomic(STATE_PATH, state)
     _with_host_lock(fn)
 
@@ -623,7 +633,7 @@ def _peek_pending_new(handle, now_t):
 
 def _finish_new_contact(handle, name, cfg):
     """After the confirmed first text went out: they become a relay contact (same as /add), so the
-    owner's later "Austin: ..." replies and Austin's texts flow without asking again. Name + handle only."""
+    owner's later "Jordan: ..." replies and Jordan's texts flow without asking again. Name + handle only."""
     def fn():
         state = load_state()
         state.pop('pendingNewContact', None)
@@ -635,22 +645,70 @@ def _finish_new_contact(handle, name, cfg):
 
 
 def handle_unknown_name(route, cfg, sleeper, now, poster, base):
-    """The reply starts with a name nobody on the relay list has. Look it up in Contacts and ask; never
-    send on a guess. Names only in the prompts (a unique match shows the number's last 4 digits)."""
-    name = route['unknownName']
+    """The reply starts with a possible name nobody on the relay list has. Look it up in Contacts and ask;
+    never send on a guess. Names only in the prompts (a unique match shows the number's last 4 digits).
+    v1.4.2: any case. Only a Contacts (or relay-list typo) match makes it a name: with no match at all the
+    result is {'_fallback': True} and the caller routes the text as ordinary (no name)."""
+    cands = route.get('candidates') or [{'name': route['unknownName'], 'body': route.get('body', ''),
+                                         'fuzzy': False, 'nameLike': True}]
+    name_like = any(c.get('nameLike') for c in cands)
+    res = contacts_lookup([c['name'] for c in cands], sleeper, now,
+                          wait_s=CONTACTS_WAIT_S if name_like else CONTACTS_WAIT_QUICK_S,
+                          fuzzy=[c.get('fuzzy') for c in cands])
+    results = (res or {}).get('results')
+    if results is None and res is not None:      # an older watcher answers one name
+        results = [{'matches': res.get('matches') or []}]
+    results = results or []
+    chosen, matches = cands[0], []
+    for i, c in enumerate(cands):                # exact / first name / nickname, most specific candidate first
+        ms = [m for m in ((results[i] if i < len(results) else {}).get('matches') or []) if not m.get('fuzzy')]
+        if ms:
+            chosen, matches = c, ms
+            break
+    fuzzy = []
+    if not matches:
+        for i, c in enumerate(cands):
+            ms = [m for m in ((results[i] if i < len(results) else {}).get('matches') or []) if m.get('fuzzy')]
+            if ms:
+                chosen, fuzzy = c, ms
+                break
+    name = chosen['name']
     first = rc.first_name(name)
-    res = contacts_lookup(name, sleeper, now)
-    matches = (res or {}).get('matches') or []
-    rc.log_event('needs_target', reason='unknown-name', contactsMatches=len(matches), contactsChecked=res is not None)
+    rc.log_event('needs_target', reason='unknown-name', contactsMatches=len(matches), fuzzyMatches=len(fuzzy),
+                 dirFuzzy=bool(route.get('dirFuzzy')), candidates=len(cands), contactsChecked=res is not None)
+    if not matches and route.get('dirFuzzy'):
+        # a close typo of someone already on the relay list ("Jordn:" for Jordan): ask, never send unasked
+        df = route['dirFuzzy']
+        _store_pending_new(df['handle'], df['label'], now(), prefix=df['name'], existing=True)
+        _note_prompt(now())
+        detail = '\u2753 Did you mean %s? Reply yes within 2 min to send it to %s (no to cancel).' % (df['label'], df['label'])
+        notify(cfg, poster, {'type': 'needs_confirm', 'label': df['label'], 'reason': 'new_contact', 'detail': detail,
+                             'at': rc.iso_utc(now())})
+        return dict(base, ok=False, needsConfirm=True, label=df['label'], handle=df['handle'], reason='new_contact',
+                    contact=df['label'], routedBy='contacts')
+    if not matches and len(fuzzy) == 1:
+        m = fuzzy[0]
+        _store_pending_new(m['handle'], m['name'], now(), prefix=name)
+        _note_prompt(now())
+        detail = ('\u2753 Did you mean %s? Reply yes within 2 min to text the %s in your Contacts (%s), or no to '
+                  'cancel.' % (m['name'], m['name'], rc.mask_handle(m['handle'])))
+        notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
+                             'at': rc.iso_utc(now())})
+        return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
+                    contact=m['name'], routedBy='contacts')
+    if not matches and fuzzy:
+        matches = fuzzy                          # several close names: list them (names only), send nothing
+    if not matches and not (res is None and any(c.get('nameLike') and c.get('form', 'colon') == 'colon' for c in cands)):
+        return dict(base, _fallback=True)        # not a name anyone knows: ordinary text
     if len(matches) == 1:
         m = matches[0]
         hs = m.get('handles') or [{'handle': m['handle'], 'label': ''}]
         if cfg['confirmNewContacts'] == 'exact-skip' and m.get('exact') and len(hs) == 1:
-            # v1.4.1: "Austin Robinson: hey" names exactly one Contacts card, by its full name, with one
+            # v1.4.1: "Jordan Rivera: hey" names exactly one Contacts card, by its full name, with one
             # number/email: no question to ask. The caller sends it and adds them as a contact.
             rc.log_event('new_contact_direct')
-            return dict(base, _direct={'handle': m['handle'], 'name': m['name']})
-        _store_pending_new(m['handle'], m['name'], now())
+            return dict(base, _direct={'handle': m['handle'], 'name': m['name'], 'body': chosen['body']})
+        _store_pending_new(m['handle'], m['name'], now(), prefix=name)
         _note_prompt(now())
         if len(hs) > 1:
             def opt(x):
@@ -745,8 +803,28 @@ def handle_bare_confirm(word, quoted, cfg, now, poster):
     return dict(base, ok=True, skipped=detail)
 
 
+def handle_reaction(msg, cfg, now, poster):
+    """v1.4.2: the owner put a thumbs-up (confirm) or thumbs-down (cancel) on a pending prompt in the relay
+    chat. The extension only sends this for a reaction it saw appear on the newest "Reply yes" prompt within
+    2 minutes of it; a pending reply prompt is answered in the extension itself. Here: /block and /add.
+    Nothing pending -> ignored silently (a reaction is never a message and never texted)."""
+    word = 'yes' if msg.get('word') == 'yes' else 'no' if msg.get('word') == 'no' else None
+    conv = str(msg.get('conversationId') or '').strip()
+    if not word or (cfg.get('relayConversationId') and conv != cfg['relayConversationId']):
+        return {'ok': False, 'error': 'not a relay-chat reaction'}
+    if cfg['paused']:
+        return {'ok': False, 'error': 'paused'}
+    t = now()
+    state = load_state()
+    if not (_fresh(state, 'pendingBlock', t, CONFIRM_WINDOW_S) or _fresh(state, 'pendingAdd', t, ADD_WINDOW_S)):
+        rc.log_event('reaction_ignored', word=word)
+        return {'ok': True, 'ignored': True}
+    rc.log_event('reaction_confirm', word=word)
+    return handle_bare_confirm(word, '', cfg, now, poster)
+
+
 def _short_mask(handle):
-    """'+1 \u2022\u2022\u20220177' -> '\u2022\u2022\u20220177' for the "(new contact, ...)" note; emails stay masked as is."""
+    """'+1 \u2022\u2022\u20220188' -> '\u2022\u2022\u20220188' for the "(new contact, ...)" note; emails stay masked as is."""
     m = rc.mask_handle(handle)
     return m.split(' ', 1)[1] if m.startswith('+') and ' ' in m else m
 
@@ -822,7 +900,11 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if not route.get('needsTarget') and route['contact']['handle'] == hint_norm:
             contact, body, by = route['contact'], route['body'], route['by']   # same target: use its stripped body
         elif new_contact and route.get('unknownName'):
-            contact, body, by = tgt, route['body'], 'contacts'                  # "Austin Robinson: hey" -> "hey"
+            # "Jordan Rivera: hey" -> "hey" (v1.4.2: the body of the candidate name that was offered)
+            pick = next((c for c in route.get('candidates') or [] if c['name'] == new_contact.get('prefix')), None)
+            contact, body, by = tgt, (pick['body'] if pick else route['body']), 'contacts'
+            if new_contact.get('existing'):
+                new_contact = None                                              # a typo of someone on the list
         else:
             contact, body, by = tgt, text, 'confirmed'                         # target drifted: send the full reply
         handle = contact['handle']
@@ -830,15 +912,23 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         direct = None
         if route.get('needsTarget') and route.get('unknownName'):
             r = handle_unknown_name(route, cfg, sleeper, now, poster, base)
-            if '_direct' not in r:
+            if r.get('_fallback'):
+                route = route['fallback']            # v1.4.2: no one by that name: ordinary text
+            elif '_direct' not in r:
                 return r
-            direct = r['_direct']
+            else:
+                direct = r['_direct']
         if direct:
             # v1.4.1 exact-skip: one Contacts card by its exact full name with one number -> send now.
             new_contact = {'handle': direct['handle'], 'name': direct['name']}
             route = {'contact': {'kind': 'new', 'label': rc.clean_label(direct['name']) or rc.format_handle(direct['handle']),
                                  'name': direct['name'], 'handle': direct['handle'], 'lastInboundAt': None},
-                     'body': route['body'], 'by': 'contacts'}
+                     'body': direct.get('body', route.get('body', '')), 'by': 'contacts'}
+            known = next((e for e in rc.build_directory(cfg, rc.load_roster()) if e['handle'] == direct['handle']), None)
+            if known and (known.get('kind') == 'contact' or (known.get('kind') == 'roster' and cfg['relayAll'])):
+                # already on the relay list under another label (e.g. "Mom"): send there, not as a new contact
+                new_contact = None
+                route['contact'] = known
         if route.get('needsTarget'):
             rc.log_event('needs_target', textLength=len(text), quoted=bool(quoted))   # reason may name a label; owner gets it via webhook, not the log
             notify(cfg, poster, {'type': 'needs_target', 'detail': route['error'], 'reason': route['reason'],
@@ -876,8 +966,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         # Confirm-when-guessed (item 3): a 'recent'-routed reply may be going to the wrong person. Ask first
         # per the confirmGuessed policy. The host never holds the text; the extension keeps it in session
         # storage and re-sends it with confirmed:true (and the handle) on "/yes".
-        if (by == 'recent' and cfg['confirmGuessed'] != 'off'
-                and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
+        # v1.4.2: an unresolved quote, or a roster-only last texter, is always asked first
+        must_ask = by == 'recent' and (route.get('quoteUnresolved') or contact.get('kind') == 'roster')
+        if must_ask or (by == 'recent' and cfg['confirmGuessed'] != 'off'
+                        and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
             detail = '❓ Reply to %s? Reply yes within 2 min.' % contact['label']
             rc.log_event('needs_confirm', routedBy=by, reason='guessed', textLength=len(body))
             _note_prompt(now())
@@ -1044,6 +1136,8 @@ def handle_request(msg, cfg=None, runner=subprocess.run, sleeper=time.sleep, now
         return handle_signal(msg, cfg, now, poster)
     if typ == 'test':
         return handle_test(msg, cfg, runner, sleeper, now, poster)
+    if typ == 'reaction':
+        return handle_reaction(msg, cfg, now, poster)
     return {'ok': False, 'error': 'unknown request type'}
 
 

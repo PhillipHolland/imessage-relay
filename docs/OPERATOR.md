@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.1)
+# iMessage Relay: operator reference (v1.4.2)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -28,9 +28,9 @@ github.com/PhillipHolland/imessage-relay. It is one Python file that writes ever
 Mac helper, installer, tests) and checks each one against an embedded sha256 digest. Nothing is
 cloned or installed from the repo; you only download this one pinned file.
 
-**Pinned release (v1.4.1):**
-- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.1/build_bundle.py`
-- sha256: `163d23b403516074604e752c3fb733f49fd8338cc09d94d33280985a4d8542cd`
+**Pinned release (v1.4.2):**
+- URL: `https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.2/build_bundle.py`
+- sha256: `f8512467be432903a353f30608c774475ce2bd19271e3ffd83e1bfed471ad0c1`
 
 **Always verify before running.** Download with `curl -fsSL`, check the sha256 against the pinned
 value above, and run the file only on an exact match. On a mismatch (or a failed download), **refuse**:
@@ -172,7 +172,7 @@ windows the checklist needs.
    machine Shell that reads it on **stdin**. Never put it on a command line.
 3. Run, with a perl alarm of 300 s:
    ```
-   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.1/build_bundle.py' && echo "163d23b403516074604e752c3fb733f49fd8338cc09d94d33280985a4d8542cd  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
+   cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.2/build_bundle.py' && echo "f8512467be432903a353f30608c774475ce2bd19271e3ffd83e1bfed471ad0c1  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-stdin --open-windows < ~/.imr-webhook-key; rm -f ~/.imr-webhook-key
    ```
 
 **Paste path (the owner runs it):** nothing to save or attach; the line downloads the pinned file to
@@ -181,7 +181,7 @@ line. When it asks for the webhook key,
 open grokbot://app/v1/sidebar?target=webhook-key&automation=<folder>, copy the key and paste it there
 (it stays hidden)."**
 ```
-cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.1/build_bundle.py' && echo "163d23b403516074604e752c3fb733f49fd8338cc09d94d33280985a4d8542cd  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
+cd ~/Downloads && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.2/build_bundle.py' && echo "f8512467be432903a353f30608c774475ce2bd19271e3ffd83e1bfed471ad0c1  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/Downloads/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --owner-x-handle <owner> --sender-x-handle <sender> --owner-x-user-id <id> --relay-conversation-id <conv> --relay-all on|off --webhook-url '<url>' --webhook-key-prompt --open-windows
 ```
 
 **Read the output** (machine path: the JSON; paste path: ask "Did it end with "ok": true?"):
@@ -279,7 +279,7 @@ Settings > Privacy & Security > Automation > Google Chrome > Messages on.
 ### Step U. Existing install (upgrade in place)
 Ask nothing. Download the newest pinned build_bundle.py (the pinned release at the top of this skill)
 the same way, verify it, and run (perl alarm 300):
-`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.1/build_bundle.py' && echo "163d23b403516074604e752c3fb733f49fd8338cc09d94d33280985a4d8542cd  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
+`cd ~ && curl -fsSL -o imessage-relay-build_bundle.py 'https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.2/build_bundle.py' && echo "f8512467be432903a353f30608c774475ce2bd19271e3ffd83e1bfed471ad0c1  imessage-relay-build_bundle.py" | shasum -a 256 -c - && /usr/bin/python3 ~/imessage-relay-build_bundle.py ~/imessage-relay-src --no-tests --force && ~/imessage-relay-src/install.sh --brief && ~/.imessage-relay/relayctl setup --open-windows`
 A sha256 mismatch → refuse, exactly as in Step 5.
 The installer keeps config.json, roster.json and the watcher app with its Full Disk Access grant (it
 never rebuilds or re-signs it). The setup JSON shows what's already set. If a value is missing
@@ -343,14 +343,14 @@ never builds them itself; it only hands the payload to relay_post.py):
   one (v1.4.0) means the reply started with a name nobody on the relay list has and the Mac's Contacts had
   no single match (it lists up to 3 matching **names**, never numbers, or says it found none).
 - `{"type":"needs_confirm","reason":"new_contact","label","detail"}` (v1.4.0) → `detail` verbatim, e.g.
-  `❓ Austin isn't on your relay list yet. Reply yes within 2 min to text the Austin Robinson in your
-  Contacts (•••0177), or /add Austin <number>.` (name + last four digits only; no body). A card with several
+  `❓ Jordan isn't on your relay list yet. Reply yes within 2 min to text the Jordan Rivera in your
+  Contacts (•••0188), or /add Jordan <number>.` (name + last four digits only; no body). A card with several
   numbers lists them masked. On a plain `yes` (or `/yes`) the reply is sent without its name prefix and the
   person becomes a contact. **Since v1.4.1 every `needs_confirm` carries `detail`; render it verbatim** (all
   prompts now say "Reply yes within 2 min."). Without `detail`, render `❓ <core> Reply yes within 2 min.`
   Only **one** notice is posted per message: a Contacts prompt is never accompanied by "Who's this for?".
 - `{"type":"sent","label","note"}` (v1.4.1, optional `note`) → `→ <label> ✓ (<note>)` / `→ <label> ✓✓ (<note>)`,
-  e.g. `→ Austin Robinson ✓ (new contact, •••0177)` when an exact full-name Contacts match was sent without
+  e.g. `→ Jordan Rivera ✓ (new contact, •••0188)` when an exact full-name Contacts match was sent without
   asking (`confirmNewContacts exact-skip`, the default).
 - Host notifications that fail or time out (webhook slower than 12 s) are queued body-free on the Mac and
   re-posted by the watcher with the **same `id`** for up to 10 minutes, so dedupe on `id` as always.
@@ -444,8 +444,16 @@ A reply in the relay chat goes to:
      dictionary word (Will, May, Mark, Bill, Grace, Hope, …) so "Will, be there at 5" asks first. The
      explicit colon form (`Name:`) is taken as deliberate and sends without asking.
 3. **Otherwise, whoever wrote last**, if that was within `replyWindowMinutes` (120 by default).
+   v1.4.2: with relay-all this includes roster people (not only contacts); a bare reply to a roster-only
+   last texter is **always** confirmed first ("❓ Reply to <label>? Reply yes within 2 min.").
 With relay-all, "anyone" means contacts plus roster people who texted within `rosterDays`.
-The relay **sends nothing** and you post "Who's this for? Start with a name, like \"Sam: …\" or \"text Sam …\""
+
+**X Chat's native Reply (v1.4.2).** X now shows a reply as "Replied to <bot name>" with a preview of the
+quoted message. The extension reads that preview (or the replied-to message's id, when X exposes it) and
+the Mac routes to the label at its start ("<label>: …"). A quote that still can't be placed falls back to
+whoever wrote last and is **always** confirmed first; it never gets "Who's this for?" when one person
+clearly wrote last. The "Who's this for?" example is always the generic "Alex", never a real label.
+The relay **sends nothing** and you post "Who's this for? Start with a name, like \"Alex: …\" or \"text Alex …\""
 when:
 - nobody wrote within the window;
 - two contacts wrote within `ambiguousSeconds` (60) of each other;
@@ -464,6 +472,8 @@ asks only when the guess is shaky — the last texter was over 10 minutes ago, a
 within 15 minutes, or the target is a roster-only person under relay-all; `always` asks on every
 guessed reply; `off` never asks. When it asks, nothing is sent yet: reply **`yes`** (or `/yes`, `/yes <Name>`)
 within 2 minutes to send it, or `no` to drop it; otherwise you get "⌛ Not sent to <Name>" and nothing goes out.
+A confirmation carries the exact handle that was confirmed, so it always sends to that person even if
+someone else has texted in the meantime. Set it with `RC set confirmGuessed risky|always|off`.
 
 **Plain yes / no (v1.4.1).** While any confirmation is pending (a reply prompt, `/block`, `/add`), a reply
 that is only `yes`, `y`, `yep`, `yeah`, `ok`, `okay`, `send`, `send it` or `do it` (any case, punctuation or
@@ -475,13 +485,27 @@ prompt in the last 10 minutes, "ok" or "yes" is an ordinary reply.
 **New people from Contacts (`confirmNewContacts`, v1.4.1, default `exact-skip`).** A reply that starts with
 an **exact full name** (first + last, any case) matching exactly one Contacts card that has exactly one
 number or email is sent right away, the person is saved as a contact, and the owner gets
-"→ Austin Robinson ✓ (new contact, •••0177)". A first name only, several cards, several numbers on the card
+"→ Jordan Rivera ✓ (new contact, •••0188)". A first name only, several cards, several numbers on the card
 (listed masked) or a partial match still asks first. `RC set confirmNewContacts always` asks every time.
-(Matching is case-insensitive, but to be read as a name at all each word must start with a capital,
-"Austin Robinson:"; "Austin robinson:" or "austin robinson:" is ordinary text, unchanged since v1.4.0.) The `/yes`
-carries the exact handle that was confirmed, so it always sends to that person even if someone else has
-texted in the meantime. Set it with
-`RC set confirmGuessed risky|always|off`.
+**Smart name recognition (v1.4.2).** Case never matters: "jordan rivera: …", "Jordan Rivera, …",
+"text jordan rivera …" and "tell jordan …" all work. A leading `X:` / `X,` / `text X …` / `tell X …` is
+a **name only if** the relay list or the Mac's Contacts know it:
+- a relay-list label or name (any case) routes as before;
+- an exact full name on one Contacts card with one number/email follows `confirmNewContacts` (above);
+- a first name or a Contacts **nickname** that fits one card asks first;
+- a **close typo** ("jordn rivera:", "samanta:" for Samantha) asks "❓ Did you mean …? Reply yes within
+  2 min …" and is **never** sent unasked, whatever `confirmNewContacts` says;
+- several fits list the names (never numbers) and send nothing.
+Anything else ("Breakfast plan: eggs", "sounds good, see you", "text me later", an unknown "Zed Quark: hi")
+is **ordinary text** and routes like any reply without a name (quote, then whoever wrote last). If the
+Contacts check cannot run (watcher down), only a capitalized `Name:` prefix is held ("couldn't check");
+other text goes as ordinary text after a short (3 s) wait.
+
+**Reactions on a prompt (v1.4.2).** A 👍 on the pending "Reply yes within 2 min" prompt itself (the newest
+one, within its 2 minutes, from the owner's account in the relay chat) confirms it, exactly like `yes`; a 👎
+cancels it like `no`. A reaction already there when the chat tab loads, a reaction on any other message, or
+one after the window does nothing. The extension recognises the reaction from X Chat's page (an emoji drawn
+on the prompt bubble outside its text); if X changes that markup, type `yes` / `no` instead.
 
 **After a quiet-hours digest.** The first reply once a digest has been delivered must name a person
 (several people may have texted while the owner was away); a bare reply gets "Who's this for?" and the
@@ -642,7 +666,7 @@ LaunchAgent pointing at whatever applet it already runs. An early app that runs
 **only if the extension changed in this version**, the owner clicks the reload icon on the extension
 card **and then refreshes any open x.com chat tab (Cmd+R)** — reloading the extension disconnects its
 content script from already-open tabs, so replies sent in them before the refresh are missed.
-**v1.4.1 changes the extension** (a plain `yes`/`no` answers a reply prompt), **v1.4.0 changed it** (the popup
+**v1.4.2 changes the extension** (👍/👎 on a prompt), **v1.4.1 changed it** (a plain `yes`/`no` answers a reply prompt), **v1.4.0 changed it** (the popup
 wording for a Contacts confirmation), **v1.3.9 changed it**
 (X Chat's bubble times, now plain spans in the message text, are no
 longer appended to replies; the native host also strips them, so an old extension can't leak them), and
@@ -652,7 +676,7 @@ Until then `RC status` lists "the Chrome extension is still v…", and an old ex
 runs the Mac-side checks (it is never sent as a reply) but can't confirm the routine's report. Also
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
-prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0177)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
 
 ## Uninstall
 `cd ~/imessage-relay-src && ./uninstall.sh` (add `--keep-config` to keep contacts and the webhook key, `--keep-logs` to keep the log). It also

@@ -33,7 +33,7 @@ has the technical details. `tools/` holds the scripts that pack `bundle/` into `
 Each release lists the sha256 of its assets in the release notes. Check before running:
 
 ```sh
-curl -fsSL -o build_bundle.py https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.1/build_bundle.py
+curl -fsSL -o build_bundle.py https://github.com/PhillipHolland/imessage-relay/releases/download/v1.4.2/build_bundle.py
 shasum -a 256 build_bundle.py     # macOS (on Linux: sha256sum build_bundle.py)
 ```
 

@@ -9,7 +9,7 @@ from helpers import fresh, tmpdir, read_log, FakeClock, FakeRunner
 
 CONV = '1111-2222'
 PEOPLE = [  # (first, last, [(label, number)])
-    ('Austin', 'Robinson', [('_$!<Home>!$_', '(555) 555-0101'), ('_$!<Mobile>!$_', '(555) 555-0177')]),
+    ('Jordan', 'Rivera', [('_$!<Home>!$_', '(555) 555-0101'), ('_$!<Mobile>!$_', '(555) 555-0188')]),
     ('Sam', 'Lee', [('', '555-555-0141')]),
     ('Sam', 'Ortiz', [('iPhone', '555-555-0142')]),
     ('Mary Ann', 'Jones', [('', '555-555-0150')]),
@@ -82,7 +82,7 @@ class MultiWordNames(Base):
 
     def test_name_like_detection(self):
         u = self.m.rc.unknown_name_prefix
-        self.assertEqual(u('Austin Robinson: hey')[0], 'Austin Robinson')
+        self.assertEqual(u('Jordan Rivera: hey')[0], 'Jordan Rivera')
         self.assertEqual(u("Mary Ann O'Neil: hi")[0], "Mary Ann O'Neil")
         for t in ('Note: buy milk', 'ok: sure', 'Update: running late', 'FYI: x', 'meet at 5:30', 'a b c d: x',
                   'Breakfast plan for today: eggs'):
@@ -90,54 +90,54 @@ class MultiWordNames(Base):
 
     def test_unknown_name_never_falls_to_recent(self):
         self.watcher_up = False
-        r = self.send('Austin: hey there')
+        r = self.send('Jordan: hey there')
         self.assertTrue(r.get('needsTarget'), r)
         self.assertEqual(self.osa(), [])
 
 
 class NewContact(Base):
     def test_unique_full_name_with_two_numbers_asks_then_yes_sends(self):
-        r = self.send('Austin Robinson: hey there')
+        r = self.send('Jordan Rivera: hey there')
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual(r['reason'], 'new_contact')
-        self.assertEqual(r['handle'], '+15555550177')          # the mobile number, not home
+        self.assertEqual(r['handle'], '+15555550188')          # the mobile number, not home
         self.assertEqual(self.osa(), [])
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]
-        self.assertIn('Austin Robinson has 2 numbers', ev['detail'])   # v1.4.1: choices listed (masked)
-        self.assertIn('\u2022\u2022\u20220177 mobile', ev['detail'])
+        self.assertIn('Jordan Rivera has 2 numbers', ev['detail'])   # v1.4.1: choices listed (masked)
+        self.assertIn('\u2022\u2022\u20220188 mobile', ev['detail'])
         self.assertIn('\u2022\u2022\u20220101 home', ev['detail'])
         self.assertIn('Reply yes', ev['detail'])
-        self.assertNotIn('5550177', ev['detail'])              # masked
+        self.assertNotIn('5550188', ev['detail'])              # masked
         self.assertNotIn('hey there', json.dumps(ev))
         self.clock.t += 30
-        r = self.send('Austin Robinson: hey there', confirmed=True, handle='+15555550177')
+        r = self.send('Jordan Rivera: hey there', confirmed=True, handle='+15555550188')
         self.assertTrue(r['ok'], r)
         self.assertEqual(self.osa()[0][2], 'hey there')
-        self.assertEqual(self.osa()[0][3], '+15555550177')
+        self.assertEqual(self.osa()[0][3], '+15555550188')
         names = [c['name'] for c in self.cfg()['contacts']]
-        self.assertIn('Austin Robinson', names)
+        self.assertIn('Jordan Rivera', names)
         log = read_log()
         self.assertNotIn('hey there', log)
-        self.assertNotIn('Robinson', log)
-        self.assertNotIn('5550177', log)
+        self.assertNotIn('Rivera', log)
+        self.assertNotIn('5550188', log)
         # no Contacts answer left behind on disk
         self.assertFalse([n for n in os.listdir(self.m.watch.JOBS_DIR) if n.startswith('contacts')])
 
     def test_unique_first_name(self):
-        r = self.send('Austin: hey')
+        r = self.send('Jordan: hey')
         self.assertTrue(r.get('needsConfirm'), r)
-        self.assertEqual(r['label'], 'Austin Robinson')
+        self.assertEqual(r['label'], 'Jordan Rivera')
 
     def test_yes_after_window_refused(self):
-        self.send('Austin: hey')
+        self.send('Jordan: hey')
         self.clock.t += 200
-        r = self.send('Austin: hey', confirmed=True, handle='+15555550177')
+        r = self.send('Jordan: hey', confirmed=True, handle='+15555550188')
         self.assertFalse(r['ok'])
         self.assertEqual(self.osa(), [])
 
     def test_yes_with_other_handle_refused(self):
-        self.send('Austin: hey')
-        r = self.send('Austin: hey', confirmed=True, handle='+15555550141')
+        self.send('Jordan: hey')
+        r = self.send('Jordan: hey', confirmed=True, handle='+15555550141')
         self.assertFalse(r['ok'])
         self.assertEqual(self.osa(), [])
 
@@ -150,16 +150,16 @@ class NewContact(Base):
         self.assertNotIn('555', ev['detail'])
         self.assertEqual(self.osa(), [])
 
-    def test_no_match(self):
+    def test_no_match_is_ordinary_text(self):
+        # v1.4.2: a prefix nobody knows (relay list or Contacts) is not a name: the text goes as is
         r = self.send('Zed Quark: hi')
-        self.assertTrue(r.get('needsTarget'), r)
-        ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
-        self.assertIn('didn\u2019t find', ev['detail'])
-        self.assertIn('/add Zed <number>', ev['detail'])
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(self.osa()[0][2], 'Zed Quark: hi')
+        self.assertFalse([p for p, _ in self.posts if p['type'] in ('needs_target', 'needs_confirm')])
 
     def test_watcher_down(self):
         self.watcher_up = False
-        r = self.send('Austin Robinson: hi')
+        r = self.send('Jordan Rivera: hi')
         self.assertTrue(r.get('needsTarget'), r)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
         self.assertIn('couldn\u2019t check', ev['detail'])
@@ -167,23 +167,24 @@ class NewContact(Base):
     def test_owner_never_offered(self):
         make_ab(self.tmp, [('Owen', 'Owner', [('mobile', '555-555-0199')])])
         r = self.send('Owen Owner: hi')
-        self.assertTrue(r.get('needsTarget'), r)
+        self.assertNotIn('+15555550199', [c[3] for c in self.osa()])   # never to the owner's own number
+        self.assertFalse(r.get('needsConfirm'))
 
     def test_dry_run_adds_nothing(self):
         self.raw['dryRun'] = True
         self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, self.raw)
-        self.send('Austin: hey')
-        r = self.send('Austin: hey', confirmed=True, handle='+15555550177')
+        self.send('Jordan: hey')
+        r = self.send('Jordan: hey', confirmed=True, handle='+15555550188')
         self.assertTrue(r['ok'] and r['dryRun'], r)
         self.assertEqual([c['name'] for c in self.cfg()['contacts']], ['Test Contact'])
 
     def test_add_with_number(self):
-        r = self.send('/add Austin +1 (555) 555-0177')
+        r = self.send('/add Jordan +1 (555) 555-0188')
         self.assertTrue(r['ok'], r)
-        c = [c for c in self.cfg()['contacts'] if c['name'] == 'Austin']
-        self.assertEqual(c[0]['handle'], '+15555550177')
+        c = [c for c in self.cfg()['contacts'] if c['name'] == 'Jordan']
+        self.assertEqual(c[0]['handle'], '+15555550188')
         self.assertEqual(self.osa(), [])
-        r = self.send('Austin: hi')
+        r = self.send('Jordan: hi')
         self.assertTrue(r['ok'], r)
         self.assertEqual(self.osa()[0][2], 'hi')
 
@@ -230,9 +231,9 @@ class RoutineNewContact(unittest.TestCase):
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'routine'))
         import relay_post
-        out = relay_post.format_event({'type': 'needs_confirm', 'reason': 'new_contact', 'label': 'Austin Robinson',
-                                       'detail': '\u2753 Austin isn\u2019t on your relay list yet.', 'id': 'e1'})
-        self.assertIn('Austin isn', out['lines'][0]['text'])
+        out = relay_post.format_event({'type': 'needs_confirm', 'reason': 'new_contact', 'label': 'Jordan Rivera',
+                                       'detail': '\u2753 Jordan isn\u2019t on your relay list yet.', 'id': 'e1'})
+        self.assertIn('Jordan isn', out['lines'][0]['text'])
 
 
 if __name__ == '__main__':
