@@ -1475,9 +1475,10 @@ class Watcher:
                 cfg = self.load_config()
             except Exception as e:
                 rc.log_event('watch_error', error=type(e).__name__)
-            # v1.4.13 latency: wait in 0.25 s steps. A Contacts / group job is answered within ~0.25 s (was up
-            # to 1 s); a pending delivery proof is checked every ~1 s (was 2 s); and a change to chat.db
-            # (or its -wal) ends the wait at once, so a new text relays in ~1 s instead of up to pollSeconds.
+            # v1.4.13 waits in 0.25 s steps so a Contacts / group job is answered within ~0.25 s and a
+            # pending delivery proof is checked every ~1 s. v1.4.19: notice a chat.db / -wal change on the
+            # next step. The old gate (i >= 3) ignored the first second, and Messages rewrites the -wal
+            # often enough that the loop restarted every second — so a new text waited ~1 s, not ~0.25 s.
             sig = self.db_signature()
             steps = int((cfg or rc.DEFAULT_CONFIG)['pollSeconds'] / LOOP_STEP_S)
             for i in range(steps):
@@ -1494,8 +1495,8 @@ class Watcher:
                         self.process_jobs(self.load_config())
                     except Exception as e:
                         rc.log_event('job_error', error=type(e).__name__)
-                if i >= 3 and sig is not None and self.db_signature() != sig:
-                    break                              # chat.db changed: tick now (at most ~1 tick per second)
+                if sig is not None and self.db_signature() != sig:
+                    break                              # chat.db changed: tick now (at most one tick per step)
         rc.log_event('watch_stop')
 
 

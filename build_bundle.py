@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.18, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.19, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=a5119a908fd5e1d0f32513972534198edef2acd48fb7f49d6e3859347cafd151 nl=1
-# iMessage Relay v1.4.18
+@@@@ FILE README.md mode=644 sha256=74812268dff7fe4a160df980c78a199d83d4ee534831c8a63d463ddea731b681 nl=1
+# iMessage Relay v1.4.19
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,14 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.19 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new text is noticed on the
+  next 0.25 s step. v1.4.13 ignored the first second after each tick, and Messages rewrites chat.db
+  often enough that the wait was ~1 s. The routine key cache now lasts 24 h, so a warm `relay_post.py`
+  returns `send` on the first call instead of asking for a key fetch every 6 h. Direct post is unchanged
+  and still off. The undo window was already `undoSeconds` (default 5, range 0–10). A shorter routine
+  prompt is proposed in `docs/ROUTINE_PROMPT_FAST.md`; the live template is not changed. Replace
+  `relay_post.py` on the bot for the longer cache, then re-run `./install.sh` on the Mac (the watcher
+  app is not rebuilt).
 - v1.4.18 (Mac helper + routine relay_post.py; extension stays 1.4.16): opt-in direct post. With
   `relayctl xpost on`, the Mac encrypts inbound text and posts it to the relay chat in about 1–2 seconds.
   The routine stays the fallback. Default off, so an existing install behaves as v1.4.17 until the owner
@@ -175,7 +183,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.18)
+## Limits (v1.4.19)
 - Direct post is opt-in and text-only. Photos, reactions, and quiet-hours digests stay on the webhook.
   It is off until `relayctl xpost on`.
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
@@ -3923,10 +3931,10 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=bf3886b2ee656008ab91b57a63f31c6221534f32962a2d276b39f931d1d08a78 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=3286ccc204c73344a4bf6a367c3364d97f1f6dc5fc1e830969e79fc4779c5467 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.18.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.19.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -5662,7 +5670,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=4791b5b0d3d9a568cc06d17bdc753eadc32dfb1c00bbec0ec595d216287cf862 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=82494d016e09be5869b4c4dc4078c4cdbd13f676cd563f49a1680a2ac0aff01d nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -7140,9 +7148,10 @@ class Watcher:
                 cfg = self.load_config()
             except Exception as e:
                 rc.log_event('watch_error', error=type(e).__name__)
-            # v1.4.13 latency: wait in 0.25 s steps. A Contacts / group job is answered within ~0.25 s (was up
-            # to 1 s); a pending delivery proof is checked every ~1 s (was 2 s); and a change to chat.db
-            # (or its -wal) ends the wait at once, so a new text relays in ~1 s instead of up to pollSeconds.
+            # v1.4.13 waits in 0.25 s steps so a Contacts / group job is answered within ~0.25 s and a
+            # pending delivery proof is checked every ~1 s. v1.4.19: notice a chat.db / -wal change on the
+            # next step. The old gate (i >= 3) ignored the first second, and Messages rewrites the -wal
+            # often enough that the loop restarted every second — so a new text waited ~1 s, not ~0.25 s.
             sig = self.db_signature()
             steps = int((cfg or rc.DEFAULT_CONFIG)['pollSeconds'] / LOOP_STEP_S)
             for i in range(steps):
@@ -7159,8 +7168,8 @@ class Watcher:
                         self.process_jobs(self.load_config())
                     except Exception as e:
                         rc.log_event('job_error', error=type(e).__name__)
-                if i >= 3 and sig is not None and self.db_signature() != sig:
-                    break                              # chat.db changed: tick now (at most ~1 tick per second)
+                if sig is not None and self.db_signature() != sig:
+                    break                              # chat.db changed: tick now (at most one tick per step)
         rc.log_event('watch_stop')
 
 
@@ -7170,7 +7179,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=33880c3beaeb6fc581de725a48108ebbe40b248ccd0c789fcaa87c3f67b27289 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=42ded33eaa0bd77b2ad0860b49af0803f48efef8ccae9f396cc72ff471f6b103 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7196,8 +7205,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.18'
-EXTENSION_VERSION = '1.4.16'   # v1.4.18 does not change the extension (status must not nag a reload)
+VERSION = '1.4.19'
+EXTENSION_VERSION = '1.4.16'   # v1.4.19 does not change the extension (status must not nag a reload)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -12835,9 +12844,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=69638165a587af1e4e86da0b306f50b927bb5ff79acc7d34822e28cf245ca98e nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=008d223c28d1641e5abbfe0b915deb78c9aa0542332b11e9a5dcb0c08d68a4b7 nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.18 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.19 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -12853,7 +12862,7 @@ What it does, all in one process:
   3. Encrypt each line for the relay conversation with xchat_lite's session-encrypt, which unwraps the
      conversation key from conversation_key_events, passing the text to xchat_lite on STDIN — never on
      argv, never to disk. v1.4.5: the key events and the public signing keys (key material only, never
-     message events or bodies) are cached in ~/.imessage-relay-routine/xchat_keys.json (mode 600, 6 h), so
+     message events or bodies) are cached in ~/.imessage-relay-routine/xchat_keys.json (mode 600, 24 h), so
      the routine fetches nothing from X on most runs. With no usable cache the helper answers
      {"action":"fetch","need":[...]} and the routine fetches those and runs it again. A `batch` event
      (several texts from one watcher tick) becomes one X message per text in a single run.
@@ -12969,7 +12978,7 @@ TAGS = {'spam': '\U0001f6ab Spam \u00b7 ', 'promotion': '\U0001f3f7\ufe0f Promo 
 BATCH_MAX = 20
 DIGEST_MAX_CHARS = 9000
 KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
-KEY_CACHE_TTL_S = 6 * 3600          # after 6 h the routine fetches keys again (a rotated key heals by then)
+KEY_CACHE_TTL_S = 24 * 3600         # v1.4.19: was 6 h. A failed encrypt still deletes the cache and asks for a fetch at once
 KEY_CACHE_MAX_BYTES = 512 * 1024
 NEED_KEYS = ['conversation_key_events', 'signing_keys']
 
@@ -22895,6 +22904,62 @@ class InstallGuards(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
+@@@@ FILE tests/py/test_v1419_speed.py mode=644 sha256=c6d3995df384308994a8143e7423c62bf1120a5dcf0713ab7f076619258c668d nl=1
+"""v1.4.19: the watcher notices a chat.db change on the next 0.25 s step, and the routine key
+cache lasts 24 h. No live messages. Fictional names only."""
+import os
+import signal
+import sys
+import unittest
+
+from helpers import fresh, tmpdir
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'routine'))
+import relay_post as rp  # noqa: E402
+
+
+class Wake(unittest.TestCase):
+    def test_a_db_change_wakes_on_the_next_step(self):
+        """Messages rewrites chat.db often. The wait must not ignore the first second."""
+        m = fresh(tmpdir())
+        w = m.watch.Watcher(db_path=os.path.join(tmpdir(), 'absent.db'))
+        sleeps, ticks = [], []
+        n = {'i': 0}
+
+        def sig():
+            n['i'] += 1
+            return (n['i'],)
+
+        w.db_signature = sig
+        w.tick = lambda: ticks.append(round(sum(sleeps), 2))
+
+        class Stop(Exception):
+            pass
+
+        def sl(s):
+            sleeps.append(s)
+            if sum(sleeps) >= 1.0:
+                raise Stop()
+
+        w.sleeper = sl
+        old = signal.getsignal(signal.SIGTERM)
+        try:
+            w.run_forever()
+        except Stop:
+            pass
+        finally:
+            signal.signal(signal.SIGTERM, old)
+        # 0, then a tick after every 0.25 s step. The old gate produced only the tick at 0 before 1 s.
+        self.assertGreaterEqual(len(ticks), 4, ticks)
+        self.assertEqual(ticks[1], 0.25)
+
+    def test_key_cache_lasts_a_day(self):
+        self.assertEqual(rp.KEY_CACHE_TTL_S, 24 * 3600)
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
 @@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=c445fb291fdea4cdc89b2bd5f7ab91094df5a633c64ffa6e67098166e2e4446c nl=1
 """v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),
 and an exact full-name match to one Contacts card with one number sends without asking."""
@@ -24970,7 +25035,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=54432f60ebddc2f72b2102e14e3249a3dd23e7d02e9ebf2df306f767d1d9af07 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=52521efd506140e70cdefcdebd6dfc14f69d0b7cc7ed875f1a0001487fe6eeba nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -25163,7 +25228,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.18')
+        self.assertEqual(m.rc.VERSION, '1.4.19')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

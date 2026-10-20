@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.18 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.19 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -15,7 +15,7 @@ What it does, all in one process:
   3. Encrypt each line for the relay conversation with xchat_lite's session-encrypt, which unwraps the
      conversation key from conversation_key_events, passing the text to xchat_lite on STDIN — never on
      argv, never to disk. v1.4.5: the key events and the public signing keys (key material only, never
-     message events or bodies) are cached in ~/.imessage-relay-routine/xchat_keys.json (mode 600, 6 h), so
+     message events or bodies) are cached in ~/.imessage-relay-routine/xchat_keys.json (mode 600, 24 h), so
      the routine fetches nothing from X on most runs. With no usable cache the helper answers
      {"action":"fetch","need":[...]} and the routine fetches those and runs it again. A `batch` event
      (several texts from one watcher tick) becomes one X message per text in a single run.
@@ -131,7 +131,7 @@ TAGS = {'spam': '\U0001f6ab Spam \u00b7 ', 'promotion': '\U0001f3f7\ufe0f Promo 
 BATCH_MAX = 20
 DIGEST_MAX_CHARS = 9000
 KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
-KEY_CACHE_TTL_S = 6 * 3600          # after 6 h the routine fetches keys again (a rotated key heals by then)
+KEY_CACHE_TTL_S = 24 * 3600         # v1.4.19: was 6 h. A failed encrypt still deletes the cache and asks for a fetch at once
 KEY_CACHE_MAX_BYTES = 512 * 1024
 NEED_KEYS = ['conversation_key_events', 'signing_keys']
 

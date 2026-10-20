@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.18)
+# iMessage Relay: operator reference (v1.4.19)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -725,7 +725,8 @@ read from the request file and passed to xchat_lite on **stdin** — never on ar
 is removed right after it is read.
 - **Key cache (v1.4.5, for speed).** After a run that was given `conversation_key_events` and
   `signing_keys`, the helper saves just those two (wrapped keys and public signing keys, never message
-  events or bodies) in `~/.imessage-relay-routine/xchat_keys.json` (mode 600, one conversation, 6 hours).
+  events or bodies) in `~/.imessage-relay-routine/xchat_keys.json` (mode 600, one conversation, 24 hours
+  as of v1.4.19; it was 6).
   Later runs need no X fetch at all. With no fresh cache, or if encrypting with the cached keys fails
   (the cache is then deleted), it answers `{"action":"fetch","need":[…]}` and the routine fetches and runs
   again. `relay_post.py --forget-keys` clears it. A threaded confirmation (`reply_to`) needs the fetched
@@ -866,6 +867,7 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.19**: speed on the current path (Mac helper + routine relay_post.py; the extension stays 1.4.16, so no reload). The watcher notices a chat.db change on the next 0.25 s step instead of ignoring the first second, which was ~1 s while Messages kept rewriting the database. The routine key cache lasts 24 h, so a warm run returns `send` on the first call; a failed encrypt still deletes the cache and asks for a fetch immediately. Direct post is unchanged and stays off. The undo window was already `undoSeconds` (default 5, range 0–10, `relayctl set undoSeconds N`). A shorter routine prompt is proposed at `docs/ROUTINE_PROMPT_FAST.md`; the template in this document is the live one and is not replaced. **Update relay_post.py on your side for the 24 h cache**, then re-run `./install.sh` (the watcher app is not rebuilt).
 **v1.4.18**: opt-in direct post (Mac helper + routine relay_post.py; the extension stays 1.4.16, so no
 reload from v1.4.16). Default off: until `relayctl xpost on`, inbound texts still take the webhook path.
 When it is on, the Mac posts text straight to the relay chat; photos, reactions, and quiet-hours digests

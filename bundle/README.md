@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.18
+# iMessage Relay v1.4.19
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,6 +22,14 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.19 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new text is noticed on the
+  next 0.25 s step. v1.4.13 ignored the first second after each tick, and Messages rewrites chat.db
+  often enough that the wait was ~1 s. The routine key cache now lasts 24 h, so a warm `relay_post.py`
+  returns `send` on the first call instead of asking for a key fetch every 6 h. Direct post is unchanged
+  and still off. The undo window was already `undoSeconds` (default 5, range 0–10). A shorter routine
+  prompt is proposed in `docs/ROUTINE_PROMPT_FAST.md`; the live template is not changed. Replace
+  `relay_post.py` on the bot for the longer cache, then re-run `./install.sh` on the Mac (the watcher
+  app is not rebuilt).
 - v1.4.18 (Mac helper + routine relay_post.py; extension stays 1.4.16): opt-in direct post. With
   `relayctl xpost on`, the Mac encrypts inbound text and posts it to the relay chat in about 1–2 seconds.
   The routine stays the fallback. Default off, so an existing install behaves as v1.4.17 until the owner
@@ -156,7 +164,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.18)
+## Limits (v1.4.19)
 - Direct post is opt-in and text-only. Photos, reactions, and quiet-hours digests stay on the webhook.
   It is off until `relayctl xpost on`.
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
