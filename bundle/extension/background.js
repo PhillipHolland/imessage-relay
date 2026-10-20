@@ -424,6 +424,45 @@ async function uploadMedia(uuid, count, src) {
   return { atts, skipped };
 }
 
+// v1.4.27: a photo the host would not route yet (needs a name) stays for a short window and rides on
+// the next text in that chat. The window is not the 2-minute prompt: a later unrelated text must not
+// pick the photo up. When it expires, the bytes are discarded and the chat is told.
+const PHOTO_PARK_MS = (typeof IMR_PHOTO_PARK_MS === 'number' && IMR_PHOTO_PARK_MS > 0) ? IMR_PHOTO_PARK_MS : 20000;
+let photoPark = null;
+function dropPark(p, warn) {
+  if (!p) return;
+  const ids = (p.attachments || []).map(a => String((a && a.uploadId) || '')).filter(Boolean);
+  Promise.all(ids.map(id => {
+    try { return chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId: id }); }
+    catch (e) { return null; }
+  })).then(() => {
+    if (!warn) return null;
+    try { return chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_miss' }); }
+    catch (e) { return null; }
+  }).catch(() => {});
+}
+function parkUploads(conversationId, attachments) {
+  const prev = photoPark;
+  const at = Date.now();
+  if (prev && prev.timer) clearTimeout(prev.timer);
+  photoPark = { conversationId: String(conversationId || ''), attachments: attachments.slice(), at };
+  photoPark.timer = setTimeout(() => {
+    if (!photoPark || photoPark.at !== at) return;
+    const p = photoPark;
+    photoPark = null;
+    dropPark(p, true);
+  }, PHOTO_PARK_MS);
+  if (prev) dropPark(prev, true);
+}
+function takeParked(conversationId) {
+  if (!photoPark || photoPark.conversationId !== String(conversationId || '')) return null;
+  const p = photoPark;
+  if (p.timer) clearTimeout(p.timer);
+  photoPark = null;
+  if (Date.now() - p.at > PHOTO_PARK_MS) { dropPark(p, true); return null; }
+  return p.attachments;
+}
+
 function randomTestId() {
   const b = new Uint8Array(6);
   try { crypto.getRandomValues(b); } catch (e) { for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256); }
@@ -574,6 +613,12 @@ async function handleItem(item, src) {
   if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
   if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
   if (item.cards) payload.cards = item.cards;
+  if (Number(item.mediaMiss) > 0 && !(Number(item.mediaCount) > 0)) payload.attachmentsSkipped = 1;
+  // v1.4.27: a photo parked on "who is this for?" rides on this text, including a preflight prompt.
+  if (!(Number(item.mediaCount) > 0) && !bareConfirmWord(item.text) && !/^\s*\//.test(String(item.text || ''))) {
+    const parked = takeParked(item.conversationId);
+    if (parked && parked.length) payload.attachments = parked;
+  }
   let res = null, status, detail, viaPreflight = false;
   const undoMs = Math.max(0, Math.min(10, Number(cfg.undoSeconds) || 0)) * 1000;
   if (undoMs && xUuid && src && !/^\s*(\/|relay:)/i.test(String(item.text || ''))) {
@@ -592,7 +637,12 @@ async function handleItem(item, src) {
         undoP.then(async u => {             // 🗑️ during the window still cancels the held reply behind a prompt
           if (!(u && u.trashed)) return;
           const g = await getPendingGuess();
-          if (g && g.xUuid === xUuid) await clearPendingGuess();
+          if (g && g.xUuid === xUuid) {
+            for (const a of (g.attachments || [])) {
+              try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId: String(a.uploadId || '') }); } catch (e) { /* host down */ }
+            }
+            await clearPendingGuess();
+          }
           await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
         }).catch(() => {});
       } else if (pre && pre.held) {
@@ -603,6 +653,9 @@ async function handleItem(item, src) {
     if (!viaPreflight) {
       const u = await undoP;
       if (u && u.trashed) {
+        for (const a of (payload.attachments || [])) {
+          try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId: String(a.uploadId || '') }); } catch (e) { /* host down */ }
+        }
         await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
         try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
         await ackTab(src);
@@ -619,6 +672,9 @@ async function handleItem(item, src) {
       if (up.atts.length) payload.attachments = up.atts;
       if (up.skipped) payload.attachmentsSkipped = up.skipped;
     } else payload.attachmentsSkipped = Math.min(10, Number(item.mediaCount));
+  }
+  if (!viaPreflight && Number(item.mediaMiss) > 0 && !(payload.attachments && payload.attachments.length) && !(Number(payload.attachmentsSkipped) > 0)) {
+    payload.attachmentsSkipped = 1;   // v1.4.27: the photo was on the bubble and could not be read
   }
   if (!viaPreflight) console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
                                                       attachments: (payload.attachments || []).length });
@@ -641,7 +697,10 @@ async function handleItem(item, src) {
         ? 'send to ' + (res.label || 'them') + '? reply yes within 2 min'
         : 'reply to ' + (res.label || 'them') + '? reply yes within 2 min';
     }
-    else if (res.needsTarget) { status = 'needs-name'; detail = res.error || "Who's this for? Start with a name."; }
+    else if (res.needsTarget) {
+      status = 'needs-name'; detail = res.error || "Who's this for? Start with a name.";
+      if (payload.attachments && payload.attachments.length) parkUploads(item.conversationId, payload.attachments);
+    }
     else if (!res.ok) { status = 'refused'; detail = res.error || 'host refused'; }
     else if (res.skipped) { status = 'skipped-by-host'; detail = res.skipped; }
     else if (res.dryRun) { status = 'dry-run'; detail = 'host logged it, nothing sent'; }
@@ -732,6 +791,7 @@ function sanitizeItem(raw) {
   if (Number.isInteger(cc) && cc > 0) out.cards = Math.min(5, cc);           // v1.4.6: shared post / link cards (count)
   const mc = Number(raw.mediaCount);
   if (Number.isInteger(mc) && mc > 0) out.mediaCount = Math.min(10, mc);   // v1.4.6: how many photos, nothing else
+  if (Number(raw.mediaMiss) > 0) out.mediaMiss = 1;                         // v1.4.27: his photo could not be read
   if (raw.refuse) { out.refuse = String(raw.refuse).slice(0, 40); out.textLength = Number(raw.textLength) || 0; out.limit = Number(raw.limit) || 4000; }
   if (raw.youSent === true) out.youSent = true;
   if (typeof raw.quoteLabel === 'string' && !/[\r\n]/.test(raw.quoteLabel)) {
@@ -773,6 +833,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.signal.status === 'wrong_account') setWrongAccount(true).catch(() => {});
     else if (msg.signal.status === 'account_ok') setWrongAccount(false).catch(() => {});
     else if (msg.signal.status === 'unacked') handleUnacked(msg.signal).catch(() => {});
+    else if (msg.signal.status === 'photo_miss') {
+      try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_miss' }); } catch (e) { /* host down */ }
+    }
     return false;
   }
   if (msg.type === 'relay-ui-tick' && sender.tab) {   // v1.4.6: pick up queued reactions (ids only)

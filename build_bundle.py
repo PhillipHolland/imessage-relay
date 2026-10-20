@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.26, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.27, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=4963760ac82ceea2b88ff6ea4e71cd86a03d05c49e55c044e77e8e35b9349e43 nl=1
-# iMessage Relay v1.4.26
+@@@@ FILE README.md mode=644 sha256=66b4e485414d1435d61533f714fbd30d701ab2ff25f12972fde269a15e387b0c nl=1
+# iMessage Relay v1.4.27
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.27 (Chrome extension 1.4.27 + Mac helper; `relay_post.py` does not change): a photo you attach in the relay chat is sent to the same person as the text. A caption in the same bubble goes with it. A photo alone pairs with the next text within about 20 seconds, or follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.26 (Chrome extension 1.4.26 + Mac helper; `relay_post.py` does not change): a ✅ on your own sent message is placed from the hover tray. The "+" opens the emoji picker, and a twemoji chip counts as placed. A background or unfocused X Chat tab is injected again after the extension reloads. If that script is not running, or a fresh self-send is not picked up, the chat posts the reload warning instead of staying silent. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.25 (Mac helper and installer only; the extension stays 1.4.24, so no reload; `relay_post.py` does not change): the test suite no longer clears Full Disk Access. A test uninstall was resetting that grant for the live watcher, and a test install could compile a second app with the same bundle id. Tests use a test bundle id in a temp directory, or they skip the compile. `install.sh` will not rebuild or re-sign the live app unless `--rebuild-watcher-app` is set. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.24 (Chrome extension 1.4.24 + Mac helper; `relay_post.py` does not change): a native Reply in the relay chat gets a send or a visible reason. Open x.com tabs are injected again after the extension reloads, so Cmd+R is no longer required for the content script to attach. A quote that is only the message body (no "Name:" prefix) goes to the sender that body was relayed from, or to the one name in the 💬 header above that bubble. Two matches still ask who it is for. If the Mac does not answer a typed send within 10 seconds, the chat says to reload X Chat and retype. A ✅ on the sent message is the confirmation; `→ name ✓✓` is posted only when that reaction does not land. A delivery failure still warns. Reload the extension (it asks for a scripting permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -190,7 +191,8 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.26)
+## Limits (v1.4.27)
+- A photo you attach is sent with its caption, or with the next text within about 20 seconds. A photo alone follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages.
 - A native Reply that quotes only the message body goes to that sender when one person sent it, or when the 💬 header above that bubble names one person. Two matches ask who it is for.
 - A typed reply that gets no answer from the Mac within 10 seconds says to reload X Chat and retype. A background X Chat tab is injected again after the extension reloads. If that script is missing, or a fresh self-send is not picked up, the same warning is posted. A ✅ on the sent message is the confirmation. `→ name ✓✓` is posted only when that reaction does not land. A failed delivery still warns.
 - A lone emoji used as a native Reply to a contact's text is sent to that contact. An emoji that does not quote a contact, within 10 minutes of a prompt, is still only a prompt answer.
@@ -1339,7 +1341,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=d7b442e699056da3ddafa75e58d3ed997d4c31d3f651eee0e3ea2f49462b661c nl=1
+@@@@ FILE extension/background.js mode=644 sha256=0aa519748207809f2ecfac9a42d69ed82fff851562bfd8823db962e4d7aa544f nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1766,6 +1768,45 @@ async function uploadMedia(uuid, count, src) {
   return { atts, skipped };
 }
 
+// v1.4.27: a photo the host would not route yet (needs a name) stays for a short window and rides on
+// the next text in that chat. The window is not the 2-minute prompt: a later unrelated text must not
+// pick the photo up. When it expires, the bytes are discarded and the chat is told.
+const PHOTO_PARK_MS = (typeof IMR_PHOTO_PARK_MS === 'number' && IMR_PHOTO_PARK_MS > 0) ? IMR_PHOTO_PARK_MS : 20000;
+let photoPark = null;
+function dropPark(p, warn) {
+  if (!p) return;
+  const ids = (p.attachments || []).map(a => String((a && a.uploadId) || '')).filter(Boolean);
+  Promise.all(ids.map(id => {
+    try { return chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId: id }); }
+    catch (e) { return null; }
+  })).then(() => {
+    if (!warn) return null;
+    try { return chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_miss' }); }
+    catch (e) { return null; }
+  }).catch(() => {});
+}
+function parkUploads(conversationId, attachments) {
+  const prev = photoPark;
+  const at = Date.now();
+  if (prev && prev.timer) clearTimeout(prev.timer);
+  photoPark = { conversationId: String(conversationId || ''), attachments: attachments.slice(), at };
+  photoPark.timer = setTimeout(() => {
+    if (!photoPark || photoPark.at !== at) return;
+    const p = photoPark;
+    photoPark = null;
+    dropPark(p, true);
+  }, PHOTO_PARK_MS);
+  if (prev) dropPark(prev, true);
+}
+function takeParked(conversationId) {
+  if (!photoPark || photoPark.conversationId !== String(conversationId || '')) return null;
+  const p = photoPark;
+  if (p.timer) clearTimeout(p.timer);
+  photoPark = null;
+  if (Date.now() - p.at > PHOTO_PARK_MS) { dropPark(p, true); return null; }
+  return p.attachments;
+}
+
 function randomTestId() {
   const b = new Uint8Array(6);
   try { crypto.getRandomValues(b); } catch (e) { for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256); }
@@ -1916,6 +1957,12 @@ async function handleItem(item, src) {
   if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
   if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
   if (item.cards) payload.cards = item.cards;
+  if (Number(item.mediaMiss) > 0 && !(Number(item.mediaCount) > 0)) payload.attachmentsSkipped = 1;
+  // v1.4.27: a photo parked on "who is this for?" rides on this text, including a preflight prompt.
+  if (!(Number(item.mediaCount) > 0) && !bareConfirmWord(item.text) && !/^\s*\//.test(String(item.text || ''))) {
+    const parked = takeParked(item.conversationId);
+    if (parked && parked.length) payload.attachments = parked;
+  }
   let res = null, status, detail, viaPreflight = false;
   const undoMs = Math.max(0, Math.min(10, Number(cfg.undoSeconds) || 0)) * 1000;
   if (undoMs && xUuid && src && !/^\s*(\/|relay:)/i.test(String(item.text || ''))) {
@@ -1934,7 +1981,12 @@ async function handleItem(item, src) {
         undoP.then(async u => {             // 🗑️ during the window still cancels the held reply behind a prompt
           if (!(u && u.trashed)) return;
           const g = await getPendingGuess();
-          if (g && g.xUuid === xUuid) await clearPendingGuess();
+          if (g && g.xUuid === xUuid) {
+            for (const a of (g.attachments || [])) {
+              try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId: String(a.uploadId || '') }); } catch (e) { /* host down */ }
+            }
+            await clearPendingGuess();
+          }
           await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
         }).catch(() => {});
       } else if (pre && pre.held) {
@@ -1945,6 +1997,9 @@ async function handleItem(item, src) {
     if (!viaPreflight) {
       const u = await undoP;
       if (u && u.trashed) {
+        for (const a of (payload.attachments || [])) {
+          try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'attach_discard', uploadId: String(a.uploadId || '') }); } catch (e) { /* host down */ }
+        }
         await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
         try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
         await ackTab(src);
@@ -1961,6 +2016,9 @@ async function handleItem(item, src) {
       if (up.atts.length) payload.attachments = up.atts;
       if (up.skipped) payload.attachmentsSkipped = up.skipped;
     } else payload.attachmentsSkipped = Math.min(10, Number(item.mediaCount));
+  }
+  if (!viaPreflight && Number(item.mediaMiss) > 0 && !(payload.attachments && payload.attachments.length) && !(Number(payload.attachmentsSkipped) > 0)) {
+    payload.attachmentsSkipped = 1;   // v1.4.27: the photo was on the bubble and could not be read
   }
   if (!viaPreflight) console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
                                                       attachments: (payload.attachments || []).length });
@@ -1983,7 +2041,10 @@ async function handleItem(item, src) {
         ? 'send to ' + (res.label || 'them') + '? reply yes within 2 min'
         : 'reply to ' + (res.label || 'them') + '? reply yes within 2 min';
     }
-    else if (res.needsTarget) { status = 'needs-name'; detail = res.error || "Who's this for? Start with a name."; }
+    else if (res.needsTarget) {
+      status = 'needs-name'; detail = res.error || "Who's this for? Start with a name.";
+      if (payload.attachments && payload.attachments.length) parkUploads(item.conversationId, payload.attachments);
+    }
     else if (!res.ok) { status = 'refused'; detail = res.error || 'host refused'; }
     else if (res.skipped) { status = 'skipped-by-host'; detail = res.skipped; }
     else if (res.dryRun) { status = 'dry-run'; detail = 'host logged it, nothing sent'; }
@@ -2074,6 +2135,7 @@ function sanitizeItem(raw) {
   if (Number.isInteger(cc) && cc > 0) out.cards = Math.min(5, cc);           // v1.4.6: shared post / link cards (count)
   const mc = Number(raw.mediaCount);
   if (Number.isInteger(mc) && mc > 0) out.mediaCount = Math.min(10, mc);   // v1.4.6: how many photos, nothing else
+  if (Number(raw.mediaMiss) > 0) out.mediaMiss = 1;                         // v1.4.27: his photo could not be read
   if (raw.refuse) { out.refuse = String(raw.refuse).slice(0, 40); out.textLength = Number(raw.textLength) || 0; out.limit = Number(raw.limit) || 4000; }
   if (raw.youSent === true) out.youSent = true;
   if (typeof raw.quoteLabel === 'string' && !/[\r\n]/.test(raw.quoteLabel)) {
@@ -2115,6 +2177,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.signal.status === 'wrong_account') setWrongAccount(true).catch(() => {});
     else if (msg.signal.status === 'account_ok') setWrongAccount(false).catch(() => {});
     else if (msg.signal.status === 'unacked') handleUnacked(msg.signal).catch(() => {});
+    else if (msg.signal.status === 'photo_miss') {
+      try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_miss' }); } catch (e) { /* host down */ }
+    }
     return false;
   }
   if (msg.type === 'relay-ui-tick' && sender.tab) {   // v1.4.6: pick up queued reactions (ids only)
@@ -2301,7 +2366,7 @@ chrome.runtime.onStartup.addListener(boot);
 // onStartup does not fire. Tests omit getURL, so they do not inject on load.
 try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot(); } catch (e) { /* tests */ }
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=dd0bdb15e3e6f801ae6258c30302da309e16fedc39a811d31fb1f96aadcb2cfc nl=1
+@@@@ FILE extension/content.js mode=644 sha256=57652cd1cc91686b6a37083d628fe11b8b413ea5dadacc752f69eb00c1afa87f nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -2407,6 +2472,7 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
     ackMs: 10000,              // v1.4.24: a typed relay-chat send with no host ack posts a warning
     emptyTextRetries: 3,
     emptyRetryDelayMs: 400,
+    photoPairMs: 20000,       // v1.4.27: a photo with no caption waits this long for the next text
     urlPollMs: 1000,
     newestAt: 'auto',
     maxTextLength: 4000,       // aligned with the host's MAX_TEXT; over this = refuse, never truncate
@@ -2450,6 +2516,9 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
     let wrongAccountReported = false;
     let accountOkReported = false;
     let recentEmits = [];
+    let photoHold = null;              // v1.4.27: an image-only bubble waiting for the next text
+    const photoReady = new WeakSet();  // released from that wait; emit once, do not hold again
+    const PHOTO_BARE_RE = /^(?:yes|y|yep|yeah|yes please|ok|okay|send|send it|do it|no|n|nope|cancel|cancel it)\.?$/i;
     const lastEls = {};
     const stats = { baselined: 0, emitted: 0, skippedHistory: 0, skippedDup: 0, skippedFilter: 0, skippedPaused: 0, skippedBulk: 0, skippedSettle: 0, skippedWrongAccount: 0, skippedOld: 0, refusedTooLong: 0 };
 
@@ -2822,6 +2891,36 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
       return t ? t + (/:$/.test(t) || t.indexOf('\n') < 0 && t.length < 40 ? ' ' : '\n') + urls.join('\n') : urls.join('\n');
     }
 
+    // v1.4.27: his own photo is an img inside [data-side], beside the article. A Reply preview
+    // never carries that attribute (a quoted thumbnail and a link card stay excluded).
+    function inOwnerPhoto(el) {
+      for (let n = el; n; n = parentOf(n)) {
+        if (n.getAttribute && n.hasAttribute && n.hasAttribute('data-side')) return true;
+      }
+      return false;
+    }
+    function ownPhotoSibling(sib) {
+      if (!sib || sib.nodeType !== 1) return false;
+      const slots = [];
+      if (sib.hasAttribute && sib.hasAttribute('data-side')) slots.push(sib);
+      for (const s of safeAll(sib, '[data-side]')) if (slots.indexOf(s) < 0) slots.push(s);
+      if (!slots.length) return false;
+      const inSlot = el => slots.some(s => s === el || deepContains(s, el));
+      if (safeAll(sib, 'img').some(img => !isEmojiImg(img) && !inSlot(img))) return false;
+      let outside = '';
+      const visit = el => {
+        for (let c = el.firstChild; c; c = c.nextSibling) {
+          if (inSlot(c)) continue;
+          if (c.nodeType === 3) { const v = normSpaces(c.nodeValue).trim(); if (v) outside += ' ' + v; continue; }
+          if (c.nodeType !== 1 || isHiddenEl(c)) continue;
+          if (String(c.tagName).toLowerCase() === 'svg') continue;
+          visit(c);
+        }
+      };
+      visit(sib);
+      outside = outside.replace(/\s+/g, ' ').trim();
+      return !outside || isChipText(outside);
+    }
     // v1.4.10: the preview block(s) of a native Reply: the article's preceding siblings at the nearest level
     // that shows text OR a photo thumbnail (a reply to an image bubble has a preview with no text at all).
     function previewInfo(entry) {
@@ -2848,6 +2947,7 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
           if (isUuidEntry(sib) || safeAll(sib, cfg.uuidEntryPrefixSelector).some(isUuidEntry)) break;   // another message
           if (isHiddenEl(sib)) continue;
           if (cards.blocks.some(b => deepContains(b, sib) || deepContains(sib, b))) continue;   // v1.4.6: a shared card, not a quote
+          if (ownPhotoSibling(sib)) continue;   // v1.4.27: his attachment beside the article is not the Reply preview
           const t = visibleText(sib);
           const img = safeAll(sib, 'img').some(i => MEDIA_SRC_RE.test(String(i.getAttribute('src') || '')) && !isEmojiImg(i)) ||
             safeAll(sib, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i]').length > 0;
@@ -3089,6 +3189,15 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
       try { scanReactions(list); } catch (e) { /* prompts get marked on their next change */ }
       settleUntil = now() + cfg.settleMs;
       recentEmits = [];
+      if (photoHold) {                         // v1.4.27: a chat switch must not drop a photo with no warning
+        const h = photoHold;
+        if (h.timer) win.clearTimeout(h.timer);
+        photoHold = null;
+        photoReady.add(h.entry);
+        if (!keep.has(h.entry)) {
+          try { onStatus({ status: 'photo_miss', conversationId: conversationId() }); } catch (e) { /* ignore */ }
+        }
+      }
       if (keep.size) { keep.forEach(e => pending.add(e)); schedule(0); }
       info('baseline (' + reason + '): context=' + contextPath() + ' conversation=' + (conversationId() || '(none)') + ' mode=' + mode + ' root=' + chatRoot().selector + ' existing=' + list.length);
     }
@@ -3320,6 +3429,44 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
       if (ackTimer) { win.clearTimeout(ackTimer); ackTimer = null; }
     }
 
+    function quotesConflict(a, b) {
+      const x = String(a || '').trim();
+      const y = String(b || '').trim();
+      return !!(x && y && x !== y);
+    }
+    function canPairText(text) {
+      const t = String(text || '').trim();
+      if (!t || PHOTO_BARE_RE.test(t) || /^\s*\//.test(t) || UI_TAG_RE.test(t)) return false;
+      return true;
+    }
+    function armPhotoHold(entry, srcs, a) {
+      const ms = Number(cfg.photoPairMs);
+      if (!(ms > 0)) return false;
+      if (photoHold && photoHold.entry === entry) {
+        photoHold.media = srcs.slice();
+        if (a.quotedText) photoHold.quotedText = a.quotedText;
+        if (a.youSent) photoHold.youSent = true;
+        photoHold.key = a.key;
+        return true;
+      }
+      if (photoHold) {
+        const old = photoHold;
+        photoHold = null;
+        if (old.timer) win.clearTimeout(old.timer);
+        photoReady.add(old.entry);
+        pending.add(old.entry);
+        schedule(0);
+      }
+      photoHold = { entry, media: srcs.slice(), quotedText: a.quotedText || '', youSent: !!a.youSent, key: a.key };
+      photoHold.timer = win.setTimeout(() => {
+        if (!photoHold || photoHold.entry !== entry) return;
+        photoHold = null;
+        photoReady.add(entry);
+        pending.add(entry);
+        schedule(0);
+      }, ms);
+      return true;
+    }
     function flush() { try { flushInner(); } finally { flushCache = null; } }
     function flushInner() {
       const roots = Array.from(pending);
@@ -3367,7 +3514,24 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
           try { cardUrls = cardInfo(e).urls; } catch (err) { cardUrls = []; }
           if (cardUrls.length) a.text = withCards(a.text, cardUrls);
         }
-        const media = a.direction === 'outbound' ? mediaOf(e) : [];
+        let media = a.direction === 'outbound' ? mediaOf(e) : [];
+        let quoteEntry = e;
+        // v1.4.27: a photo with no caption rides on the next text to the same person. A bare yes/no
+        // answers a prompt and must not take the photo. Differing quotes stay separate sends.
+        if (photoHold && photoHold.entry !== e && a.direction === 'outbound' && canPairText(a.text) &&
+            !quotesConflict(a.quotedText, photoHold.quotedText) && !baselineReason) {
+          const held = photoHold;
+          if (held.timer) win.clearTimeout(held.timer);
+          photoHold = null;
+          for (const src of held.media) if (media.indexOf(src) < 0) media.push(src);
+          if (!a.quotedText && held.quotedText) {
+            a.quotedText = held.quotedText;
+            if (held.youSent) a.youSent = true;
+            quoteEntry = held.entry;
+          }
+          processed.add(held.entry);
+          if (held.key) seenKeys.add(held.key);
+        }
         if (!a.text && !media.length || (a.direction === 'outbound' && mediaShell(e))) {
           const n = retryCounts.get(e) || 0;
           if (n < cfg.emptyTextRetries && !baselineReason) {
@@ -3382,6 +3546,18 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
           if (a.direction === 'outbound') armUnacked();
           const wait = Math.max(0, settleUntil - now());
           win.setTimeout(() => { pending.add(e); schedule(0); }, Math.max(cfg.batchDelayMs, wait));
+          continue;
+        }
+        // A photo already behind a newer bubble is history, unless we held it on purpose (photoReady).
+        const idx = all.indexOf(e);
+        let blocked = false;
+        if (idx >= 0 && !photoReady.has(e)) {
+          const after = topNewest ? all.slice(0, idx) : all.slice(idx + 1);
+          blocked = after.some(o => !found.has(o) && entryText(o).text);
+        } else if (idx < 0) a.signals.push('position:unknown');
+        // v1.4.27: image-only waits briefly so the caption can catch up. Same-bubble text sends now.
+        if (!blocked && a.direction === 'outbound' && media.length && !String(a.text || '').trim() && !baselineReason &&
+            !photoReady.has(e) && armPhotoHold(e, media, a)) {
           continue;
         }
         processed.add(e);
@@ -3402,13 +3578,8 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
           }
         }
 
-        // Must be at the newest end.
-        const idx = all.indexOf(e);
-        if (idx >= 0) {
-          const after = topNewest ? all.slice(0, idx) : all.slice(idx + 1);
-          const blocked = after.some(o => !found.has(o) && entryText(o).text);
-          if (blocked) { stats.skippedHistory++; continue; }
-        } else a.signals.push('position:unknown');
+        // Must be at the newest end. A photo released from the short caption wait is not history.
+        if (blocked) { stats.skippedHistory++; continue; }
 
         // Cross-session dedupe on the uuid (keys only; persisted by the boot layer).
         if (seen.has(a.uuid)) { stats.skippedDup++; continue; }
@@ -3439,7 +3610,7 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
         if (a.youSent) item.youSent = true;
         if (a.direction === 'outbound' && a.quotedText) {
           try {
-            const lab = quoteLabelFrom(e, a.quotedText);
+            const lab = quoteLabelFrom(quoteEntry, a.quotedText);
             if (lab) item.quoteLabel = lab;
           } catch (err) { /* a missed label asks "Who is this for?" rather than guessing */ }
         }
@@ -3451,6 +3622,8 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
           pruneMedia();
           mediaRefs.set(String(a.uuid).toLowerCase(), { srcs: media, at: realNow() });
           item.mediaCount = media.length;
+        } else if (a.direction === 'outbound' && ownerPhotoSlots(e).length) {
+          item.mediaMiss = 1;           // v1.4.27: his photo slot never became readable. The host says so.
         }
         try { emit(item); } catch (err) { info('emit failed', err); }
       }
@@ -4064,6 +4237,15 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
     const mediaRefs = new Map();       // uuid -> {srcs, at}
     const mediaBufs = new Map();       // uuid#i -> {bytes, mime, at}
     const MEDIA_SRC_RE = /^(blob:|data:image\/|https:\/\/(ton|pbs)\.twimg\.com\/)/i;
+    const OWNER_SRC_RE = /^(blob:|data:image\/|https?:\/\/)/i;   // v1.4.27: his own photo may be a non-twimg blob
+    const OUT_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heic' };
+    function imageSrc(img, owner) {
+      const src = String(img.getAttribute('src') || '').trim();
+      if (src && (owner ? OWNER_SRC_RE : MEDIA_SRC_RE).test(src)) return src;
+      if (!owner) return '';
+      const first = String(img.getAttribute('srcset') || '').split(',')[0].trim().split(/\s+/)[0];
+      return first && OWNER_SRC_RE.test(first) ? first : '';
+    }
     function isEmojiImg(img) {
       const src = String(img.getAttribute('src') || '');
       const alt = String(img.getAttribute('alt') || '');
@@ -4072,6 +4254,10 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
       const w = Number(img.getAttribute('width') || img.naturalWidth || 0);
       return w > 0 && w < 40;
     }
+    function ownerPhotoSlots(entry) {
+      const cards = cardInfo(entry);
+      return safeAll(entry, '[data-side]').filter(s => !inCard(entry, s, cards) && !isExcluded(s));
+    }
     function mediaOf(entry) {
       const out = [];
       let q = null;
@@ -4079,11 +4265,14 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
       const cards = cardInfo(entry);
       const pv = previewInfo(entry);
       for (const img of safeAll(entry, 'img')) {
-        const src = String(img.getAttribute('src') || '');
-        if (!src || !MEDIA_SRC_RE.test(src) || isEmojiImg(img) || isExcluded(img)) continue;
-        if (q && deepContains(q, img)) continue;      // a photo in the quoted message is theirs, never re-sent
-        if (inPreview(entry, img, pv)) continue;      // v1.4.10: so is the thumbnail in a native Reply preview
+        const owner = inOwnerPhoto(img);   // v1.4.27: [data-side] is his photo even when it sits where a preview would
+        const src = imageSrc(img, owner);
+        if (!src || isEmojiImg(img) || isExcluded(img)) continue;
         if (inCard(entry, img, cards)) continue;      // a shared post / link thumbnail: the URL goes instead
+        if (!owner) {
+          if (q && deepContains(q, img)) continue;    // a photo in the quoted message is theirs, never re-sent
+          if (inPreview(entry, img, pv)) continue;    // v1.4.10: so is the thumbnail in a native Reply preview
+        }
         if (!out.includes(src)) out.push(src);
         if (out.length >= MEDIA_MAX) break;
       }
@@ -4091,6 +4280,7 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
     }
     function mediaShell(entry) {        // a photo bubble whose image has not loaded yet
       if (mediaOf(entry).length) return false;
+      if (ownerPhotoSlots(entry).length) return true;   // v1.4.27: his slot is there; the src may still be missing
       const pv = previewInfo(entry);
       return safeAll(entry, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i],[aria-label*="image" i],[aria-label*="photo" i]')
         .some(el => !inPreview(entry, el, pv));     // v1.4.10: a quoted photo's placeholder is not his photo
@@ -4111,6 +4301,11 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
       if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
       if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'image/gif';
       if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45) return 'image/webp';
+      if (b.length >= 12 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+        let brand = '';
+        for (let i = 8; i < 12; i++) brand += String.fromCharCode(b[i]);
+        if (/^(heic|heix|hevc|hevx|mif1|msf1|heif)$/i.test(brand)) return 'image/heic';
+      }
       return '';
     }
     async function uiMediaInfo(uuid, index) {
@@ -4128,11 +4323,14 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
         if (buf.byteLength > MEDIA_MAX_BYTES) return { ok: false, step: 'too-large', size: buf.byteLength };
         if (!buf.byteLength) return { ok: false, step: 'empty' };
         const bytes = new Uint8Array(buf);
-        const mime = sniffMime(bytes) || String((r.headers && r.headers.get && r.headers.get('content-type')) || '').split(';')[0].slice(0, 60);
+        const sniffed = sniffMime(bytes);
+        const header = String((r.headers && r.headers.get && r.headers.get('content-type')) || '').split(';')[0].trim().toLowerCase().slice(0, 60);
+        const mime = (sniffed && OUT_MIME[sniffed]) ? sniffed : (OUT_MIME[header] ? (header === 'image/heif' ? 'image/heic' : header) : '');
+        if (!mime) return { ok: false, step: 'type' };   // v1.4.27: not on the allow-list. Bytes are not kept.
         const sub = (win.crypto && win.crypto.subtle) || (typeof crypto !== 'undefined' && crypto.subtle);
         const sha256 = hex(await sub.digest('SHA-256', bytes));
         mediaBufs.set(String(uuid).toLowerCase() + '#' + index, { bytes, mime, at: realNow() });
-        const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' }[mime] || '';
+        const ext = OUT_MIME[mime] || '';
         return { ok: true, size: bytes.length, mime, sha256, name: (mime.indexOf('image/') === 0 ? 'photo' : 'attachment') + (ext ? '.' + ext : ''),
                  chunks: Math.ceil(bytes.length / MEDIA_CHUNK) };
       } catch (e) { return { ok: false, step: 'read-failed' }; }
@@ -4196,6 +4394,8 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
       },
       stop() {
         if (observer) observer.disconnect();
+        if (photoHold && photoHold.timer) win.clearTimeout(photoHold.timer);
+        photoHold = null;
         noteHostAck(false);
         [urlTimer, shadowTimer].forEach(t => t && win.clearInterval(t));
         [flushTimer, scanTimer].forEach(t => t && win.clearTimeout(t));
@@ -4438,11 +4638,11 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=deda01c2ab2146fcb1595486cbd53dc0e8f3624aefefe8b61292595fce5fc4c4 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=a858c6adf4d455628eb5f0278f87793cd3f9e7cb251a4565c9445294e223ee28 nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.26",
+  "version": "1.4.27",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -4656,7 +4856,7 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=e81a8a837d8c284c0f836aaf985f480bfbc0f7585e1bcfb2cff5a5c83dbba500 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=9b3caff5efc4ce244f63eb75071f249575b35d90d16aa0f60fa067c424eb8f1c nl=1
 #!/usr/bin/python3
 """
 com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.24.
@@ -5611,6 +5811,8 @@ def handle_pending_pick(text, cfg, now, poster, quoted=''):
     the extension no longer has it (restarted, or the pick was out of range): say so, send nothing."""
     # v1.4.21: an emoji-only native Reply that names a contact is a send, even inside the 10-minute
     # prompt window. "ok", digits, and email starts stay prompt answers.
+    # v1.4.27: a photo with no caption is not a prompt answer (empty text falls through below).
+    # A quote on that photo routes like this emoji-only Reply.
     if emoji_only(text):
         directory = rc.build_directory(cfg, rc.load_roster())
         h, st = rc.parse_quote(quoted, cfg, directory)
@@ -5917,9 +6119,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if text is None and (atts or skipped_n):
         text = ''
     if isinstance(text, str) and not text.strip() and not atts and skipped_n and not cfg['paused']:
-        # v1.4.6: only photos, and none could be read from X: say so (counts only), send nothing
-        notify(cfg, poster, {'type': 'refused', 'reason': 'attachment', 'count': skipped_n, 'sentText': False,
-                             'at': rc.iso_utc(now())})
+        # v1.4.27: the photo was seen and could not be read. Say so. Nothing goes out.
+        _warn_photo('', cfg, poster, now)
         return refuse('attachments could not be read', attachments=skipped_n)
     if not isinstance(text, str) or (not text.strip() and not atts):
         return refuse('empty text')
@@ -6146,6 +6347,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if len(window) >= cfg['maxSendsPerMinute']:
             rc.log_event('rate_limited', handle=handle, textLength=len(body), limit=cfg['maxSendsPerMinute'])
             _discard_attachments(msg.get('attachments'))
+            if atts:
+                _warn_photo(contact.get('label', ''), cfg, poster, now)
             return dict(base, ok=False, error='rate limited (%d per minute)' % cfg['maxSendsPerMinute'], **who)
         outgoing = (body + ('\n' + cfg['footer'] if cfg.get('footer') else '')) if body.strip() else ''
         recent[fp] = t
@@ -6204,11 +6407,15 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         return dict({'ok': True, 'dryRun': True, 'textLength': len(body)}, **who)
     if not ok:
         rc.log_event('send_failed', textLength=len(body), error=err, attachments=len(atts))      # err is a fixed code, never raw text
+        if atts:
+            _warn_photo(contact.get('label', ''), cfg, poster, now)
         return dict({'ok': False, 'dryRun': False, 'error': rc.error_message(err), 'errorCode': err}, **who)
     # Delivery proof is verified by the watcher (it holds Full Disk Access); the host recorded a
     # body-free pending entry inside its lock above. The host never confirms delivery itself.
-    rc.log_event('sent', routedBy=by, textLength=len(body), delivered=None, deliveryNote='pending', attachments=len(atts),
-                 attachmentBytes=sum(a['size'] for a in atts))
+    sent_fields = {'attachments': len(atts), 'attachmentBytes': sum(a['size'] for a in atts)}
+    if atts:
+        sent_fields['kinds'] = sorted({a['kind'] for a in atts if a.get('kind')})
+    rc.log_event('sent', routedBy=by, textLength=len(body), delivered=None, deliveryNote='pending', **sent_fields)
     # item 6: when deliveryCheck is on, the WATCHER posts the single confirmation (✓✓ delivered, or ✓ sent
     # after ~20s). The host only confirms here when delivery checking is off, so the owner still hears back.
     if cfg['confirmSends'] and not cfg.get('deliveryCheck', True):
@@ -6219,8 +6426,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         notify(cfg, poster, p)
     res = dict({'ok': True, 'dryRun': False, 'sent': True, 'delivered': None, 'deliveryCheck': 'pending'}, **who)
     if skipped_n:
-        notify(cfg, poster, {'type': 'refused', 'reason': 'attachment', 'count': skipped_n, 'label': contact['label'],
-                             'sentText': True, 'at': rc.iso_utc(t)})
+        _warn_photo(contact.get('label', ''), cfg, poster, now)
         res['attachmentsSkipped'] = skipped_n
     if pending_id and _UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True):
         # v1.4.6: \u2705 on HIS message right now (Messages accepted it); the watcher then skips the text line.
@@ -6251,13 +6457,19 @@ _REFUSAL_TEXT = {
     'the routed recipient does not match the handle the extension reported': 'The recipient changed. Send it again.',
     'refusing to relay to the owner handle': 'That would text your own number. /test send',
     'bad attachment': 'The attachment was damaged. Attach it again.',
+    'attachment type not allowed': '',
 }
 
 
 def _tell_refusal(reason, label, cfg, poster, now):
     if reason in _REFUSAL_SILENT:
         return
+    if reason == 'attachment type not allowed':
+        _warn_photo(label, cfg, poster, now)
+        return
     detail = _REFUSAL_TEXT.get(reason)
+    if detail == '':
+        return
     if detail is None:
         if reason.startswith('attachment too large'):
             detail = 'The attachment is over 25 MB.'
@@ -6292,7 +6504,10 @@ def _parse_attachments(raw):
         if not relay_media.SHA_RE.match(sha):
             return [], 'bad attachment'
         mime = str(a.get('mime') or '')[:80]
-        out.append({'uploadId': a['uploadId'], 'size': size, 'sha256': sha, 'mime': mime,
+        kind = relay_media.outbound_kind(mime)
+        if not kind:
+            return [], 'attachment type not allowed'
+        out.append({'uploadId': a['uploadId'], 'size': size, 'sha256': sha, 'mime': mime, 'kind': kind,
                     'name': relay_media.safe_name(a.get('name'), mime)})
     return out, ''
 
@@ -6387,6 +6602,21 @@ def _quote_label(msg):
 
 # v1.4.24: the extension saw the owner's send and the host never answered. Exact line, via status detail.
 UNACKED_LINE = '\u26a0\ufe0f Didn\u2019t send. Reload X Chat and retype.'
+# v1.4.27: a photo was seen and did not go out. The label is the contact, or the word "name".
+PHOTO_MISS = '\u26a0\ufe0f photo didn\u2019t send to %s, send it from Messages'
+
+
+def photo_miss_line(label):
+    who = rc.clean_label(label) or 'name'
+    return PHOTO_MISS % who
+
+
+def _warn_photo(label, cfg, poster, now):
+    """One health line. Never the message text, never the image."""
+    try:
+        notify(cfg, poster, {'type': 'status', 'detail': photo_miss_line(label), 'at': rc.iso_utc(now())})
+    except Exception:
+        pass
 
 
 # v1.4.21: the extension saw a reply and will not send it. Fixed sentences, never the message.
@@ -6437,6 +6667,11 @@ def handle_signal(msg, cfg, now, poster):
         label = str(msg.get('label') or '').strip()
         rc.log_event('signal', status='guess_expired')
         notify(cfg, poster, {'type': 'guess_expired', 'label': label, 'at': rc.iso_utc(now())})
+        return {'ok': True}
+    if status == 'photo_miss':
+        # v1.4.27: a photo was seen and never handed off (grab failed, or the short pairing window ended).
+        rc.log_event('signal', status='photo_miss')
+        _warn_photo('', cfg, poster, now)
         return {'ok': True}
     if status == 'typed_mismatch':
         # v1.4.14: the extension read his bubble back differently from what he typed and sent nothing
@@ -8164,7 +8399,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=8232140323998da9c204417a6bc55537dcd359b979f797c24af8484ff3ec9695 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=535b73a886b498a871b68be97dfce961cd1e68c47d0034e8f5110d2879e10937 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -8190,8 +8425,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.26'
-EXTENSION_VERSION = '1.4.26'   # v1.4.26 changes the extension
+VERSION = '1.4.27'
+EXTENSION_VERSION = '1.4.27'   # v1.4.27 changes the extension
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -10821,7 +11056,7 @@ def secitem_update(account, secret):
             except Exception:
                 pass
 @@@@ END
-@@@@ FILE mac-helper/relay_media.py mode=644 sha256=c6cae50442031b5e0985ef82178e6691763f849814a118a1ceb337bcbf392359 nl=1
+@@@@ FILE mac-helper/relay_media.py mode=644 sha256=86fd7d1d6e075e0dd5d924cf9b8a5ae5bfa6c9a26ebe9e50cba64a6fa2bce4c6 nl=1
 """iMessage Relay v1.4.8 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
 
 Inbound (iMessage -> X Chat). The watcher holds Full Disk Access, so it is the only process that can
@@ -11179,6 +11414,17 @@ def discard_upload(upload_id):
 _NAME_BAD_RE = re.compile(r'[\x00-\x1f\x7f/\\:"*?<>|]+')
 
 
+# v1.4.27: photos the owner sends from X Chat. Anything else is refused (the chat is told).
+OUTBOUND_KIND = {'image/jpeg': 'jpeg', 'image/jpg': 'jpeg', 'image/pjpeg': 'jpeg', 'image/png': 'png',
+                 'image/gif': 'gif', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heic',
+                 'image/heic-sequence': 'heic', 'image/heif-sequence': 'heic'}
+
+
+def outbound_kind(mime):
+    """'jpeg'|'png'|'gif'|'webp'|'heic' or '' when the type is not on the outbound allow-list."""
+    return OUTBOUND_KIND.get(str(mime or '').split(';')[0].strip().lower(), '')
+
+
 def safe_name(name, mime):
     """A filename for the recipient: the basename without path/control characters, at most 80 chars,
     else 'photo.<ext>' / 'attachment.<ext>'. Never logged."""
@@ -11187,6 +11433,7 @@ def safe_name(name, mime):
     ext = _ext_of(base)
     if not ext:
         ext = {'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+               'image/heic': 'heic', 'image/heif': 'heic',
                'video/mp4': 'mp4', 'video/quicktime': 'mov', 'application/pdf': 'pdf'}.get(str(mime or '').lower(), '')
     if not base or base.startswith('.'):
         base = 'photo' if str(mime or '').startswith('image/') else 'attachment'
@@ -11222,6 +11469,10 @@ def stage_for_send(data_path, name):
     the staged path; the upload's inflight dir is removed."""
     d = os.path.join(_private_dir(SEND_STAGE_DIR), secrets.token_hex(8))
     os.makedirs(d, mode=0o700)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
     dst = os.path.join(d, name)
     shutil.move(data_path, dst)
     os.chmod(dst, 0o600)
@@ -11265,7 +11516,7 @@ def sweep_all(now=None):
     return {'outbox': sweep(OUTBOX_DIR, OUTBOX_TTL_S, now), 'inflight': sweep(INFLIGHT_DIR, INFLIGHT_TTL_S, now),
             'sendStage': sweep(SEND_STAGE_DIR, SEND_STAGE_TTL_S, now)}
 @@@@ END
-@@@@ FILE mac-helper/relay_send.py mode=644 sha256=8e2e1332269eeecb2d3b371fd37c6749845dc6c7139acae93cd992fbe15963cd nl=1
+@@@@ FILE mac-helper/relay_send.py mode=644 sha256=628f27be16cccc00a0dc5e7a3fa74ba28833031c36a4537bd7e40fd081b801a2 nl=1
 """iMessage Relay v1.4.8 -- delivery-proof queries and Messages.app sending.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
 relay_common (rc.send_imessage, rc.check_delivery_once, rc.add_pending_send, ...); relay_common
@@ -11282,7 +11533,8 @@ import relay_common as rc
 # Outgoing messages in the ONE-TO-ONE chat with `handle`, earliest first. The participant-count subquery
 # keeps group chats out, and date-ascending order lets the watcher claim one distinct ROWID per send.
 DELIVERY_SQL = """
-SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')), COALESCE(m.cache_has_attachments, 0)
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')),
+       COALESCE((SELECT COUNT(*) FROM message_attachment_join j WHERE j.message_id = m.ROWID), 0)
 FROM message m
 JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
 JOIN chat_handle_join chj ON chj.chat_id = cmj.chat_id
@@ -11295,7 +11547,8 @@ ORDER BY m.date ASC, m.ROWID ASC
 # v1.4.0: outgoing messages in ONE group chat, found by its Messages chat GUID (the id the reply was
 # sent to). Same columns as DELIVERY_SQL; delivery flags and lengths only, never text.
 DELIVERY_SQL_GROUP = """
-SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')), COALESCE(m.cache_has_attachments, 0)
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')),
+       COALESCE((SELECT COUNT(*) FROM message_attachment_join j WHERE j.message_id = m.ROWID), 0)
 FROM message m
 JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
 JOIN chat c ON c.ROWID = cmj.chat_id
@@ -11405,7 +11658,8 @@ def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), tex
         con.close()
     rows = [r for r in rows if r[0] not in set(exclude_rowids or ())]
     if part == 'file':
-        # v1.4.6: an attachment send is proven by an outgoing row that carries an attachment
+        # v1.4.27: an attachment send is proven only by an attachment row (the join), and only
+        # is_delivered deletes the staged file. cache_has_attachments alone is not enough.
         rows = [r for r in rows if len(r) > 5 and r[5]]
         text_length = None
     if not rows:
@@ -16625,7 +16879,7 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/js/media.test.js mode=644 sha256=753253aa8851b529d846e1d0801d493330a6eacc2d874613bbb38ddcf2354829 nl=1
+@@@@ FILE tests/js/media.test.js mode=644 sha256=e45d37efa65c883270f5e3906335e98da91de8e4c9f72bd82d0a1d515db8a90f nl=1
 /* v1.4.6: his photos in X Chat go out as iMessage attachments. content.js finds images in HIS outbound
  * bubble only (not emoji, not the quoted message) and reads them in 512 KiB chunks; background.js streams
  * them to the Mac (attach_chunk), sends metadata only with the reply, and keeps them for a "yes".
@@ -16645,9 +16899,9 @@ async function test(name, fn) {
   catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
 }
 const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
-const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, photoPairMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
 
-function setup() {
+function setup(extra) {
   const dom = new JSDOM('<html><body><div data-testid="dm-conversation-panel"></div></body></html>', { url: 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
   const { window } = dom;
   window.Element.prototype.getBoundingClientRect = function () {
@@ -16658,7 +16912,7 @@ function setup() {
   };
   const logs = [];
   out(window.document, 900, 'older history');      // already on the page at start: baselined, never sent
-  const det = createRelayDetector({ window, document: window.document, config: FAST, getState: () => ({ paused: false, conversationFilter: '' }),
+  const det = createRelayDetector({ window, document: window.document, config: Object.assign({}, FAST, extra || {}), getState: () => ({ paused: false, conversationFilter: '' }),
     onEmit: i => logs.push(i), onStatus: () => {}, log: () => {}, onReaction: () => {}, seen: { has: () => false, add: () => {} } });
   det.start();
   return { window, doc: window.document, det, logs };
@@ -16674,6 +16928,19 @@ function out(doc, n, text, imgs) {
   e.appendChild(b);
   doc.querySelector('[data-testid="dm-conversation-panel"]').appendChild(e);
   return e;
+}
+// The owner's photo sits in [data-side], the previous sibling of the article. A quoted thumbnail does not.
+function photoRow(doc, n, opts) {
+  const u = uuid(n);
+  const row = doc.createElement('div');
+  row.setAttribute('data-testid', 'message-' + u);
+  const img = opts.img == null ? '<img alt="Image" src="blob:https://x.com/p' + n + '">' : opts.img;
+  const quote = opts.quote ? '<div class="pv"><span><span>' + opts.quote + '</span></span></div>' : '';
+  const side = opts.side === false ? '' : '<div data-side="right">' + img + '</div>';
+  row.innerHTML = '<div data-testid="bubble-sent" data-fake-rect="780,0,220,80">' + quote + side +
+    '<div role="article"><div data-testid="message-text-' + u + '"><span>' + (opts.text || '') + '</span></div></div></div>';
+  doc.querySelector('[data-testid="dm-conversation-panel"]').appendChild(row);
+  return row;
 }
 
 function bootBg(opts) {
@@ -16698,7 +16965,8 @@ function bootBg(opts) {
     action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
   };
   vm.runInNewContext(fs.readFileSync(path.join(EXT, 'background.js'), 'utf8'),
-    { chrome, console: { log() {}, warn() {} }, setTimeout, clearTimeout, crypto: nodeCrypto.webcrypto, Uint8Array });
+    { chrome, console: { log() {}, warn() {} }, setTimeout, clearTimeout, crypto: nodeCrypto.webcrypto, Uint8Array,
+      IMR_PHOTO_PARK_MS: opts.parkMs || 0 });
   let k = 0;
   const reply = (text, extra, wait) => new Promise(r => {
     const item = Object.assign({ ts: new Date().toISOString(), conversationId: '111-222', direction: 'outbound', text, key: '111-222|id:uuid=' + uuid(++k), score: 9 }, extra);
@@ -16838,6 +17106,151 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     await b.reply('look again', { mediaCount: 1 });
     await b.reply('no');
     assert.strictEqual(b.host.filter(m => m.type === 'attach_discard').length, 1);
+  });
+
+  await test('content: a data-side photo and its caption go together, and the photo is not a quote', async () => {
+    const s = setup();
+    await sleep(200);
+    photoRow(s.doc, 20, { text: 'caption' });
+    await sleep(150);
+    const it = s.logs.find(l => l.text === 'caption');
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.direction, 'outbound');
+    assert.strictEqual(it.mediaCount, 1);
+    assert.ok(!it.quotedText, JSON.stringify(it.quotedText));
+    assert.ok(!JSON.stringify(it).includes('blob:'), 'no source URL leaves the tab');
+  });
+
+  await test('content: a quoted thumbnail is not his photo; his data-side image still is', async () => {
+    const s = setup();
+    await sleep(200);
+    const thumb = '<img alt="Image" src="https://pbs.twimg.com/media/Fabc123?format=jpg" width="200">';
+    photoRow(s.doc, 21, { text: 'caption', quote: 'Jordan: see this' + thumb });
+    await sleep(150);
+    const it = s.logs.find(l => l.text === 'caption');
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.mediaCount, 1);
+    assert.ok(it.quotedText && it.quotedText.indexOf('Jordan') >= 0, it.quotedText);
+    assert.ok(!JSON.stringify(it).includes('blob:'));
+    assert.ok(!JSON.stringify(it).includes('pbs.twimg'), 'the quoted thumbnail stays on the page');
+  });
+
+  await test('content: an image with no caption pairs with the next text', async () => {
+    const s = setup({ photoPairMs: 400 });
+    await sleep(200);
+    photoRow(s.doc, 22, { quote: 'Jordan: on my way' });
+    await sleep(80);
+    assert.strictEqual(s.logs.length, 0, 'held for the caption');
+    out(s.doc, 23, 'thanks');
+    await sleep(150);
+    assert.strictEqual(s.logs.length, 1, JSON.stringify(s.logs.map(l => l.text)));
+    assert.strictEqual(s.logs[0].text, 'thanks');
+    assert.strictEqual(s.logs[0].mediaCount, 1);
+    assert.ok(s.logs[0].quotedText && s.logs[0].quotedText.indexOf('Jordan') >= 0, s.logs[0].quotedText);
+  });
+
+  await test('content: yes does not take a held photo, and a different quote stays separate', async () => {
+    const s = setup({ photoPairMs: 350 });
+    await sleep(200);
+    photoRow(s.doc, 24, { quote: 'Jordan: one line' });
+    await sleep(70);
+    out(s.doc, 25, 'yes');
+    await sleep(70);
+    const yes = s.logs.find(l => l.text === 'yes');
+    assert.ok(yes && !yes.mediaCount, JSON.stringify(s.logs.map(l => [l.text, l.mediaCount])));
+    photoRow(s.doc, 26, { text: 'other', quote: 'Sam: two lines', side: false });
+    await sleep(80);
+    const other = s.logs.find(l => l.text === 'other');
+    assert.ok(other && !other.mediaCount, 'a different quote does not take the photo');
+    assert.ok(other.quotedText && other.quotedText.indexOf('Sam') >= 0, other.quotedText);
+    await sleep(350);
+    const photo = s.logs.find(l => l.mediaCount === 1);
+    assert.ok(photo && photo.text === '', JSON.stringify(s.logs.map(l => [l.text, l.mediaCount])));
+    assert.ok(photo.quotedText && photo.quotedText.indexOf('Jordan') >= 0, photo.quotedText);
+  });
+
+  await test('content: an unreadable photo slot is reported, not dropped', async () => {
+    const s = setup();
+    await sleep(200);
+    photoRow(s.doc, 27, { text: 'caption', img: '<img alt="Image">' });
+    await sleep(500);
+    const it = s.logs.find(l => l.text === 'caption');
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.mediaMiss, 1);
+    assert.ok(!it.mediaCount);
+  });
+
+  await test('content: his photo may be a non-twimg url or a srcset; a loose one is not', async () => {
+    const s = setup();
+    await sleep(200);
+    photoRow(s.doc, 28, { text: 'cdn', img: '<img alt="Image" src="https://cdn.example.invalid/a.jpg">' });
+    photoRow(s.doc, 29, { text: 'set', img: '<img alt="Image" srcset="https://cdn.example.invalid/b.jpg 640w">' });
+    out(s.doc, 30, 'loose', ['<img src="https://cdn.example.invalid/c.jpg" width="300">']);
+    await sleep(200);
+    const cdn = s.logs.find(l => l.text === 'cdn');
+    const set = s.logs.find(l => l.text === 'set');
+    const loose = s.logs.find(l => l.text === 'loose');
+    assert.ok(cdn && cdn.mediaCount === 1, 'cdn');
+    assert.ok(set && set.mediaCount === 1, 'srcset');
+    assert.ok(loose && !loose.mediaCount, 'a url outside his photo slot is not an attachment');
+  });
+
+  await test('content: heic is accepted and a non-image is refused before the bytes are kept', async () => {
+    const s = setup();
+    await sleep(200);
+    out(s.doc, 31, 'heic', ['<img src="blob:https://x.com/heic" width="300">']);
+    out(s.doc, 32, 'pdf', ['<img src="blob:https://x.com/pdf" width="300">']);
+    await sleep(200);
+    const heic = new Uint8Array(16);
+    heic.set([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]);
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]);
+    s.window.fetch = async src => ({
+      ok: true, headers: { get: () => src.indexOf('pdf') >= 0 ? 'application/pdf' : '' },
+      arrayBuffer: async () => (src.indexOf('pdf') >= 0 ? pdf : heic).buffer,
+    });
+    const info = await s.det.uiMediaInfo(uuid(31), 0);
+    assert.strictEqual(info.ok, true);
+    assert.strictEqual(info.mime, 'image/heic');
+    assert.strictEqual(info.name, 'photo.heic');
+    const bad = await s.det.uiMediaInfo(uuid(32), 0);
+    assert.deepStrictEqual([bad.ok, bad.step], [false, 'type']);
+    assert.strictEqual(s.det.uiMediaChunk(uuid(32), 0, 0).step, 'expired');
+  });
+
+  await test('background: a photo that needs a name rides on the next text, not on yes', async () => {
+    const b = bootBg({ parkMs: 5000, tab: tabOk, send: m => {
+      if (!String(m.text || '').trim()) return { ok: false, needsTarget: true, error: 'Who is this for?' };
+      return { ok: true, sent: true };
+    } });
+    await b.reply('', { mediaCount: 1 });
+    await b.reply('yes');
+    const yes = b.host.find(m => m.type === 'send' && m.text === 'yes');
+    assert.ok(yes && !yes.attachments, JSON.stringify(yes));
+    await b.reply('for Sam');
+    const first = b.host.find(m => m.type === 'send' && m.text === '');
+    const follow = b.host.find(m => m.type === 'send' && m.text === 'for Sam');
+    assert.ok(follow && follow.attachments && follow.attachments.length === 1, JSON.stringify(follow));
+    assert.deepStrictEqual(follow.attachments, first.attachments);
+    await b.reply('again');
+    const again = b.host.find(m => m.type === 'send' && m.text === 'again');
+    assert.ok(again && !again.attachments, 'the photo is sent once');
+  });
+
+  await test('background: a parked photo is discarded and the chat is told', async () => {
+    const b = bootBg({ parkMs: 30, tab: tabOk, send: () => ({ ok: false, needsTarget: true, error: 'Who is this for?' }) });
+    await b.reply('', { mediaCount: 1 }, 120);
+    assert.ok(b.host.some(m => m.type === 'attach_discard'), 'discarded');
+    assert.ok(b.host.some(m => m.type === 'signal' && m.status === 'photo_miss'), 'warned');
+  });
+
+  await test('background: an unreadable photo slot is skipped, a read one is not', async () => {
+    const b = bootBg({ tab: tabOk, send: () => ({ ok: true, sent: true }) });
+    await b.reply('caption', { mediaMiss: 1 });
+    assert.strictEqual(b.host.find(m => m.type === 'send').attachmentsSkipped, 1);
+    await b.reply('caption', { mediaCount: 1, mediaMiss: 1 });
+    const send = b.host.filter(m => m.type === 'send')[1];
+    assert.ok(send.attachments && send.attachments.length === 1);
+    assert.ok(!send.attachmentsSkipped);
   });
 
   console.log(`${passed} passed, ${failed} failed (v1.4.6 attachments)`);
@@ -17761,7 +18174,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=53ceaf2e941916a41369b226616d0e8d9d7ab97998ac2d34d10f0bb15fe9397c nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=570b473bb02cb9cf5754a92ab6ea96b27092be0cb773aa5bf30e5c5108fc2e5f nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -17816,7 +18229,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.26');
+  assert.strictEqual(m.version, '1.4.27');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'scripting', 'storage']);
@@ -25163,7 +25576,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=f8e739bfe60a3e3bdd72935984ee5ce3e997bfa33071e01046fa487d5be6489e nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=f0f582d777a848aa289db639fe3f9510c0b5f698a4b1acf353ed693f07077f9f nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -25292,7 +25705,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.26 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.27 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -25322,7 +25735,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.26 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.27 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -25406,7 +25819,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.26 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.27 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -27289,7 +27702,7 @@ class Cards(HostBase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v146_media.py mode=644 sha256=220bf262556fca8c23aa8bf2e769a2561eac95f9d6b569b6c9aa0cf0ee732178 nl=1
+@@@@ FILE tests/py/test_v146_media.py mode=644 sha256=b0cd60723de7762491da5a9e52ff38acfc6ee2584fb66275263784f49efa8c7c nl=1
 """v1.4.6: attachments both ways (1:1 photos in, his photos/files out). In-flight temp files only (mode
 600), deleted right after use or on error; logs carry counts, sizes and types only. Fictional names only."""
 import base64
@@ -27313,6 +27726,7 @@ ALLOWED = test_watch.ALLOWED
 # a tiny valid PNG (1x1)
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==')
 OK = (0, '')
+PHOTO = '\u26a0\ufe0f photo didn\u2019t send to %s, send it from Messages'
 
 
 def upload(m, data, uid='a' * 32):
@@ -27359,6 +27773,7 @@ class Outbound(HostBase):
         self.assertTrue(path.startswith(self.m.media.SEND_STAGE_DIR))
         self.assertEqual(os.path.basename(path), 'Jordan beach.png', 'path parts stripped')
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), 0o700)
         pend = self.m.rc.load_pending()
         self.assertEqual(sorted(p.get('part', 'text') for p in pend), ['file', 'text'])
         react = r['ui']['react'][0]
@@ -27373,6 +27788,7 @@ class Outbound(HostBase):
         r = self.req({'type': 'send', 'text': '', 'attachments': [upload(self.m, PNG, 'b' * 32)]}, runner=FakeRunner([]))
         self.assertEqual(r.get('skipped'), 'duplicate within 60s')
         self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, 'b' * 32)), 'its upload is dropped')
+        self.assertFalse(any('photo didn' in (p.get('detail') or '') for p in self.posts), 'a duplicate is not a failed photo')
 
     def test_photo_only(self):
         att = upload(self.m, PNG)
@@ -27392,6 +27808,7 @@ class Outbound(HostBase):
         self.assertEqual(r['errorCode'], 'attachment_unavailable')
         self.assertEqual(runner.count('/usr/bin/osascript'), 0)
         self.assertEqual(os.listdir(self.m.media.SEND_STAGE_DIR) if os.path.isdir(self.m.media.SEND_STAGE_DIR) else [], [])
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
 
     def test_failed_file_send_deletes_the_staged_copy(self):
         att = upload(self.m, PNG)
@@ -27399,6 +27816,8 @@ class Outbound(HostBase):
         self.assertEqual(r['errorCode'], 'attachment_failed')
         stage = self.m.media.SEND_STAGE_DIR
         self.assertEqual([f for _, _, fs in os.walk(stage) for f in fs], [])
+        self.assertEqual(self.posts[-1]['type'], 'status')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
 
     def test_group_photo_needs_the_confirm_and_keeps_the_upload_until_then(self):
         att = upload(self.m, PNG)
@@ -27424,11 +27843,13 @@ class Outbound(HostBase):
         self.assertTrue(r['dryRun'])
         self.assertEqual(runner.count('/usr/bin/osascript'), 0)
         self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, att['uploadId'])))
+        self.assertFalse(any('photo didn' in (p.get('detail') or '') for p in self.posts))
 
     def test_limits(self):
         r = self.req({'type': 'send', 'text': 'Jordan: x', 'attachments': [{'uploadId': 'c' * 32, 'size': 26 * 1024 * 1024,
                                                                             'sha256': 'f' * 64, 'mime': 'video/mp4'}]})
         self.assertIn('too large', r['error'])
+        self.assertIn('The attachment is over 25 MB.', self.posts[-1]['detail'])
         r = self.req({'type': 'send', 'text': 'Jordan: x', 'attachments': [{'uploadId': '../x', 'size': 5, 'sha256': 'f' * 64}]})
         self.assertEqual(r['error'], 'bad attachment')
         r = self.req({'type': 'attach_chunk', 'uploadId': 'd' * 32, 'seq': 1, 'data': 'aGk='})
@@ -27441,14 +27862,51 @@ class Outbound(HostBase):
         r = self.req({'type': 'send', 'text': '', 'attachmentsSkipped': 2}, runner=runner)
         self.assertFalse(r['ok'])
         self.assertEqual(runner.count('/usr/bin/osascript'), 0)
-        self.assertEqual([(p['type'], p['reason'], p['count'], p['sentText']) for p in self.posts],
-                         [('refused', 'attachment', 2, False)])
-        line = rp.format_event(self.posts[0])['lines'][0]['text']
-        self.assertIn('2 attachments didn\u2019t send', line)
+        self.assertEqual(self.posts[-1]['type'], 'status')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'name')
         self.posts.clear()
         r = self.req({'type': 'send', 'text': 'Jordan: hi', 'attachmentsSkipped': 1}, runner=FakeRunner([OK]))
         self.assertTrue(r['sent'])
-        self.assertIn('The text went through.', rp.format_event(self.posts[-1])['lines'][0]['text'])
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'Jordan')
+
+    def test_photo_only_quote_sends_like_an_emoji_reply(self):
+        self.h._note_prompt(self.clock.now())
+        att = upload(self.m, PNG, 'e' * 32)
+        r = self.req({'type': 'send', 'text': '', 'quotedText': 'Jordan: on my way', 'attachments': [att]},
+                     runner=FakeRunner([OK]))
+        self.assertTrue(r.get('sent'), r)
+        self.assertEqual(r.get('routedBy'), 'quote')
+        log = read_log()
+        self.assertNotIn('on my way', log)
+        self.assertIn('"kinds": ["png"]', log)
+
+    def test_type_cap_refuses_and_heic_is_allowed(self):
+        att = upload(self.m, PNG, 'f' * 32)
+        att['mime'] = 'application/pdf'
+        r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [att]}, runner=FakeRunner([]))
+        self.assertFalse(r['ok'])
+        self.assertEqual(r['error'], 'attachment type not allowed')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
+        stage = self.m.media.SEND_STAGE_DIR
+        self.assertEqual([f for _, _, fs in os.walk(stage) for f in fs] if os.path.isdir(stage) else [], [])
+        self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, att['uploadId'])))
+        heic = upload(self.m, PNG + b'h', '9' * 32)
+        heic['mime'] = 'image/heic'
+        r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [heic]}, runner=FakeRunner([OK, OK]))
+        self.assertTrue(r.get('sent'), r)
+        self.assertIn('"kinds": ["heic"]', read_log())
+
+    def test_photo_miss_signal_uses_the_word_name(self):
+        r = self.req({'type': 'signal', 'status': 'photo_miss'})
+        self.assertTrue(r.get('ok'), r)
+        self.assertEqual(self.posts[-1]['type'], 'status')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'name')
+        log = read_log()
+        self.assertNotIn('photo didn', log)
+        self.assertIn('"status": "photo_miss"', log)
 
     def test_logs_counts_sizes_types_only(self):
         att = upload(self.m, PNG)
@@ -27457,6 +27915,7 @@ class Outbound(HostBase):
         for secret in ('beach', att['sha256'], att['uploadId'], 'look', 'send-stage'):
             self.assertNotIn(secret, log)
         self.assertIn('"attachments": 1', log)
+        self.assertIn('"kinds": ["png"]', log)
 
 
 class WatchMedia(test_watch.Base):
@@ -27614,6 +28073,10 @@ class WatchMedia(test_watch.Base):
         self.db.add(ALLOWED, text='plain later text', from_me=1, delivered=1)
         self.w.tick()
         self.assertEqual(len(rc.load_pending()), 1, 'a text row never proves an attachment')
+        self.db.add(ALLOWED, text='\ufffc', from_me=1, delivered=1, attachments=1)
+        self.w.tick()
+        self.assertTrue(os.path.exists(sp), 'a flag without an attachment row does not prove delivery')
+        self.assertEqual(len(rc.load_pending()), 1)
         self.db.add(ALLOWED, text='\ufffc', from_me=1, delivered=1, attach={'transfer_name': 'photo.png', 'mime': 'image/png'})
         self.w.tick()
         self.assertEqual(rc.load_pending(), [])
@@ -27736,7 +28199,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=fd25f8e454a65573b65d1bb1c0f7ae929eed83349477b8184e99ce9c39083c35 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=2e74cdf60c30b422bb5b8715fbb27b2b817cdf4604a5dbe630dc81166b142856 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -27929,7 +28392,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.26')
+        self.assertEqual(m.rc.VERSION, '1.4.27')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

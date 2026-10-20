@@ -21,6 +21,7 @@ ALLOWED = test_watch.ALLOWED
 # a tiny valid PNG (1x1)
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==')
 OK = (0, '')
+PHOTO = '\u26a0\ufe0f photo didn\u2019t send to %s, send it from Messages'
 
 
 def upload(m, data, uid='a' * 32):
@@ -67,6 +68,7 @@ class Outbound(HostBase):
         self.assertTrue(path.startswith(self.m.media.SEND_STAGE_DIR))
         self.assertEqual(os.path.basename(path), 'Jordan beach.png', 'path parts stripped')
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), 0o700)
         pend = self.m.rc.load_pending()
         self.assertEqual(sorted(p.get('part', 'text') for p in pend), ['file', 'text'])
         react = r['ui']['react'][0]
@@ -81,6 +83,7 @@ class Outbound(HostBase):
         r = self.req({'type': 'send', 'text': '', 'attachments': [upload(self.m, PNG, 'b' * 32)]}, runner=FakeRunner([]))
         self.assertEqual(r.get('skipped'), 'duplicate within 60s')
         self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, 'b' * 32)), 'its upload is dropped')
+        self.assertFalse(any('photo didn' in (p.get('detail') or '') for p in self.posts), 'a duplicate is not a failed photo')
 
     def test_photo_only(self):
         att = upload(self.m, PNG)
@@ -100,6 +103,7 @@ class Outbound(HostBase):
         self.assertEqual(r['errorCode'], 'attachment_unavailable')
         self.assertEqual(runner.count('/usr/bin/osascript'), 0)
         self.assertEqual(os.listdir(self.m.media.SEND_STAGE_DIR) if os.path.isdir(self.m.media.SEND_STAGE_DIR) else [], [])
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
 
     def test_failed_file_send_deletes_the_staged_copy(self):
         att = upload(self.m, PNG)
@@ -107,6 +111,8 @@ class Outbound(HostBase):
         self.assertEqual(r['errorCode'], 'attachment_failed')
         stage = self.m.media.SEND_STAGE_DIR
         self.assertEqual([f for _, _, fs in os.walk(stage) for f in fs], [])
+        self.assertEqual(self.posts[-1]['type'], 'status')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
 
     def test_group_photo_needs_the_confirm_and_keeps_the_upload_until_then(self):
         att = upload(self.m, PNG)
@@ -132,11 +138,13 @@ class Outbound(HostBase):
         self.assertTrue(r['dryRun'])
         self.assertEqual(runner.count('/usr/bin/osascript'), 0)
         self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, att['uploadId'])))
+        self.assertFalse(any('photo didn' in (p.get('detail') or '') for p in self.posts))
 
     def test_limits(self):
         r = self.req({'type': 'send', 'text': 'Jordan: x', 'attachments': [{'uploadId': 'c' * 32, 'size': 26 * 1024 * 1024,
                                                                             'sha256': 'f' * 64, 'mime': 'video/mp4'}]})
         self.assertIn('too large', r['error'])
+        self.assertIn('The attachment is over 25 MB.', self.posts[-1]['detail'])
         r = self.req({'type': 'send', 'text': 'Jordan: x', 'attachments': [{'uploadId': '../x', 'size': 5, 'sha256': 'f' * 64}]})
         self.assertEqual(r['error'], 'bad attachment')
         r = self.req({'type': 'attach_chunk', 'uploadId': 'd' * 32, 'seq': 1, 'data': 'aGk='})
@@ -149,14 +157,51 @@ class Outbound(HostBase):
         r = self.req({'type': 'send', 'text': '', 'attachmentsSkipped': 2}, runner=runner)
         self.assertFalse(r['ok'])
         self.assertEqual(runner.count('/usr/bin/osascript'), 0)
-        self.assertEqual([(p['type'], p['reason'], p['count'], p['sentText']) for p in self.posts],
-                         [('refused', 'attachment', 2, False)])
-        line = rp.format_event(self.posts[0])['lines'][0]['text']
-        self.assertIn('2 attachments didn\u2019t send', line)
+        self.assertEqual(self.posts[-1]['type'], 'status')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'name')
         self.posts.clear()
         r = self.req({'type': 'send', 'text': 'Jordan: hi', 'attachmentsSkipped': 1}, runner=FakeRunner([OK]))
         self.assertTrue(r['sent'])
-        self.assertIn('The text went through.', rp.format_event(self.posts[-1])['lines'][0]['text'])
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'Jordan')
+
+    def test_photo_only_quote_sends_like_an_emoji_reply(self):
+        self.h._note_prompt(self.clock.now())
+        att = upload(self.m, PNG, 'e' * 32)
+        r = self.req({'type': 'send', 'text': '', 'quotedText': 'Jordan: on my way', 'attachments': [att]},
+                     runner=FakeRunner([OK]))
+        self.assertTrue(r.get('sent'), r)
+        self.assertEqual(r.get('routedBy'), 'quote')
+        log = read_log()
+        self.assertNotIn('on my way', log)
+        self.assertIn('"kinds": ["png"]', log)
+
+    def test_type_cap_refuses_and_heic_is_allowed(self):
+        att = upload(self.m, PNG, 'f' * 32)
+        att['mime'] = 'application/pdf'
+        r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [att]}, runner=FakeRunner([]))
+        self.assertFalse(r['ok'])
+        self.assertEqual(r['error'], 'attachment type not allowed')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
+        stage = self.m.media.SEND_STAGE_DIR
+        self.assertEqual([f for _, _, fs in os.walk(stage) for f in fs] if os.path.isdir(stage) else [], [])
+        self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, att['uploadId'])))
+        heic = upload(self.m, PNG + b'h', '9' * 32)
+        heic['mime'] = 'image/heic'
+        r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [heic]}, runner=FakeRunner([OK, OK]))
+        self.assertTrue(r.get('sent'), r)
+        self.assertIn('"kinds": ["heic"]', read_log())
+
+    def test_photo_miss_signal_uses_the_word_name(self):
+        r = self.req({'type': 'signal', 'status': 'photo_miss'})
+        self.assertTrue(r.get('ok'), r)
+        self.assertEqual(self.posts[-1]['type'], 'status')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'name')
+        log = read_log()
+        self.assertNotIn('photo didn', log)
+        self.assertIn('"status": "photo_miss"', log)
 
     def test_logs_counts_sizes_types_only(self):
         att = upload(self.m, PNG)
@@ -165,6 +210,7 @@ class Outbound(HostBase):
         for secret in ('beach', att['sha256'], att['uploadId'], 'look', 'send-stage'):
             self.assertNotIn(secret, log)
         self.assertIn('"attachments": 1', log)
+        self.assertIn('"kinds": ["png"]', log)
 
 
 class WatchMedia(test_watch.Base):
@@ -322,6 +368,10 @@ class WatchMedia(test_watch.Base):
         self.db.add(ALLOWED, text='plain later text', from_me=1, delivered=1)
         self.w.tick()
         self.assertEqual(len(rc.load_pending()), 1, 'a text row never proves an attachment')
+        self.db.add(ALLOWED, text='\ufffc', from_me=1, delivered=1, attachments=1)
+        self.w.tick()
+        self.assertTrue(os.path.exists(sp), 'a flag without an attachment row does not prove delivery')
+        self.assertEqual(len(rc.load_pending()), 1)
         self.db.add(ALLOWED, text='\ufffc', from_me=1, delivered=1, attach={'transfer_name': 'photo.png', 'mime': 'image/png'})
         self.w.tick()
         self.assertEqual(rc.load_pending(), [])

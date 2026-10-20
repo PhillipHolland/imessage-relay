@@ -17,9 +17,9 @@ async function test(name, fn) {
   catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
 }
 const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
-const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, photoPairMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
 
-function setup() {
+function setup(extra) {
   const dom = new JSDOM('<html><body><div data-testid="dm-conversation-panel"></div></body></html>', { url: 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
   const { window } = dom;
   window.Element.prototype.getBoundingClientRect = function () {
@@ -30,7 +30,7 @@ function setup() {
   };
   const logs = [];
   out(window.document, 900, 'older history');      // already on the page at start: baselined, never sent
-  const det = createRelayDetector({ window, document: window.document, config: FAST, getState: () => ({ paused: false, conversationFilter: '' }),
+  const det = createRelayDetector({ window, document: window.document, config: Object.assign({}, FAST, extra || {}), getState: () => ({ paused: false, conversationFilter: '' }),
     onEmit: i => logs.push(i), onStatus: () => {}, log: () => {}, onReaction: () => {}, seen: { has: () => false, add: () => {} } });
   det.start();
   return { window, doc: window.document, det, logs };
@@ -46,6 +46,19 @@ function out(doc, n, text, imgs) {
   e.appendChild(b);
   doc.querySelector('[data-testid="dm-conversation-panel"]').appendChild(e);
   return e;
+}
+// The owner's photo sits in [data-side], the previous sibling of the article. A quoted thumbnail does not.
+function photoRow(doc, n, opts) {
+  const u = uuid(n);
+  const row = doc.createElement('div');
+  row.setAttribute('data-testid', 'message-' + u);
+  const img = opts.img == null ? '<img alt="Image" src="blob:https://x.com/p' + n + '">' : opts.img;
+  const quote = opts.quote ? '<div class="pv"><span><span>' + opts.quote + '</span></span></div>' : '';
+  const side = opts.side === false ? '' : '<div data-side="right">' + img + '</div>';
+  row.innerHTML = '<div data-testid="bubble-sent" data-fake-rect="780,0,220,80">' + quote + side +
+    '<div role="article"><div data-testid="message-text-' + u + '"><span>' + (opts.text || '') + '</span></div></div></div>';
+  doc.querySelector('[data-testid="dm-conversation-panel"]').appendChild(row);
+  return row;
 }
 
 function bootBg(opts) {
@@ -70,7 +83,8 @@ function bootBg(opts) {
     action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
   };
   vm.runInNewContext(fs.readFileSync(path.join(EXT, 'background.js'), 'utf8'),
-    { chrome, console: { log() {}, warn() {} }, setTimeout, clearTimeout, crypto: nodeCrypto.webcrypto, Uint8Array });
+    { chrome, console: { log() {}, warn() {} }, setTimeout, clearTimeout, crypto: nodeCrypto.webcrypto, Uint8Array,
+      IMR_PHOTO_PARK_MS: opts.parkMs || 0 });
   let k = 0;
   const reply = (text, extra, wait) => new Promise(r => {
     const item = Object.assign({ ts: new Date().toISOString(), conversationId: '111-222', direction: 'outbound', text, key: '111-222|id:uuid=' + uuid(++k), score: 9 }, extra);
@@ -210,6 +224,151 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     await b.reply('look again', { mediaCount: 1 });
     await b.reply('no');
     assert.strictEqual(b.host.filter(m => m.type === 'attach_discard').length, 1);
+  });
+
+  await test('content: a data-side photo and its caption go together, and the photo is not a quote', async () => {
+    const s = setup();
+    await sleep(200);
+    photoRow(s.doc, 20, { text: 'caption' });
+    await sleep(150);
+    const it = s.logs.find(l => l.text === 'caption');
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.direction, 'outbound');
+    assert.strictEqual(it.mediaCount, 1);
+    assert.ok(!it.quotedText, JSON.stringify(it.quotedText));
+    assert.ok(!JSON.stringify(it).includes('blob:'), 'no source URL leaves the tab');
+  });
+
+  await test('content: a quoted thumbnail is not his photo; his data-side image still is', async () => {
+    const s = setup();
+    await sleep(200);
+    const thumb = '<img alt="Image" src="https://pbs.twimg.com/media/Fabc123?format=jpg" width="200">';
+    photoRow(s.doc, 21, { text: 'caption', quote: 'Jordan: see this' + thumb });
+    await sleep(150);
+    const it = s.logs.find(l => l.text === 'caption');
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.mediaCount, 1);
+    assert.ok(it.quotedText && it.quotedText.indexOf('Jordan') >= 0, it.quotedText);
+    assert.ok(!JSON.stringify(it).includes('blob:'));
+    assert.ok(!JSON.stringify(it).includes('pbs.twimg'), 'the quoted thumbnail stays on the page');
+  });
+
+  await test('content: an image with no caption pairs with the next text', async () => {
+    const s = setup({ photoPairMs: 400 });
+    await sleep(200);
+    photoRow(s.doc, 22, { quote: 'Jordan: on my way' });
+    await sleep(80);
+    assert.strictEqual(s.logs.length, 0, 'held for the caption');
+    out(s.doc, 23, 'thanks');
+    await sleep(150);
+    assert.strictEqual(s.logs.length, 1, JSON.stringify(s.logs.map(l => l.text)));
+    assert.strictEqual(s.logs[0].text, 'thanks');
+    assert.strictEqual(s.logs[0].mediaCount, 1);
+    assert.ok(s.logs[0].quotedText && s.logs[0].quotedText.indexOf('Jordan') >= 0, s.logs[0].quotedText);
+  });
+
+  await test('content: yes does not take a held photo, and a different quote stays separate', async () => {
+    const s = setup({ photoPairMs: 350 });
+    await sleep(200);
+    photoRow(s.doc, 24, { quote: 'Jordan: one line' });
+    await sleep(70);
+    out(s.doc, 25, 'yes');
+    await sleep(70);
+    const yes = s.logs.find(l => l.text === 'yes');
+    assert.ok(yes && !yes.mediaCount, JSON.stringify(s.logs.map(l => [l.text, l.mediaCount])));
+    photoRow(s.doc, 26, { text: 'other', quote: 'Sam: two lines', side: false });
+    await sleep(80);
+    const other = s.logs.find(l => l.text === 'other');
+    assert.ok(other && !other.mediaCount, 'a different quote does not take the photo');
+    assert.ok(other.quotedText && other.quotedText.indexOf('Sam') >= 0, other.quotedText);
+    await sleep(350);
+    const photo = s.logs.find(l => l.mediaCount === 1);
+    assert.ok(photo && photo.text === '', JSON.stringify(s.logs.map(l => [l.text, l.mediaCount])));
+    assert.ok(photo.quotedText && photo.quotedText.indexOf('Jordan') >= 0, photo.quotedText);
+  });
+
+  await test('content: an unreadable photo slot is reported, not dropped', async () => {
+    const s = setup();
+    await sleep(200);
+    photoRow(s.doc, 27, { text: 'caption', img: '<img alt="Image">' });
+    await sleep(500);
+    const it = s.logs.find(l => l.text === 'caption');
+    assert.ok(it, 'emitted');
+    assert.strictEqual(it.mediaMiss, 1);
+    assert.ok(!it.mediaCount);
+  });
+
+  await test('content: his photo may be a non-twimg url or a srcset; a loose one is not', async () => {
+    const s = setup();
+    await sleep(200);
+    photoRow(s.doc, 28, { text: 'cdn', img: '<img alt="Image" src="https://cdn.example.invalid/a.jpg">' });
+    photoRow(s.doc, 29, { text: 'set', img: '<img alt="Image" srcset="https://cdn.example.invalid/b.jpg 640w">' });
+    out(s.doc, 30, 'loose', ['<img src="https://cdn.example.invalid/c.jpg" width="300">']);
+    await sleep(200);
+    const cdn = s.logs.find(l => l.text === 'cdn');
+    const set = s.logs.find(l => l.text === 'set');
+    const loose = s.logs.find(l => l.text === 'loose');
+    assert.ok(cdn && cdn.mediaCount === 1, 'cdn');
+    assert.ok(set && set.mediaCount === 1, 'srcset');
+    assert.ok(loose && !loose.mediaCount, 'a url outside his photo slot is not an attachment');
+  });
+
+  await test('content: heic is accepted and a non-image is refused before the bytes are kept', async () => {
+    const s = setup();
+    await sleep(200);
+    out(s.doc, 31, 'heic', ['<img src="blob:https://x.com/heic" width="300">']);
+    out(s.doc, 32, 'pdf', ['<img src="blob:https://x.com/pdf" width="300">']);
+    await sleep(200);
+    const heic = new Uint8Array(16);
+    heic.set([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]);
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]);
+    s.window.fetch = async src => ({
+      ok: true, headers: { get: () => src.indexOf('pdf') >= 0 ? 'application/pdf' : '' },
+      arrayBuffer: async () => (src.indexOf('pdf') >= 0 ? pdf : heic).buffer,
+    });
+    const info = await s.det.uiMediaInfo(uuid(31), 0);
+    assert.strictEqual(info.ok, true);
+    assert.strictEqual(info.mime, 'image/heic');
+    assert.strictEqual(info.name, 'photo.heic');
+    const bad = await s.det.uiMediaInfo(uuid(32), 0);
+    assert.deepStrictEqual([bad.ok, bad.step], [false, 'type']);
+    assert.strictEqual(s.det.uiMediaChunk(uuid(32), 0, 0).step, 'expired');
+  });
+
+  await test('background: a photo that needs a name rides on the next text, not on yes', async () => {
+    const b = bootBg({ parkMs: 5000, tab: tabOk, send: m => {
+      if (!String(m.text || '').trim()) return { ok: false, needsTarget: true, error: 'Who is this for?' };
+      return { ok: true, sent: true };
+    } });
+    await b.reply('', { mediaCount: 1 });
+    await b.reply('yes');
+    const yes = b.host.find(m => m.type === 'send' && m.text === 'yes');
+    assert.ok(yes && !yes.attachments, JSON.stringify(yes));
+    await b.reply('for Sam');
+    const first = b.host.find(m => m.type === 'send' && m.text === '');
+    const follow = b.host.find(m => m.type === 'send' && m.text === 'for Sam');
+    assert.ok(follow && follow.attachments && follow.attachments.length === 1, JSON.stringify(follow));
+    assert.deepStrictEqual(follow.attachments, first.attachments);
+    await b.reply('again');
+    const again = b.host.find(m => m.type === 'send' && m.text === 'again');
+    assert.ok(again && !again.attachments, 'the photo is sent once');
+  });
+
+  await test('background: a parked photo is discarded and the chat is told', async () => {
+    const b = bootBg({ parkMs: 30, tab: tabOk, send: () => ({ ok: false, needsTarget: true, error: 'Who is this for?' }) });
+    await b.reply('', { mediaCount: 1 }, 120);
+    assert.ok(b.host.some(m => m.type === 'attach_discard'), 'discarded');
+    assert.ok(b.host.some(m => m.type === 'signal' && m.status === 'photo_miss'), 'warned');
+  });
+
+  await test('background: an unreadable photo slot is skipped, a read one is not', async () => {
+    const b = bootBg({ tab: tabOk, send: () => ({ ok: true, sent: true }) });
+    await b.reply('caption', { mediaMiss: 1 });
+    assert.strictEqual(b.host.find(m => m.type === 'send').attachmentsSkipped, 1);
+    await b.reply('caption', { mediaCount: 1, mediaMiss: 1 });
+    const send = b.host.filter(m => m.type === 'send')[1];
+    assert.ok(send.attachments && send.attachments.length === 1);
+    assert.ok(!send.attachmentsSkipped);
   });
 
   console.log(`${passed} passed, ${failed} failed (v1.4.6 attachments)`);

@@ -952,6 +952,8 @@ def handle_pending_pick(text, cfg, now, poster, quoted=''):
     the extension no longer has it (restarted, or the pick was out of range): say so, send nothing."""
     # v1.4.21: an emoji-only native Reply that names a contact is a send, even inside the 10-minute
     # prompt window. "ok", digits, and email starts stay prompt answers.
+    # v1.4.27: a photo with no caption is not a prompt answer (empty text falls through below).
+    # A quote on that photo routes like this emoji-only Reply.
     if emoji_only(text):
         directory = rc.build_directory(cfg, rc.load_roster())
         h, st = rc.parse_quote(quoted, cfg, directory)
@@ -1258,9 +1260,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if text is None and (atts or skipped_n):
         text = ''
     if isinstance(text, str) and not text.strip() and not atts and skipped_n and not cfg['paused']:
-        # v1.4.6: only photos, and none could be read from X: say so (counts only), send nothing
-        notify(cfg, poster, {'type': 'refused', 'reason': 'attachment', 'count': skipped_n, 'sentText': False,
-                             'at': rc.iso_utc(now())})
+        # v1.4.27: the photo was seen and could not be read. Say so. Nothing goes out.
+        _warn_photo('', cfg, poster, now)
         return refuse('attachments could not be read', attachments=skipped_n)
     if not isinstance(text, str) or (not text.strip() and not atts):
         return refuse('empty text')
@@ -1487,6 +1488,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if len(window) >= cfg['maxSendsPerMinute']:
             rc.log_event('rate_limited', handle=handle, textLength=len(body), limit=cfg['maxSendsPerMinute'])
             _discard_attachments(msg.get('attachments'))
+            if atts:
+                _warn_photo(contact.get('label', ''), cfg, poster, now)
             return dict(base, ok=False, error='rate limited (%d per minute)' % cfg['maxSendsPerMinute'], **who)
         outgoing = (body + ('\n' + cfg['footer'] if cfg.get('footer') else '')) if body.strip() else ''
         recent[fp] = t
@@ -1545,11 +1548,15 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         return dict({'ok': True, 'dryRun': True, 'textLength': len(body)}, **who)
     if not ok:
         rc.log_event('send_failed', textLength=len(body), error=err, attachments=len(atts))      # err is a fixed code, never raw text
+        if atts:
+            _warn_photo(contact.get('label', ''), cfg, poster, now)
         return dict({'ok': False, 'dryRun': False, 'error': rc.error_message(err), 'errorCode': err}, **who)
     # Delivery proof is verified by the watcher (it holds Full Disk Access); the host recorded a
     # body-free pending entry inside its lock above. The host never confirms delivery itself.
-    rc.log_event('sent', routedBy=by, textLength=len(body), delivered=None, deliveryNote='pending', attachments=len(atts),
-                 attachmentBytes=sum(a['size'] for a in atts))
+    sent_fields = {'attachments': len(atts), 'attachmentBytes': sum(a['size'] for a in atts)}
+    if atts:
+        sent_fields['kinds'] = sorted({a['kind'] for a in atts if a.get('kind')})
+    rc.log_event('sent', routedBy=by, textLength=len(body), delivered=None, deliveryNote='pending', **sent_fields)
     # item 6: when deliveryCheck is on, the WATCHER posts the single confirmation (✓✓ delivered, or ✓ sent
     # after ~20s). The host only confirms here when delivery checking is off, so the owner still hears back.
     if cfg['confirmSends'] and not cfg.get('deliveryCheck', True):
@@ -1560,8 +1567,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         notify(cfg, poster, p)
     res = dict({'ok': True, 'dryRun': False, 'sent': True, 'delivered': None, 'deliveryCheck': 'pending'}, **who)
     if skipped_n:
-        notify(cfg, poster, {'type': 'refused', 'reason': 'attachment', 'count': skipped_n, 'label': contact['label'],
-                             'sentText': True, 'at': rc.iso_utc(t)})
+        _warn_photo(contact.get('label', ''), cfg, poster, now)
         res['attachmentsSkipped'] = skipped_n
     if pending_id and _UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True):
         # v1.4.6: \u2705 on HIS message right now (Messages accepted it); the watcher then skips the text line.
@@ -1592,13 +1598,19 @@ _REFUSAL_TEXT = {
     'the routed recipient does not match the handle the extension reported': 'The recipient changed. Send it again.',
     'refusing to relay to the owner handle': 'That would text your own number. /test send',
     'bad attachment': 'The attachment was damaged. Attach it again.',
+    'attachment type not allowed': '',
 }
 
 
 def _tell_refusal(reason, label, cfg, poster, now):
     if reason in _REFUSAL_SILENT:
         return
+    if reason == 'attachment type not allowed':
+        _warn_photo(label, cfg, poster, now)
+        return
     detail = _REFUSAL_TEXT.get(reason)
+    if detail == '':
+        return
     if detail is None:
         if reason.startswith('attachment too large'):
             detail = 'The attachment is over 25 MB.'
@@ -1633,7 +1645,10 @@ def _parse_attachments(raw):
         if not relay_media.SHA_RE.match(sha):
             return [], 'bad attachment'
         mime = str(a.get('mime') or '')[:80]
-        out.append({'uploadId': a['uploadId'], 'size': size, 'sha256': sha, 'mime': mime,
+        kind = relay_media.outbound_kind(mime)
+        if not kind:
+            return [], 'attachment type not allowed'
+        out.append({'uploadId': a['uploadId'], 'size': size, 'sha256': sha, 'mime': mime, 'kind': kind,
                     'name': relay_media.safe_name(a.get('name'), mime)})
     return out, ''
 
@@ -1728,6 +1743,21 @@ def _quote_label(msg):
 
 # v1.4.24: the extension saw the owner's send and the host never answered. Exact line, via status detail.
 UNACKED_LINE = '\u26a0\ufe0f Didn\u2019t send. Reload X Chat and retype.'
+# v1.4.27: a photo was seen and did not go out. The label is the contact, or the word "name".
+PHOTO_MISS = '\u26a0\ufe0f photo didn\u2019t send to %s, send it from Messages'
+
+
+def photo_miss_line(label):
+    who = rc.clean_label(label) or 'name'
+    return PHOTO_MISS % who
+
+
+def _warn_photo(label, cfg, poster, now):
+    """One health line. Never the message text, never the image."""
+    try:
+        notify(cfg, poster, {'type': 'status', 'detail': photo_miss_line(label), 'at': rc.iso_utc(now())})
+    except Exception:
+        pass
 
 
 # v1.4.21: the extension saw a reply and will not send it. Fixed sentences, never the message.
@@ -1778,6 +1808,11 @@ def handle_signal(msg, cfg, now, poster):
         label = str(msg.get('label') or '').strip()
         rc.log_event('signal', status='guess_expired')
         notify(cfg, poster, {'type': 'guess_expired', 'label': label, 'at': rc.iso_utc(now())})
+        return {'ok': True}
+    if status == 'photo_miss':
+        # v1.4.27: a photo was seen and never handed off (grab failed, or the short pairing window ended).
+        rc.log_event('signal', status='photo_miss')
+        _warn_photo('', cfg, poster, now)
         return {'ok': True}
     if status == 'typed_mismatch':
         # v1.4.14: the extension read his bubble back differently from what he typed and sent nothing

@@ -103,6 +103,7 @@
     ackMs: 10000,              // v1.4.24: a typed relay-chat send with no host ack posts a warning
     emptyTextRetries: 3,
     emptyRetryDelayMs: 400,
+    photoPairMs: 20000,       // v1.4.27: a photo with no caption waits this long for the next text
     urlPollMs: 1000,
     newestAt: 'auto',
     maxTextLength: 4000,       // aligned with the host's MAX_TEXT; over this = refuse, never truncate
@@ -146,6 +147,9 @@
     let wrongAccountReported = false;
     let accountOkReported = false;
     let recentEmits = [];
+    let photoHold = null;              // v1.4.27: an image-only bubble waiting for the next text
+    const photoReady = new WeakSet();  // released from that wait; emit once, do not hold again
+    const PHOTO_BARE_RE = /^(?:yes|y|yep|yeah|yes please|ok|okay|send|send it|do it|no|n|nope|cancel|cancel it)\.?$/i;
     const lastEls = {};
     const stats = { baselined: 0, emitted: 0, skippedHistory: 0, skippedDup: 0, skippedFilter: 0, skippedPaused: 0, skippedBulk: 0, skippedSettle: 0, skippedWrongAccount: 0, skippedOld: 0, refusedTooLong: 0 };
 
@@ -518,6 +522,36 @@
       return t ? t + (/:$/.test(t) || t.indexOf('\n') < 0 && t.length < 40 ? ' ' : '\n') + urls.join('\n') : urls.join('\n');
     }
 
+    // v1.4.27: his own photo is an img inside [data-side], beside the article. A Reply preview
+    // never carries that attribute (a quoted thumbnail and a link card stay excluded).
+    function inOwnerPhoto(el) {
+      for (let n = el; n; n = parentOf(n)) {
+        if (n.getAttribute && n.hasAttribute && n.hasAttribute('data-side')) return true;
+      }
+      return false;
+    }
+    function ownPhotoSibling(sib) {
+      if (!sib || sib.nodeType !== 1) return false;
+      const slots = [];
+      if (sib.hasAttribute && sib.hasAttribute('data-side')) slots.push(sib);
+      for (const s of safeAll(sib, '[data-side]')) if (slots.indexOf(s) < 0) slots.push(s);
+      if (!slots.length) return false;
+      const inSlot = el => slots.some(s => s === el || deepContains(s, el));
+      if (safeAll(sib, 'img').some(img => !isEmojiImg(img) && !inSlot(img))) return false;
+      let outside = '';
+      const visit = el => {
+        for (let c = el.firstChild; c; c = c.nextSibling) {
+          if (inSlot(c)) continue;
+          if (c.nodeType === 3) { const v = normSpaces(c.nodeValue).trim(); if (v) outside += ' ' + v; continue; }
+          if (c.nodeType !== 1 || isHiddenEl(c)) continue;
+          if (String(c.tagName).toLowerCase() === 'svg') continue;
+          visit(c);
+        }
+      };
+      visit(sib);
+      outside = outside.replace(/\s+/g, ' ').trim();
+      return !outside || isChipText(outside);
+    }
     // v1.4.10: the preview block(s) of a native Reply: the article's preceding siblings at the nearest level
     // that shows text OR a photo thumbnail (a reply to an image bubble has a preview with no text at all).
     function previewInfo(entry) {
@@ -544,6 +578,7 @@
           if (isUuidEntry(sib) || safeAll(sib, cfg.uuidEntryPrefixSelector).some(isUuidEntry)) break;   // another message
           if (isHiddenEl(sib)) continue;
           if (cards.blocks.some(b => deepContains(b, sib) || deepContains(sib, b))) continue;   // v1.4.6: a shared card, not a quote
+          if (ownPhotoSibling(sib)) continue;   // v1.4.27: his attachment beside the article is not the Reply preview
           const t = visibleText(sib);
           const img = safeAll(sib, 'img').some(i => MEDIA_SRC_RE.test(String(i.getAttribute('src') || '')) && !isEmojiImg(i)) ||
             safeAll(sib, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i]').length > 0;
@@ -785,6 +820,15 @@
       try { scanReactions(list); } catch (e) { /* prompts get marked on their next change */ }
       settleUntil = now() + cfg.settleMs;
       recentEmits = [];
+      if (photoHold) {                         // v1.4.27: a chat switch must not drop a photo with no warning
+        const h = photoHold;
+        if (h.timer) win.clearTimeout(h.timer);
+        photoHold = null;
+        photoReady.add(h.entry);
+        if (!keep.has(h.entry)) {
+          try { onStatus({ status: 'photo_miss', conversationId: conversationId() }); } catch (e) { /* ignore */ }
+        }
+      }
       if (keep.size) { keep.forEach(e => pending.add(e)); schedule(0); }
       info('baseline (' + reason + '): context=' + contextPath() + ' conversation=' + (conversationId() || '(none)') + ' mode=' + mode + ' root=' + chatRoot().selector + ' existing=' + list.length);
     }
@@ -1016,6 +1060,44 @@
       if (ackTimer) { win.clearTimeout(ackTimer); ackTimer = null; }
     }
 
+    function quotesConflict(a, b) {
+      const x = String(a || '').trim();
+      const y = String(b || '').trim();
+      return !!(x && y && x !== y);
+    }
+    function canPairText(text) {
+      const t = String(text || '').trim();
+      if (!t || PHOTO_BARE_RE.test(t) || /^\s*\//.test(t) || UI_TAG_RE.test(t)) return false;
+      return true;
+    }
+    function armPhotoHold(entry, srcs, a) {
+      const ms = Number(cfg.photoPairMs);
+      if (!(ms > 0)) return false;
+      if (photoHold && photoHold.entry === entry) {
+        photoHold.media = srcs.slice();
+        if (a.quotedText) photoHold.quotedText = a.quotedText;
+        if (a.youSent) photoHold.youSent = true;
+        photoHold.key = a.key;
+        return true;
+      }
+      if (photoHold) {
+        const old = photoHold;
+        photoHold = null;
+        if (old.timer) win.clearTimeout(old.timer);
+        photoReady.add(old.entry);
+        pending.add(old.entry);
+        schedule(0);
+      }
+      photoHold = { entry, media: srcs.slice(), quotedText: a.quotedText || '', youSent: !!a.youSent, key: a.key };
+      photoHold.timer = win.setTimeout(() => {
+        if (!photoHold || photoHold.entry !== entry) return;
+        photoHold = null;
+        photoReady.add(entry);
+        pending.add(entry);
+        schedule(0);
+      }, ms);
+      return true;
+    }
     function flush() { try { flushInner(); } finally { flushCache = null; } }
     function flushInner() {
       const roots = Array.from(pending);
@@ -1063,7 +1145,24 @@
           try { cardUrls = cardInfo(e).urls; } catch (err) { cardUrls = []; }
           if (cardUrls.length) a.text = withCards(a.text, cardUrls);
         }
-        const media = a.direction === 'outbound' ? mediaOf(e) : [];
+        let media = a.direction === 'outbound' ? mediaOf(e) : [];
+        let quoteEntry = e;
+        // v1.4.27: a photo with no caption rides on the next text to the same person. A bare yes/no
+        // answers a prompt and must not take the photo. Differing quotes stay separate sends.
+        if (photoHold && photoHold.entry !== e && a.direction === 'outbound' && canPairText(a.text) &&
+            !quotesConflict(a.quotedText, photoHold.quotedText) && !baselineReason) {
+          const held = photoHold;
+          if (held.timer) win.clearTimeout(held.timer);
+          photoHold = null;
+          for (const src of held.media) if (media.indexOf(src) < 0) media.push(src);
+          if (!a.quotedText && held.quotedText) {
+            a.quotedText = held.quotedText;
+            if (held.youSent) a.youSent = true;
+            quoteEntry = held.entry;
+          }
+          processed.add(held.entry);
+          if (held.key) seenKeys.add(held.key);
+        }
         if (!a.text && !media.length || (a.direction === 'outbound' && mediaShell(e))) {
           const n = retryCounts.get(e) || 0;
           if (n < cfg.emptyTextRetries && !baselineReason) {
@@ -1078,6 +1177,18 @@
           if (a.direction === 'outbound') armUnacked();
           const wait = Math.max(0, settleUntil - now());
           win.setTimeout(() => { pending.add(e); schedule(0); }, Math.max(cfg.batchDelayMs, wait));
+          continue;
+        }
+        // A photo already behind a newer bubble is history, unless we held it on purpose (photoReady).
+        const idx = all.indexOf(e);
+        let blocked = false;
+        if (idx >= 0 && !photoReady.has(e)) {
+          const after = topNewest ? all.slice(0, idx) : all.slice(idx + 1);
+          blocked = after.some(o => !found.has(o) && entryText(o).text);
+        } else if (idx < 0) a.signals.push('position:unknown');
+        // v1.4.27: image-only waits briefly so the caption can catch up. Same-bubble text sends now.
+        if (!blocked && a.direction === 'outbound' && media.length && !String(a.text || '').trim() && !baselineReason &&
+            !photoReady.has(e) && armPhotoHold(e, media, a)) {
           continue;
         }
         processed.add(e);
@@ -1098,13 +1209,8 @@
           }
         }
 
-        // Must be at the newest end.
-        const idx = all.indexOf(e);
-        if (idx >= 0) {
-          const after = topNewest ? all.slice(0, idx) : all.slice(idx + 1);
-          const blocked = after.some(o => !found.has(o) && entryText(o).text);
-          if (blocked) { stats.skippedHistory++; continue; }
-        } else a.signals.push('position:unknown');
+        // Must be at the newest end. A photo released from the short caption wait is not history.
+        if (blocked) { stats.skippedHistory++; continue; }
 
         // Cross-session dedupe on the uuid (keys only; persisted by the boot layer).
         if (seen.has(a.uuid)) { stats.skippedDup++; continue; }
@@ -1135,7 +1241,7 @@
         if (a.youSent) item.youSent = true;
         if (a.direction === 'outbound' && a.quotedText) {
           try {
-            const lab = quoteLabelFrom(e, a.quotedText);
+            const lab = quoteLabelFrom(quoteEntry, a.quotedText);
             if (lab) item.quoteLabel = lab;
           } catch (err) { /* a missed label asks "Who is this for?" rather than guessing */ }
         }
@@ -1147,6 +1253,8 @@
           pruneMedia();
           mediaRefs.set(String(a.uuid).toLowerCase(), { srcs: media, at: realNow() });
           item.mediaCount = media.length;
+        } else if (a.direction === 'outbound' && ownerPhotoSlots(e).length) {
+          item.mediaMiss = 1;           // v1.4.27: his photo slot never became readable. The host says so.
         }
         try { emit(item); } catch (err) { info('emit failed', err); }
       }
@@ -1760,6 +1868,15 @@
     const mediaRefs = new Map();       // uuid -> {srcs, at}
     const mediaBufs = new Map();       // uuid#i -> {bytes, mime, at}
     const MEDIA_SRC_RE = /^(blob:|data:image\/|https:\/\/(ton|pbs)\.twimg\.com\/)/i;
+    const OWNER_SRC_RE = /^(blob:|data:image\/|https?:\/\/)/i;   // v1.4.27: his own photo may be a non-twimg blob
+    const OUT_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heic' };
+    function imageSrc(img, owner) {
+      const src = String(img.getAttribute('src') || '').trim();
+      if (src && (owner ? OWNER_SRC_RE : MEDIA_SRC_RE).test(src)) return src;
+      if (!owner) return '';
+      const first = String(img.getAttribute('srcset') || '').split(',')[0].trim().split(/\s+/)[0];
+      return first && OWNER_SRC_RE.test(first) ? first : '';
+    }
     function isEmojiImg(img) {
       const src = String(img.getAttribute('src') || '');
       const alt = String(img.getAttribute('alt') || '');
@@ -1768,6 +1885,10 @@
       const w = Number(img.getAttribute('width') || img.naturalWidth || 0);
       return w > 0 && w < 40;
     }
+    function ownerPhotoSlots(entry) {
+      const cards = cardInfo(entry);
+      return safeAll(entry, '[data-side]').filter(s => !inCard(entry, s, cards) && !isExcluded(s));
+    }
     function mediaOf(entry) {
       const out = [];
       let q = null;
@@ -1775,11 +1896,14 @@
       const cards = cardInfo(entry);
       const pv = previewInfo(entry);
       for (const img of safeAll(entry, 'img')) {
-        const src = String(img.getAttribute('src') || '');
-        if (!src || !MEDIA_SRC_RE.test(src) || isEmojiImg(img) || isExcluded(img)) continue;
-        if (q && deepContains(q, img)) continue;      // a photo in the quoted message is theirs, never re-sent
-        if (inPreview(entry, img, pv)) continue;      // v1.4.10: so is the thumbnail in a native Reply preview
+        const owner = inOwnerPhoto(img);   // v1.4.27: [data-side] is his photo even when it sits where a preview would
+        const src = imageSrc(img, owner);
+        if (!src || isEmojiImg(img) || isExcluded(img)) continue;
         if (inCard(entry, img, cards)) continue;      // a shared post / link thumbnail: the URL goes instead
+        if (!owner) {
+          if (q && deepContains(q, img)) continue;    // a photo in the quoted message is theirs, never re-sent
+          if (inPreview(entry, img, pv)) continue;    // v1.4.10: so is the thumbnail in a native Reply preview
+        }
         if (!out.includes(src)) out.push(src);
         if (out.length >= MEDIA_MAX) break;
       }
@@ -1787,6 +1911,7 @@
     }
     function mediaShell(entry) {        // a photo bubble whose image has not loaded yet
       if (mediaOf(entry).length) return false;
+      if (ownerPhotoSlots(entry).length) return true;   // v1.4.27: his slot is there; the src may still be missing
       const pv = previewInfo(entry);
       return safeAll(entry, '[data-testid*="image" i],[data-testid*="photo" i],[data-testid*="media" i],[aria-label*="image" i],[aria-label*="photo" i]')
         .some(el => !inPreview(entry, el, pv));     // v1.4.10: a quoted photo's placeholder is not his photo
@@ -1807,6 +1932,11 @@
       if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
       if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'image/gif';
       if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45) return 'image/webp';
+      if (b.length >= 12 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+        let brand = '';
+        for (let i = 8; i < 12; i++) brand += String.fromCharCode(b[i]);
+        if (/^(heic|heix|hevc|hevx|mif1|msf1|heif)$/i.test(brand)) return 'image/heic';
+      }
       return '';
     }
     async function uiMediaInfo(uuid, index) {
@@ -1824,11 +1954,14 @@
         if (buf.byteLength > MEDIA_MAX_BYTES) return { ok: false, step: 'too-large', size: buf.byteLength };
         if (!buf.byteLength) return { ok: false, step: 'empty' };
         const bytes = new Uint8Array(buf);
-        const mime = sniffMime(bytes) || String((r.headers && r.headers.get && r.headers.get('content-type')) || '').split(';')[0].slice(0, 60);
+        const sniffed = sniffMime(bytes);
+        const header = String((r.headers && r.headers.get && r.headers.get('content-type')) || '').split(';')[0].trim().toLowerCase().slice(0, 60);
+        const mime = (sniffed && OUT_MIME[sniffed]) ? sniffed : (OUT_MIME[header] ? (header === 'image/heif' ? 'image/heic' : header) : '');
+        if (!mime) return { ok: false, step: 'type' };   // v1.4.27: not on the allow-list. Bytes are not kept.
         const sub = (win.crypto && win.crypto.subtle) || (typeof crypto !== 'undefined' && crypto.subtle);
         const sha256 = hex(await sub.digest('SHA-256', bytes));
         mediaBufs.set(String(uuid).toLowerCase() + '#' + index, { bytes, mime, at: realNow() });
-        const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' }[mime] || '';
+        const ext = OUT_MIME[mime] || '';
         return { ok: true, size: bytes.length, mime, sha256, name: (mime.indexOf('image/') === 0 ? 'photo' : 'attachment') + (ext ? '.' + ext : ''),
                  chunks: Math.ceil(bytes.length / MEDIA_CHUNK) };
       } catch (e) { return { ok: false, step: 'read-failed' }; }
@@ -1892,6 +2025,8 @@
       },
       stop() {
         if (observer) observer.disconnect();
+        if (photoHold && photoHold.timer) win.clearTimeout(photoHold.timer);
+        photoHold = null;
         noteHostAck(false);
         [urlTimer, shadowTimer].forEach(t => t && win.clearInterval(t));
         [flushTimer, scanTimer].forEach(t => t && win.clearTimeout(t));

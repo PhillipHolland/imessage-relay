@@ -14,7 +14,8 @@ import relay_common as rc
 # Outgoing messages in the ONE-TO-ONE chat with `handle`, earliest first. The participant-count subquery
 # keeps group chats out, and date-ascending order lets the watcher claim one distinct ROWID per send.
 DELIVERY_SQL = """
-SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')), COALESCE(m.cache_has_attachments, 0)
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')),
+       COALESCE((SELECT COUNT(*) FROM message_attachment_join j WHERE j.message_id = m.ROWID), 0)
 FROM message m
 JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
 JOIN chat_handle_join chj ON chj.chat_id = cmj.chat_id
@@ -27,7 +28,8 @@ ORDER BY m.date ASC, m.ROWID ASC
 # v1.4.0: outgoing messages in ONE group chat, found by its Messages chat GUID (the id the reply was
 # sent to). Same columns as DELIVERY_SQL; delivery flags and lengths only, never text.
 DELIVERY_SQL_GROUP = """
-SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')), COALESCE(m.cache_has_attachments, 0)
+SELECT m.ROWID, m.is_delivered, m.error, m.date, LENGTH(COALESCE(m.text, '')),
+       COALESCE((SELECT COUNT(*) FROM message_attachment_join j WHERE j.message_id = m.ROWID), 0)
 FROM message m
 JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
 JOIN chat c ON c.ROWID = cmj.chat_id
@@ -137,7 +139,8 @@ def check_delivery_once(handle, since_unix, db_path=None, exclude_rowids=(), tex
         con.close()
     rows = [r for r in rows if r[0] not in set(exclude_rowids or ())]
     if part == 'file':
-        # v1.4.6: an attachment send is proven by an outgoing row that carries an attachment
+        # v1.4.27: an attachment send is proven only by an attachment row (the join), and only
+        # is_delivered deletes the staged file. cache_has_attachments alone is not enough.
         rows = [r for r in rows if len(r) > 5 and r[5]]
         text_length = None
     if not rows:

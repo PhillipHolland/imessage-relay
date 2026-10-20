@@ -355,6 +355,17 @@ def discard_upload(upload_id):
 _NAME_BAD_RE = re.compile(r'[\x00-\x1f\x7f/\\:"*?<>|]+')
 
 
+# v1.4.27: photos the owner sends from X Chat. Anything else is refused (the chat is told).
+OUTBOUND_KIND = {'image/jpeg': 'jpeg', 'image/jpg': 'jpeg', 'image/pjpeg': 'jpeg', 'image/png': 'png',
+                 'image/gif': 'gif', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heic',
+                 'image/heic-sequence': 'heic', 'image/heif-sequence': 'heic'}
+
+
+def outbound_kind(mime):
+    """'jpeg'|'png'|'gif'|'webp'|'heic' or '' when the type is not on the outbound allow-list."""
+    return OUTBOUND_KIND.get(str(mime or '').split(';')[0].strip().lower(), '')
+
+
 def safe_name(name, mime):
     """A filename for the recipient: the basename without path/control characters, at most 80 chars,
     else 'photo.<ext>' / 'attachment.<ext>'. Never logged."""
@@ -363,6 +374,7 @@ def safe_name(name, mime):
     ext = _ext_of(base)
     if not ext:
         ext = {'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+               'image/heic': 'heic', 'image/heif': 'heic',
                'video/mp4': 'mp4', 'video/quicktime': 'mov', 'application/pdf': 'pdf'}.get(str(mime or '').lower(), '')
     if not base or base.startswith('.'):
         base = 'photo' if str(mime or '').startswith('image/') else 'attachment'
@@ -398,6 +410,10 @@ def stage_for_send(data_path, name):
     the staged path; the upload's inflight dir is removed."""
     d = os.path.join(_private_dir(SEND_STAGE_DIR), secrets.token_hex(8))
     os.makedirs(d, mode=0o700)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
     dst = os.path.join(d, name)
     shutil.move(data_path, dst)
     os.chmod(dst, 0o600)
