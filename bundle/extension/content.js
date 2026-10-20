@@ -19,6 +19,11 @@
  * v1.3.9: X Chat now renders the bubble time as plain spans inside message-text-<uuid> (twice: a
  * visible and a screen-reader copy). Trailing clock-time / status chips are dropped (element and
  * line level); clock times inside the message text are kept.
+ *
+ * v1.4.21: a lone emoji is not message-text-<uuid>. X draws it as a ~64px glyph (a text node or
+ * an img alt) and the native-Reply preview is the previous sibling of that glyph. The message
+ * row's own justify-end / justify-start is a direction signal. data-send-status is not: X sets
+ * "sent" on received rows too.
  */
 (function () {
   'use strict';
@@ -51,7 +56,8 @@
     uuidEntryPrefixSelector: '[data-testid^="message-"]',
     uuidEntryTestIdRegex: /^message-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
     // The bubble's own text lives in data-testid="message-text-<uuid>" (same uuid). Item 10: this
-    // is the ONLY element the reply body is read from.
+    // is the element the reply body is read from. v1.4.21: a lone emoji has no such node; the
+    // ~64px glyph is the body instead.
     textTestIdPrefix: 'message-text-',
 
     // Native reply-quote: the snippet of the replied-to message shown inside the owner's bubble.
@@ -351,9 +357,48 @@
       if (safeMatches(entry, sel)) return entry;
       return safeAll(entry, sel)[0] || null;
     }
+    // v1.4.21: X skips message-text-<uuid> when supersizeEmoji is set. The glyph is a ~64px span
+    // (plain text, or an img whose alt is the emoji). An img is 1em, so the parent font counts.
+    function emojiOnlyText(t) {
+      const s = normSpaces(t).replace(/\s+/g, '');
+      if (!s || s.length > 32 || /[A-Za-z0-9]/.test(s)) return '';
+      try { if (!/\p{Extended_Pictographic}/u.test(s)) return ''; } catch (e) { return ''; }
+      return s;
+    }
+    function fontPx(el) {
+      const px = n => {
+        const s = n && style(n);
+        const v = s ? parseFloat(s.fontSize) : NaN;
+        return Number.isFinite(v) ? v : 0;
+      };
+      const self = px(el);
+      return self >= 40 ? self : px(parentOf(el));
+    }
+    function supersizeEmoji(entry) {
+      // The reply preview is before the owner's glyph. Keep the last big emoji so a quoted
+      // emoji is not read as the reply. Hidden screen-reader nodes ("You") are not the body.
+      let found = null;
+      walkElements(entry, el => {
+        if (isHiddenEl(el)) return;
+        for (let p = parentOf(el); p && p !== entry; p = parentOf(p)) if (isHiddenEl(p)) return;
+        if (!(fontPx(el) >= 40)) return;
+        if (el.tagName === 'IMG') {
+          const alt = emojiOnlyText(el.getAttribute('alt') || '');
+          if (alt) found = { el, text: alt };
+          return;
+        }
+        const own = emojiOnlyText(ownText(el));
+        if (own) found = { el, text: own };
+      });
+      return found;
+    }
     function entryText(entry) {
       const el = bodyEl(entry);
-      return { textEl: el, text: el ? extractText(el) : '' };
+      const text = el ? extractText(el) : '';
+      if (text) return { textEl: el, text };
+      const big = supersizeEmoji(entry);
+      if (big) return { textEl: big.el, text: big.text };
+      return { textEl: el, text: '' };
     }
     // v1.4.2: X Chat's current native Reply shows "Replied to <name>" plus a preview of the replied-to
     // message, which may carry no quote-like testid. Three more ways to find it, in order:
@@ -477,10 +522,19 @@
     function previewInfo(entry) {
       const none = { els: [], text: '', media: false };
       const body = bodyEl(entry);
-      if (!body || body === entry) return none;
-      let art = null;
-      for (let n = body; n && n !== entry; n = parentOf(n)) if (n.getAttribute && n.getAttribute('role') === 'article') { art = n; break; }
-      const start = art || body;
+      let start = null;
+      if (body && body !== entry) {
+        let art = null;
+        for (let n = body; n && n !== entry; n = parentOf(n)) if (n.getAttribute && n.getAttribute('role') === 'article') { art = n; break; }
+        start = art || body;
+      }
+      // v1.4.21: a lone emoji has no message-text / article. The preview is the previous
+      // sibling of that glyph (the contact's relayed line). A real message-text body wins.
+      if (!(body && body !== entry && extractText(body))) {
+        const big = supersizeEmoji(entry);
+        if (big) start = big.el;
+      }
+      if (!start || start === entry) return none;
       const cards = cardInfo(entry);
       for (let n = start; n && n !== entry; n = parentOf(n)) {
         const els = [], texts = [];
@@ -636,6 +690,26 @@
         if (n === parentOf(entry)) break;
       }
       if (sVote) { score += sVote * W.style; signals.push('style:' + (sVote > 0 ? '+' : '-') + W.style + '(' + sWhy + ')'); }
+
+      // v1.4.21: the message row's own justify-end / justify-start. The style walk reads the
+      // parent, so it misses this, and a background tab has no rects for the align vote. Weight
+      // it like a testid so an own jumbo-emoji row is still outbound. The class is what X sets;
+      // computed style covers an inline style with no class. data-send-status is "sent" on
+      // received rows too and is not a direction signal.
+      {
+        const rs = style(entry);
+        const jc = (rs && rs.justifyContent) || '';
+        const endish = v => /^(flex-end|end|right)$/.test(v || '');
+        const startish = v => /^(flex-start|start|left)$/.test(v || '');
+        const cls = entry.classList;
+        const clsEnd = !!(cls && cls.contains('justify-end'));
+        const clsStart = !!(cls && cls.contains('justify-start'));
+        let rowEnd = false, rowStart = false;
+        if (clsEnd !== clsStart) { rowEnd = clsEnd; rowStart = clsStart; }
+        else if (!clsEnd) { rowEnd = endish(jc); rowStart = startish(jc); }
+        if (rowEnd && !rowStart) { score += W.testId; signals.push('row:+' + W.testId + '(justify-end)'); }
+        else if (rowStart && !rowEnd) { score -= W.testId; signals.push('row:-' + W.testId + '(justify-start)'); }
+      }
 
       const direction = score >= cfg.decisionThreshold ? 'outbound' : score <= -cfg.decisionThreshold ? 'inbound' : 'unknown';
       signals.push('score:' + score);

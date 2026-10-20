@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.20.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.21.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -39,6 +39,7 @@ import struct
 import subprocess
 import sys
 import time
+import unicodedata
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -917,15 +918,39 @@ def short_answer(text):
     return not re.search(r'[^\W_]', s)          # no letters or digits at all: emoji / punctuation only
 
 
+def emoji_only(text):
+    """v1.4.21: emoji (and joiners) only. Not a short word, digits, punctuation, or an email start."""
+    s = re.sub(r'\s+', '', str(text or ''))
+    if not s or len(s) > 32:
+        return False
+    saw = False
+    for ch in s:
+        cat = unicodedata.category(ch)
+        if cat == 'So':
+            saw = True
+            continue
+        if cat in ('Mn', 'Mc', 'Me', 'Cf', 'Sk'):
+            continue
+        return False
+    return saw
+
+
 def _prompt_recent(t):
     return t - float(load_state().get('lastPromptAt') or 0) <= PICK_WINDOW_S
 
 
-def handle_pending_pick(text, cfg, now, poster):
+def handle_pending_pick(text, cfg, now, poster, quoted=''):
     """v1.4.13: while a pick prompt is waiting, an answer to it ("2", "0188", "alex@") is checked against
     the pick FIRST and never routed as a new text (it used to become "Reply to <last texter>?"). The
     extension holds the message text and resolves a valid pick itself; one that reaches the host means
     the extension no longer has it (restarted, or the pick was out of range): say so, send nothing."""
+    # v1.4.21: an emoji-only native Reply that names a contact is a send, even inside the 10-minute
+    # prompt window. "ok", digits, and email starts stay prompt answers.
+    if emoji_only(text):
+        directory = rc.build_directory(cfg, rc.load_roster())
+        h, st = rc.parse_quote(quoted, cfg, directory)
+        if st == 'match' and h:
+            return None
     state = load_state()
     p = state.get('pendingNewContact')
     if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
@@ -1266,7 +1291,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                              'so nothing was sent.', 'at': rc.iso_utc(now())})
         return refuse('text from a prompt row', textLength=len(text))
     if not msg.get('confirmed'):
-        r = handle_pending_pick(text, cfg, now, poster)
+        r = handle_pending_pick(text, cfg, now, poster, quoted)
         if r is not None:                     # v1.4.13: an answer to a pick prompt is never a new text
             return r
     cmd = parse_command(text)
@@ -1686,9 +1711,26 @@ def handle_test(msg, cfg, runner, sleeper, now, poster):
                                 'extVersion': msg.get('extVersion')}, cfg, runner, sleeper, now, poster)
 
 
+# v1.4.21: the extension saw a reply and will not send it. Fixed sentences, never the message.
+_SKIP_REASON = {
+    'empty': 'That message had nothing I could send as an iMessage.',
+    'paused': 'The relay is paused, so nothing was sent. /resume turns it back on.',
+    'no_contacts': 'No contacts are set up yet, so nothing was sent (/add Name +1 \u2026).',
+    'host_down': 'The Mac helper isn\u2019t connected, so nothing was sent.',
+    'other': 'That reply was not sent.',
+}
+
+
 def handle_signal(msg, cfg, now, poster):
     """A browser-side condition (item 6) the host turns into one body-free webhook. No message text."""
     status = str(msg.get('status') or '')
+    if status == 'skipped':
+        raw = re.sub(r'[^a-z_]', '', str(msg.get('reason') or '').lower())[:40]
+        reason = raw if raw in _SKIP_REASON else 'other'
+        rc.log_event('signal', status='skipped', reason=reason)
+        notify(cfg, poster, {'type': 'refused', 'reason': 'not_sent', 'detail': _SKIP_REASON[reason],
+                             'at': rc.iso_utc(now())})
+        return {'ok': True}
     if status == 'wrong_account':
         rc.log_event('signal', status='wrong_account')
         # Unique id per wrong-account EPISODE (the extension sends the episode timestamp), so a second

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.20, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.21, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=34468d18b8385ba6269acf525f0c56441d870d4e53fb3d04b51eaebe8148e8cf nl=1
-# iMessage Relay v1.4.20
+@@@@ FILE README.md mode=644 sha256=347bb8f57a3907ca988af776593706935f3f6121137acec9c3831adf8ad20bab nl=1
+# iMessage Relay v1.4.21
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.21 (Chrome extension + Mac helper): a lone emoji sent with X Chat's Reply on a contact's text reaches that contact. X draws that emoji as a large glyph, not as message text, so it used to be ignored with no warning. The usual 5 second undo still applies. A reply the relay sees and will not send posts a ⚠️ reason in the chat. A short word, digits, or an email start within 10 minutes of a prompt is still only a prompt answer. Reload the extension, then press Cmd+R on the x.com chat tab. Re-run `./install.sh` (the watcher app is not rebuilt). `relay_post.py` does not change.
 - v1.4.20 (Mac helper + routine relay_post.py; extension stays 1.4.16): `/status` is one short line in the relay chat. A lost Full Disk Access grant repeats, with the fix, and one line says when Messages is readable again. Chrome not checking in gets a line too. `/pause` says texts during the pause are not kept. `/snooze` holds them for one digest (default the next 7:00 AM). `/help` is a few short lines. Replace `relay_post.py` on the bot so health lines notify, then re-run `./install.sh` (the watcher app is not rebuilt; no extension reload).
 - v1.4.19 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new text is noticed on the
   next 0.25 s step. v1.4.13 ignored the first second after each tick, and Messages rewrites chat.db
@@ -184,7 +185,8 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.20)
+## Limits (v1.4.21)
+- A lone emoji used as a native Reply to a contact's text is sent to that contact. An emoji that does not quote a contact, within 10 minutes of a prompt, is still only a prompt answer.
 - `/snooze` holds inbound texts the same way quiet hours do, then delivers one digest. A command can set at most 24 hours; a hand-edited time more than 36 hours ahead is ignored. `/pause` does not keep texts.
 - "Chrome hasn't checked in" means the extension has not talked to the Mac. Closing the chat tab while Chrome stays open does not raise it.
 - Direct post is opt-in and text-only. Photos, reactions, and quiet-hours digests stay on the webhook.
@@ -1236,7 +1238,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=169dec2f5a8eb1c3b79ace30c59ed65d84c0664436fc51c8979d244a922518ad nl=1
+@@@@ FILE extension/background.js mode=644 sha256=ef3e85076f714d850d78a9ba26c47f5f4e740a6c545d7ba343c10a1ee98d2c4b nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1424,6 +1426,15 @@ function decide(item, cfg) {
   if (!(age >= -5000 && age <= MAX_ITEM_AGE_MS)) return Object.assign(base, { skip: 'stale item' });
   if ((!item.text || item.text === '[no text]') && !(Number(item.mediaCount) > 0)) return Object.assign(base, { skip: 'empty text' });
   return base;
+}
+
+// v1.4.21: a skip the owner should see, as a fixed code. Never the message text.
+function skipReason(skip) {
+  if (skip === 'paused') return 'paused';
+  if (skip === 'no contacts in config') return 'no_contacts';
+  if (skip === 'empty text') return 'empty';
+  if (/^host not connected/.test(String(skip || ''))) return 'host_down';
+  return 'other';
 }
 
 const recentKeys = new Map();
@@ -1772,10 +1783,14 @@ async function handleItem(item, src) {
   const xUuid = uuidFromKey(item.key);
   if (d.skip) {
     await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip }));
-    // v1.4.10: never silent. Anything he typed that we saw but won't relay gets a visible ⚠️ on it
-    // (history / other-account items are not his new replies and stay quiet).
-    if (xUuid && src && cfg.uiReactions !== false && !/^(stale item|direction score)/.test(d.skip)) {
+    // v1.4.10: a ⚠️ reaction on the bubble. History and a low direction score stay quiet.
+    // v1.4.21: the reaction can fail, so those same skips also post a ⚠️ line. Never the text.
+    const quietSkip = /^(stale item|direction score)/.test(d.skip);
+    if (xUuid && src && cfg.uiReactions !== false && !quietSkip) {
       await tabUi(src, { action: 'react', uuid: xUuid, emoji: '\u26A0\uFE0F' });
+    }
+    if (!quietSkip) {
+      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: skipReason(d.skip) }); } catch (e) { /* host down */ }
     }
     return;
   }
@@ -1994,7 +2009,7 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=e1f5d33d84205089a02de8063413769c8dca564e07661830344f776122a138fc nl=1
+@@@@ FILE extension/content.js mode=644 sha256=454503bc49f0ca5cc5bfe3a69aab3ebd3bb6d49f71a2d0361ccf849395e01cda nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -2016,6 +2031,11 @@ chrome.runtime.onStartup.addListener(boot);
  * v1.3.9: X Chat now renders the bubble time as plain spans inside message-text-<uuid> (twice: a
  * visible and a screen-reader copy). Trailing clock-time / status chips are dropped (element and
  * line level); clock times inside the message text are kept.
+ *
+ * v1.4.21: a lone emoji is not message-text-<uuid>. X draws it as a ~64px glyph (a text node or
+ * an img alt) and the native-Reply preview is the previous sibling of that glyph. The message
+ * row's own justify-end / justify-start is a direction signal. data-send-status is not: X sets
+ * "sent" on received rows too.
  */
 (function () {
   'use strict';
@@ -2048,7 +2068,8 @@ chrome.runtime.onStartup.addListener(boot);
     uuidEntryPrefixSelector: '[data-testid^="message-"]',
     uuidEntryTestIdRegex: /^message-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
     // The bubble's own text lives in data-testid="message-text-<uuid>" (same uuid). Item 10: this
-    // is the ONLY element the reply body is read from.
+    // is the element the reply body is read from. v1.4.21: a lone emoji has no such node; the
+    // ~64px glyph is the body instead.
     textTestIdPrefix: 'message-text-',
 
     // Native reply-quote: the snippet of the replied-to message shown inside the owner's bubble.
@@ -2348,9 +2369,48 @@ chrome.runtime.onStartup.addListener(boot);
       if (safeMatches(entry, sel)) return entry;
       return safeAll(entry, sel)[0] || null;
     }
+    // v1.4.21: X skips message-text-<uuid> when supersizeEmoji is set. The glyph is a ~64px span
+    // (plain text, or an img whose alt is the emoji). An img is 1em, so the parent font counts.
+    function emojiOnlyText(t) {
+      const s = normSpaces(t).replace(/\s+/g, '');
+      if (!s || s.length > 32 || /[A-Za-z0-9]/.test(s)) return '';
+      try { if (!/\p{Extended_Pictographic}/u.test(s)) return ''; } catch (e) { return ''; }
+      return s;
+    }
+    function fontPx(el) {
+      const px = n => {
+        const s = n && style(n);
+        const v = s ? parseFloat(s.fontSize) : NaN;
+        return Number.isFinite(v) ? v : 0;
+      };
+      const self = px(el);
+      return self >= 40 ? self : px(parentOf(el));
+    }
+    function supersizeEmoji(entry) {
+      // The reply preview is before the owner's glyph. Keep the last big emoji so a quoted
+      // emoji is not read as the reply. Hidden screen-reader nodes ("You") are not the body.
+      let found = null;
+      walkElements(entry, el => {
+        if (isHiddenEl(el)) return;
+        for (let p = parentOf(el); p && p !== entry; p = parentOf(p)) if (isHiddenEl(p)) return;
+        if (!(fontPx(el) >= 40)) return;
+        if (el.tagName === 'IMG') {
+          const alt = emojiOnlyText(el.getAttribute('alt') || '');
+          if (alt) found = { el, text: alt };
+          return;
+        }
+        const own = emojiOnlyText(ownText(el));
+        if (own) found = { el, text: own };
+      });
+      return found;
+    }
     function entryText(entry) {
       const el = bodyEl(entry);
-      return { textEl: el, text: el ? extractText(el) : '' };
+      const text = el ? extractText(el) : '';
+      if (text) return { textEl: el, text };
+      const big = supersizeEmoji(entry);
+      if (big) return { textEl: big.el, text: big.text };
+      return { textEl: el, text: '' };
     }
     // v1.4.2: X Chat's current native Reply shows "Replied to <name>" plus a preview of the replied-to
     // message, which may carry no quote-like testid. Three more ways to find it, in order:
@@ -2474,10 +2534,19 @@ chrome.runtime.onStartup.addListener(boot);
     function previewInfo(entry) {
       const none = { els: [], text: '', media: false };
       const body = bodyEl(entry);
-      if (!body || body === entry) return none;
-      let art = null;
-      for (let n = body; n && n !== entry; n = parentOf(n)) if (n.getAttribute && n.getAttribute('role') === 'article') { art = n; break; }
-      const start = art || body;
+      let start = null;
+      if (body && body !== entry) {
+        let art = null;
+        for (let n = body; n && n !== entry; n = parentOf(n)) if (n.getAttribute && n.getAttribute('role') === 'article') { art = n; break; }
+        start = art || body;
+      }
+      // v1.4.21: a lone emoji has no message-text / article. The preview is the previous
+      // sibling of that glyph (the contact's relayed line). A real message-text body wins.
+      if (!(body && body !== entry && extractText(body))) {
+        const big = supersizeEmoji(entry);
+        if (big) start = big.el;
+      }
+      if (!start || start === entry) return none;
       const cards = cardInfo(entry);
       for (let n = start; n && n !== entry; n = parentOf(n)) {
         const els = [], texts = [];
@@ -2633,6 +2702,26 @@ chrome.runtime.onStartup.addListener(boot);
         if (n === parentOf(entry)) break;
       }
       if (sVote) { score += sVote * W.style; signals.push('style:' + (sVote > 0 ? '+' : '-') + W.style + '(' + sWhy + ')'); }
+
+      // v1.4.21: the message row's own justify-end / justify-start. The style walk reads the
+      // parent, so it misses this, and a background tab has no rects for the align vote. Weight
+      // it like a testid so an own jumbo-emoji row is still outbound. The class is what X sets;
+      // computed style covers an inline style with no class. data-send-status is "sent" on
+      // received rows too and is not a direction signal.
+      {
+        const rs = style(entry);
+        const jc = (rs && rs.justifyContent) || '';
+        const endish = v => /^(flex-end|end|right)$/.test(v || '');
+        const startish = v => /^(flex-start|start|left)$/.test(v || '');
+        const cls = entry.classList;
+        const clsEnd = !!(cls && cls.contains('justify-end'));
+        const clsStart = !!(cls && cls.contains('justify-start'));
+        let rowEnd = false, rowStart = false;
+        if (clsEnd !== clsStart) { rowEnd = clsEnd; rowStart = clsStart; }
+        else if (!clsEnd) { rowEnd = endish(jc); rowStart = startish(jc); }
+        if (rowEnd && !rowStart) { score += W.testId; signals.push('row:+' + W.testId + '(justify-end)'); }
+        else if (rowStart && !rowEnd) { score -= W.testId; signals.push('row:-' + W.testId + '(justify-start)'); }
+      }
 
       const direction = score >= cfg.decisionThreshold ? 'outbound' : score <= -cfg.decisionThreshold ? 'inbound' : 'unknown';
       signals.push('score:' + score);
@@ -3717,11 +3806,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=26e22b5e8d228157600b5f9a90cb43b92c3bd5a4cd0db2754aee7c0833adb163 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=1b952baeb569b5f2cc06175782fd7b33d6210dc43d1c24c61858da363bc929ea nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.16",
+  "version": "1.4.21",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -3934,10 +4023,10 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=f0eeb2ce9a79c084061a15789937f31d6390862c40329bf5f7f272182c0ef712 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=b4a8320d7fe658298d8e3195cec365dd8e0cf535d05cf5d8881be474ab537dec nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.20.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.21.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -3976,6 +4065,7 @@ import struct
 import subprocess
 import sys
 import time
+import unicodedata
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -4854,15 +4944,39 @@ def short_answer(text):
     return not re.search(r'[^\W_]', s)          # no letters or digits at all: emoji / punctuation only
 
 
+def emoji_only(text):
+    """v1.4.21: emoji (and joiners) only. Not a short word, digits, punctuation, or an email start."""
+    s = re.sub(r'\s+', '', str(text or ''))
+    if not s or len(s) > 32:
+        return False
+    saw = False
+    for ch in s:
+        cat = unicodedata.category(ch)
+        if cat == 'So':
+            saw = True
+            continue
+        if cat in ('Mn', 'Mc', 'Me', 'Cf', 'Sk'):
+            continue
+        return False
+    return saw
+
+
 def _prompt_recent(t):
     return t - float(load_state().get('lastPromptAt') or 0) <= PICK_WINDOW_S
 
 
-def handle_pending_pick(text, cfg, now, poster):
+def handle_pending_pick(text, cfg, now, poster, quoted=''):
     """v1.4.13: while a pick prompt is waiting, an answer to it ("2", "0188", "alex@") is checked against
     the pick FIRST and never routed as a new text (it used to become "Reply to <last texter>?"). The
     extension holds the message text and resolves a valid pick itself; one that reaches the host means
     the extension no longer has it (restarted, or the pick was out of range): say so, send nothing."""
+    # v1.4.21: an emoji-only native Reply that names a contact is a send, even inside the 10-minute
+    # prompt window. "ok", digits, and email starts stay prompt answers.
+    if emoji_only(text):
+        directory = rc.build_directory(cfg, rc.load_roster())
+        h, st = rc.parse_quote(quoted, cfg, directory)
+        if st == 'match' and h:
+            return None
     state = load_state()
     p = state.get('pendingNewContact')
     if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
@@ -5203,7 +5317,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
                              'so nothing was sent.', 'at': rc.iso_utc(now())})
         return refuse('text from a prompt row', textLength=len(text))
     if not msg.get('confirmed'):
-        r = handle_pending_pick(text, cfg, now, poster)
+        r = handle_pending_pick(text, cfg, now, poster, quoted)
         if r is not None:                     # v1.4.13: an answer to a pick prompt is never a new text
             return r
     cmd = parse_command(text)
@@ -5623,9 +5737,26 @@ def handle_test(msg, cfg, runner, sleeper, now, poster):
                                 'extVersion': msg.get('extVersion')}, cfg, runner, sleeper, now, poster)
 
 
+# v1.4.21: the extension saw a reply and will not send it. Fixed sentences, never the message.
+_SKIP_REASON = {
+    'empty': 'That message had nothing I could send as an iMessage.',
+    'paused': 'The relay is paused, so nothing was sent. /resume turns it back on.',
+    'no_contacts': 'No contacts are set up yet, so nothing was sent (/add Name +1 \u2026).',
+    'host_down': 'The Mac helper isn\u2019t connected, so nothing was sent.',
+    'other': 'That reply was not sent.',
+}
+
+
 def handle_signal(msg, cfg, now, poster):
     """A browser-side condition (item 6) the host turns into one body-free webhook. No message text."""
     status = str(msg.get('status') or '')
+    if status == 'skipped':
+        raw = re.sub(r'[^a-z_]', '', str(msg.get('reason') or '').lower())[:40]
+        reason = raw if raw in _SKIP_REASON else 'other'
+        rc.log_event('signal', status='skipped', reason=reason)
+        notify(cfg, poster, {'type': 'refused', 'reason': 'not_sent', 'detail': _SKIP_REASON[reason],
+                             'at': rc.iso_utc(now())})
+        return {'ok': True}
     if status == 'wrong_account':
         rc.log_event('signal', status='wrong_account')
         # Unique id per wrong-account EPISODE (the extension sends the episode timestamp), so a second
@@ -7353,7 +7484,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=44c0f770310c8757569e082d4afb8c0da08fbc6ea4be2aead47f24c8e97ec317 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=8756581768f69de56daea209e6aa59778e84d7ca6202d732f9bc186fa086031c nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7379,8 +7510,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.20'
-EXTENSION_VERSION = '1.4.16'   # v1.4.20 does not change the extension (status must not nag a reload)
+VERSION = '1.4.21'
+EXTENSION_VERSION = '1.4.21'   # v1.4.21 changes the extension (reload it, then Cmd+R the x.com chat tab)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -15728,7 +15859,7 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/js/media.test.js mode=644 sha256=b576b9102a2ccbd15ae4ce3b85c5c77d452339e72f978ab587d633fbfd938e88 nl=1
+@@@@ FILE tests/js/media.test.js mode=644 sha256=753253aa8851b529d846e1d0801d493330a6eacc2d874613bbb38ddcf2354829 nl=1
 /* v1.4.6: his photos in X Chat go out as iMessage attachments. content.js finds images in HIS outbound
  * bubble only (not emoji, not the quoted message) and reads them in 512 KiB chunks; background.js streams
  * them to the Mac (attach_chunk), sends metadata only with the reply, and keeps them for a "yes".
@@ -15917,6 +16048,8 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     assert.strictEqual(b.host.filter(m => m.type === 'send').length, 0);
     const r = b.tabMsgs.find(m => m.action === 'react');
     assert.ok(r && r.emoji === '\u26A0\uFE0F' && r.uuid === uuid(1), JSON.stringify(b.tabMsgs));
+    const sig = b.host.find(m => m.type === 'signal' && m.status === 'skipped');
+    assert.ok(sig && sig.reason === 'empty' && !('text' in sig), JSON.stringify(sig));
   });
   await test('background: attachments off -> nothing is read, the host is told', async () => {
     const b = bootBg({ off: true, tab: tabOk, send: () => ({ ok: true, sent: true }) });
@@ -16780,6 +16913,159 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
   console.log('PASS chrome wiring smoke: sent=', JSON.stringify(sends), 'badge(paused)=', badge.text, 'events=', store.events.map(e => e.status).join(','));
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.message); process.exit(1); });
+@@@@ END
+@@@@ FILE tests/js/supersize_emoji.test.js mode=644 sha256=a02037bd80d62e7654e8d735ce34e8b25c570dcea1c95818eaf82000a8238707 nl=1
+/* v1.4.21: X draws a lone emoji outside message-text-<uuid> (a 64px glyph, or an img alt).
+ * A native Reply's preview is the previous sibling of that glyph. The row's own justify-end
+ * makes it outbound even with no layout. data-send-status=sent is not a direction signal.
+ * Run: NODE_PATH=/path/to/node_modules node tests/js/supersize_emoji.test.js
+ */
+'use strict';
+const assert = require('assert');
+const { JSDOM } = require('jsdom');
+const { createRelayDetector } = require('../../extension/content.js');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
+const ROCKET = '\u{1F680}';
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); passed++; console.log('PASS', name); }
+  catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); }
+}
+const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
+
+function setup(html) {
+  const dom = new JSDOM(html, { url: 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
+  const { window } = dom;
+  window.Element.prototype.getBoundingClientRect = function () {
+    const v = this.getAttribute('data-fake-rect');
+    if (!v) return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    const [l, t, w, h] = v.split(',').map(Number);
+    return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
+  };
+  const logs = [];
+  const det = createRelayDetector({
+    window, document: window.document, config: FAST, getState: () => ({ paused: false, conversationFilter: '' }),
+    onEmit: i => logs.push(i), onStatus: () => {}, log: () => {},
+    seen: { has: () => false, add: () => {} },
+  });
+  det.start();
+  return { doc: window.document, det, logs };
+}
+
+// The live own-row shape: justify-end on message-<uuid>, an absolute overlay, a hidden "You"
+// label, then the right-hand column. No role=article and no message-text-<uuid>.
+function jumboRow(doc, n, opts) {
+  const row = doc.createElement('div');
+  row.setAttribute('data-testid', 'message-' + uuid(n));
+  row.setAttribute('data-send-status', 'sent');
+  row.classList.add(opts.inbound ? 'justify-start' : 'justify-end');
+  if (!opts.bare) {
+    row.style.display = 'flex';
+    row.style.justifyContent = opts.inbound ? 'flex-start' : 'flex-end';
+    row.setAttribute('data-fake-rect', '0,0,1000,80');
+  }
+  const overlay = doc.createElement('div');
+  overlay.setAttribute('aria-hidden', 'true');
+  if (!opts.bare) overlay.setAttribute('data-fake-rect', '0,0,1000,80');
+  const you = doc.createElement('span');
+  you.hidden = true;
+  you.textContent = 'You';
+  const clock = doc.createElement('span');
+  clock.hidden = true;
+  clock.textContent = '11:20 PM';
+  const grid = doc.createElement('div');
+  if (!opts.bare) grid.setAttribute('data-fake-rect', opts.inbound ? '40,0,500,80' : '450,0,500,80');
+  const col = doc.createElement('div');
+  if (!opts.bare) {
+    col.style.display = 'flex';
+    col.style.flexDirection = 'column';
+    col.style.alignItems = opts.inbound ? 'flex-start' : 'flex-end';
+    col.setAttribute('data-fake-rect', opts.inbound ? '40,0,500,80' : '450,0,500,80');
+  }
+  if (opts.quoted) {
+    const pv = doc.createElement('span');
+    pv.textContent = opts.quoted;
+    col.appendChild(pv);
+  }
+  const wrap = doc.createElement('div');
+  if (!opts.bare) wrap.setAttribute('data-fake-rect', opts.inbound ? '40,40,80,40' : '860,40,80,40');
+  const glyph = doc.createElement('span');
+  glyph.style.fontSize = '64px';
+  if (!opts.bare) glyph.setAttribute('data-fake-rect', opts.inbound ? '40,40,64,64' : '860,40,64,64');
+  if (opts.img) {
+    const img = doc.createElement('img');
+    img.alt = ROCKET;
+    img.src = 'https://abs.twimg.com/emoji/v2/svg/1f680.svg';
+    glyph.appendChild(img);
+  } else glyph.textContent = ROCKET;
+  wrap.appendChild(glyph);
+  col.appendChild(wrap);
+  grid.appendChild(col);
+  row.append(overlay, you, clock, grid);
+  return row;
+}
+
+const EARLIER = '<div data-testid="message-df48633d-6588-4b18-bc77-000000009999"><span data-testid="message-text-df48633d-6588-4b18-bc77-000000009999">earlier</span></div>';
+const WIDE = '<html><body><div data-testid="dm-conversation-panel" data-fake-rect="0,0,1000,800">' + EARLIER + '</div></body></html>';
+const BARE = '<html><body><div data-testid="dm-conversation-panel">' + EARLIER + '</div></body></html>';
+const panel = doc => doc.querySelector('[data-testid="dm-conversation-panel"]');
+
+(async () => {
+  await test('a lone emoji native Reply is the body, the contact preview is the quote, and the own row is outbound', async () => {
+    const laid = setup(WIDE);
+    await sleep(200);
+    panel(laid.doc).appendChild(jumboRow(laid.doc, 1, { quoted: 'Alex: on my way' }));
+    await sleep(80);
+    assert.strictEqual(laid.logs.length, 1);
+    const own = laid.logs[0];
+    assert.strictEqual(own.text, ROCKET);
+    assert.ok(/Alex: on my way/.test(own.quotedText || ''), JSON.stringify(own.quotedText));
+    assert.ok(!/You|11:20/.test(own.quotedText || ''), 'hidden label is not the quote');
+    assert.strictEqual(own.direction, 'outbound');
+    assert.ok(own.score >= 3, 'score ' + own.score + ' ' + own.signals.join(' '));
+    assert.ok(own.signals.some(s => s.indexOf('row:+3') === 0), own.signals.join(' '));
+    laid.det.stop();
+
+    const img = setup(WIDE);
+    await sleep(200);
+    panel(img.doc).appendChild(jumboRow(img.doc, 2, { quoted: 'Alex: on my way', img: true }));
+    await sleep(80);
+    assert.strictEqual(img.logs.length, 1);
+    assert.strictEqual(img.logs[0].text, ROCKET);
+    assert.ok(/Alex: on my way/.test(img.logs[0].quotedText || ''));
+    assert.strictEqual(img.logs[0].direction, 'outbound');
+    assert.ok(img.logs[0].score >= 3, img.logs[0].signals.join(' '));
+    img.det.stop();
+
+    // No rects and no inline justify: the justify-end class alone must still clear the host's bar.
+    const bare = setup(BARE);
+    await sleep(200);
+    panel(bare.doc).appendChild(jumboRow(bare.doc, 3, { quoted: 'Alex: on my way', bare: true }));
+    await sleep(80);
+    assert.strictEqual(bare.logs.length, 1);
+    assert.strictEqual(bare.logs[0].text, ROCKET);
+    assert.ok(/Alex: on my way/.test(bare.logs[0].quotedText || ''));
+    assert.strictEqual(bare.logs[0].direction, 'outbound');
+    assert.ok(bare.logs[0].score >= 3, bare.logs[0].signals.join(' '));
+    assert.ok(bare.logs[0].signals.some(s => s.indexOf('row:+3') === 0));
+    bare.det.stop();
+
+    // data-send-status=sent is on received rows too. justify-start stays inbound.
+    const inbound = setup(WIDE);
+    await sleep(200);
+    panel(inbound.doc).appendChild(jumboRow(inbound.doc, 4, { inbound: true }));
+    await sleep(80);
+    assert.strictEqual(inbound.logs.length, 1);
+    assert.strictEqual(inbound.logs[0].text, ROCKET);
+    assert.strictEqual(inbound.logs[0].direction, 'inbound');
+    assert.ok(inbound.logs[0].score <= -3, inbound.logs[0].signals.join(' '));
+    inbound.det.stop();
+  });
+  console.log(passed + ' passed, ' + failed + ' failed (v1.4.21 supersize emoji)');
+  process.exit(failed ? 1 : 0);
+})();
 @@@@ END
 @@@@ FILE tests/js/trash.test.js mode=644 sha256=607f18f300dae2b489ed2f47847511ee5ec003dc62e9753593646a22d83aa5e2 nl=1
 /* v1.4.5: a wastebasket reaction on a relayed message asks the Mac "Block <sender>?" (content.js + background.js).
@@ -22424,9 +22710,10 @@ class Rank(Base):
         self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 \u2753 Text Jordan Rivera at which?'))
         self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_confirm'], 'routine copy is deferred')
 @@@@ END
-@@@@ FILE tests/py/test_v1413_pick.py mode=644 sha256=967ecf6adde357603b5b38976cc2057b224029b16001c7142232282228d32f3d nl=1
+@@@@ FILE tests/py/test_v1413_pick.py mode=644 sha256=12d8d02124802a7c23cb92e85bed92c153fb446c55ac03672f6867fd32ab05eb nl=1
 """v1.4.13: an answer to a pending pick prompt is checked against the pick first, never routed as a new text."""
-from test_v140 import Base
+from helpers import FakeRunner, read_log
+from test_v140 import Base, CONV
 
 
 class PendingPick(Base):
@@ -22464,6 +22751,42 @@ class PendingPick(Base):
             self.assertTrue(r.get('ok') and r.get('skipped'), (t, r))
         self.assertEqual(self.osa(), [])
         self.assertTrue(h.short_answer('ok') and not h.short_answer('see you at noon'))
+        self.assertTrue(h.emoji_only('\U0001F680'))
+        self.assertFalse(h.emoji_only('ok') or h.emoji_only('2') or h.emoji_only('alex@') or h.emoji_only('...'))
+        # v1.4.21: emoji-only native Reply whose quote names a contact still sends during the window.
+        self.runner = FakeRunner([(0, '')] * 5)
+        sent = self.m.host.handle_request(
+            {'type': 'send', 'text': '\U0001F680', 'quotedText': 'Test Contact: on my way',
+             'conversationId': CONV},
+            cfg=self.cfg(), runner=self.runner, sleeper=self.sleeper, now=self.clock.now, poster=self.poster)
+        self.assertTrue(sent.get('ok') and sent.get('sent'), sent)
+        self.assertEqual(sent.get('routedBy'), 'quote')
+        self.assertEqual(self.osa()[0][2], '\U0001F680')
+        self.assertEqual(self.osa()[0][3], '+15555550123')
+        self.assertNotIn('on my way', read_log())
+        for t in ('ok', '2'):
+            r = self.send(t)
+            self.assertTrue(r.get('ok') and r.get('skipped'), (t, r))
+            self.assertEqual(self.osa(), [])
+        n = len(self.posts)
+        sig = self.m.host.handle_request(
+            {'type': 'signal', 'status': 'skipped', 'reason': 'empty'},
+            cfg=self.cfg(), runner=FakeRunner([(0, '')] * 3), sleeper=self.sleeper,
+            now=self.clock.now, poster=self.poster)
+        self.assertTrue(sig.get('ok'), sig)
+        refused = [p for p, _ in self.posts[n:] if p.get('type') == 'refused']
+        self.assertEqual(len(refused), 1)
+        self.assertEqual(refused[0].get('reason'), 'not_sent')
+        self.assertIn('nothing I could send', refused[0].get('detail') or '')
+        self.assertNotIn('text', refused[0])
+        n = len(self.posts)
+        self.m.host.handle_request(
+            {'type': 'signal', 'status': 'skipped', 'reason': 'see you at noon'},
+            cfg=self.cfg(), runner=FakeRunner([(0, '')] * 3), sleeper=self.sleeper,
+            now=self.clock.now, poster=self.poster)
+        other = [p for p, _ in self.posts[n:] if p.get('type') == 'refused']
+        self.assertEqual(other[0]['detail'], 'That reply was not sent.')
+        self.assertNotIn('noon', read_log())
 
     def test_v1415_prompt_row_text_refused(self):
         r = self.send('Text Jordan Rivera at which?\n1 \u00b7 \u2022\u2022\u20220188 mobile')
@@ -23355,7 +23678,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=c98fc542e1d0c769aed0de571a435224abaee3478ab2bffc3447d8dcb51b75f0 nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=5e491a4f8f78ee0c11c874bcfd29de3bf1a3967623a55f226ab47789fc1dbd44 nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -23484,7 +23807,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.20 \u00b7 watcher 4s ago \u00b7 Messages open \u00b7 last text 2m \u00b7 bare reply \u2192 Alex')
+            'On \u00b7 v1.4.21 \u00b7 watcher 4s ago \u00b7 Messages open \u00b7 last text 2m \u00b7 bare reply \u2192 Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -23513,7 +23836,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.20 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.21 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -23597,7 +23920,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.20 \u00b7 watcher 4s ago \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.21 \u00b7 watcher 4s ago \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -25840,7 +26163,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=5b939e6bd33f2d96980ea3468896d5c244b356dacc4e9a2ccb9f5851d9e66d79 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=cc0462c790cd487c48c4ab792db64502e392cc02612abc7aae62ed6ce8be0625 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -26033,7 +26356,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.20')
+        self.assertEqual(m.rc.VERSION, '1.4.21')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

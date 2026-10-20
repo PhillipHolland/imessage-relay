@@ -186,6 +186,8 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     assert.strictEqual(b.host.filter(m => m.type === 'send').length, 0);
     const r = b.tabMsgs.find(m => m.action === 'react');
     assert.ok(r && r.emoji === '\u26A0\uFE0F' && r.uuid === uuid(1), JSON.stringify(b.tabMsgs));
+    const sig = b.host.find(m => m.type === 'signal' && m.status === 'skipped');
+    assert.ok(sig && sig.reason === 'empty' && !('text' in sig), JSON.stringify(sig));
   });
   await test('background: attachments off -> nothing is read, the host is told', async () => {
     const b = bootBg({ off: true, tab: tabOk, send: () => ({ ok: true, sent: true }) });

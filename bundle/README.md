@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.20
+# iMessage Relay v1.4.21
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,6 +22,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.21 (Chrome extension + Mac helper): a lone emoji sent with X Chat's Reply on a contact's text reaches that contact. X draws that emoji as a large glyph, not as message text, so it used to be ignored with no warning. The usual 5 second undo still applies. A reply the relay sees and will not send posts a ⚠️ reason in the chat. A short word, digits, or an email start within 10 minutes of a prompt is still only a prompt answer. Reload the extension, then press Cmd+R on the x.com chat tab. Re-run `./install.sh` (the watcher app is not rebuilt). `relay_post.py` does not change.
 - v1.4.20 (Mac helper + routine relay_post.py; extension stays 1.4.16): `/status` is one short line in the relay chat. A lost Full Disk Access grant repeats, with the fix, and one line says when Messages is readable again. Chrome not checking in gets a line too. `/pause` says texts during the pause are not kept. `/snooze` holds them for one digest (default the next 7:00 AM). `/help` is a few short lines. Replace `relay_post.py` on the bot so health lines notify, then re-run `./install.sh` (the watcher app is not rebuilt; no extension reload).
 - v1.4.19 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new text is noticed on the
   next 0.25 s step. v1.4.13 ignored the first second after each tick, and Messages rewrites chat.db
@@ -165,7 +166,8 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.20)
+## Limits (v1.4.21)
+- A lone emoji used as a native Reply to a contact's text is sent to that contact. An emoji that does not quote a contact, within 10 minutes of a prompt, is still only a prompt answer.
 - `/snooze` holds inbound texts the same way quiet hours do, then delivers one digest. A command can set at most 24 hours; a hand-edited time more than 36 hours ahead is ignored. `/pause` does not keep texts.
 - "Chrome hasn't checked in" means the extension has not talked to the Mac. Closing the chat tab while Chrome stays open does not raise it.
 - Direct post is opt-in and text-only. Photos, reactions, and quiet-hours digests stay on the webhook.

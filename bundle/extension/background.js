@@ -187,6 +187,15 @@ function decide(item, cfg) {
   return base;
 }
 
+// v1.4.21: a skip the owner should see, as a fixed code. Never the message text.
+function skipReason(skip) {
+  if (skip === 'paused') return 'paused';
+  if (skip === 'no contacts in config') return 'no_contacts';
+  if (skip === 'empty text') return 'empty';
+  if (/^host not connected/.test(String(skip || ''))) return 'host_down';
+  return 'other';
+}
+
 const recentKeys = new Map();
 async function isDuplicate(key) {
   if (!key) return false;
@@ -533,10 +542,14 @@ async function handleItem(item, src) {
   const xUuid = uuidFromKey(item.key);
   if (d.skip) {
     await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip }));
-    // v1.4.10: never silent. Anything he typed that we saw but won't relay gets a visible ⚠️ on it
-    // (history / other-account items are not his new replies and stay quiet).
-    if (xUuid && src && cfg.uiReactions !== false && !/^(stale item|direction score)/.test(d.skip)) {
+    // v1.4.10: a ⚠️ reaction on the bubble. History and a low direction score stay quiet.
+    // v1.4.21: the reaction can fail, so those same skips also post a ⚠️ line. Never the text.
+    const quietSkip = /^(stale item|direction score)/.test(d.skip);
+    if (xUuid && src && cfg.uiReactions !== false && !quietSkip) {
       await tabUi(src, { action: 'react', uuid: xUuid, emoji: '\u26A0\uFE0F' });
+    }
+    if (!quietSkip) {
+      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: skipReason(d.skip) }); } catch (e) { /* host down */ }
     }
     return;
   }
