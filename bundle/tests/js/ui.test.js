@@ -36,6 +36,7 @@ function setup(html, url, opts = {}) {
     now: opts.now, ownerCheck: opts.ownerCheck,
     seen: { has: u => seenSet.has(u), add: u => seenSet.add(u) },
   });
+  if (opts.beforeStart) opts.beforeStart(window.document, window);
   det.start();
   return { window, doc: window.document, det, logs, statuses, state, dom, seenSet, reacts };
 }
@@ -70,6 +71,7 @@ function react(doc, entry, emoji) {
   return pill;
 }
 const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
+const unacked = list => list.filter(s => s && s.status === 'unacked');
 
 
 const msgBase = msg;
@@ -283,6 +285,219 @@ function composer(doc, opts = {}) {
     react(doc, e, '\u{1F5D1}\uFE0F');
     await sleep(250);
     assert.strictEqual(reacts.length, 0);
+  });
+
+  const EYES = '\u{1F440}';
+  const CHECK_SRC = 'https://abs.twimg.com/emoji/v2/svg/2705.svg';
+  const EYES_SRC = 'https://abs.twimg.com/emoji/v2/svg/1f440.svg';
+  function chip(doc, entry, src) {
+    const img = doc.createElement('img');
+    img.setAttribute('alt', '');
+    img.setAttribute('src', src);
+    entry.appendChild(img);
+  }
+  // Current X Chat tray: a hover sheet (portal), quick emoji, "+", then Reply/Delete. No "React" label.
+  function hoverTray(doc, opts = {}) {
+    const clicks = [];
+    const host = doc.createElement('div');
+    if (opts.where === 'layers') host.id = 'layers';
+    doc.body.appendChild(host);
+    doc.addEventListener('mouseover', ev => {
+      if (!(ev.clientX > 0)) return;
+      const entry = ev.target.closest && ev.target.closest('[data-testid^="message-"]');
+      if (!entry || String(entry.getAttribute('data-testid') || '').startsWith('message-text-')) return;
+      if (host.querySelector('.tray')) return;
+      const tray = doc.createElement('div');
+      tray.className = 'tray';
+      if (opts.where === 'layers') tray.setAttribute('role', 'menu');
+      const add = (label, fn) => {
+        const b = doc.createElement('button');
+        b.setAttribute('aria-label', label);
+        b.addEventListener('click', () => { clicks.push(label); if (fn) fn(); });
+        tray.appendChild(b);
+      };
+      if (opts.eyes) add(EYES, () => chip(doc, entry, EYES_SRC));
+      if (!opts.actionsOnly) add('+', () => {
+        const b = doc.createElement('button');
+        b.setAttribute('aria-label', 'Check mark button');
+        const img = doc.createElement('img');
+        img.setAttribute('alt', '');
+        img.setAttribute('src', CHECK_SRC);
+        b.appendChild(img);
+        b.addEventListener('click', () => { clicks.push('check'); chip(doc, entry, CHECK_SRC); });
+        tray.appendChild(b);
+      });
+      ['Reply', 'Delete', 'Forward', 'Copy', 'Pin'].forEach(label => add(label));
+      host.appendChild(tray);
+    }, true);
+    return { clicks };
+  }
+
+  await test('v1.4.26: hover tray places ✅ from "+" onto a twemoji chip and never clicks Reply', async () => {
+    const { doc, det } = setup();
+    const ui = hoverTray(doc, { where: 'layers' });
+    await sleep(200);
+    const e = msg(doc, 30, 'out', 'on my way');
+    panel(doc).appendChild(e);
+    await sleep(80);
+    const r = await det.uiReact(uuid(30), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.step, 'placed');
+    assert.deepStrictEqual(ui.clicks, ['+', 'check']);
+    assert.strictEqual((await det.uiReact(uuid(30), CHECK)).step, 'already');
+    assert.deepStrictEqual(ui.clicks, ['+', 'check']);
+  });
+
+  await test('v1.4.26: eyes on the quick row are clicked; Reply is not', async () => {
+    const { doc, det } = setup();
+    const ui = hoverTray(doc, { where: 'layers', eyes: true });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 31, 'out', 'see you'));
+    await sleep(80);
+    const r = await det.uiReact(uuid(31), EYES);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.deepStrictEqual(ui.clicks, [EYES]);
+  });
+
+  await test('v1.4.26: a "+" that appears on hover with no layout and no portal role still opens ✅', async () => {
+    const { doc, det } = setup();
+    const ui = hoverTray(doc, { where: 'portal' });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 32, 'out', 'on my way'));
+    await sleep(80);
+    const r = await det.uiReact(uuid(32), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.step, 'placed');
+    assert.deepStrictEqual(ui.clicks, ['+', 'check']);
+  });
+
+  await test('v1.4.26: Reply Delete Forward Copy Pin are never the react control', async () => {
+    const { doc, det } = setup();
+    const ui = hoverTray(doc, { where: 'layers', actionsOnly: true });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 33, 'out', 'on my way'));
+    await sleep(80);
+    const r = await det.uiReact(uuid(33), CHECK);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.step, 'no-react-button');
+    assert.deepStrictEqual(ui.clicks, []);
+  });
+
+  await test('v1.4.26: a page handler places ✅ and the untrusted click is not sent again', async () => {
+    const { doc, det } = setup();
+    const clicks = [];
+    let entry = null;
+    doc.addEventListener('imr-act', ev => {
+      const el = ev.target;
+      if (!el || !el.getAttribute || el.getAttribute('data-imr-op') !== 'press') return;
+      el.setAttribute('data-imr-did', '1');
+      const lab = el.getAttribute('aria-label') || '';
+      if (lab === '+') {
+        const b = doc.createElement('button');
+        b.setAttribute('aria-label', 'Check mark button');
+        const img = doc.createElement('img');
+        img.setAttribute('alt', '');
+        img.setAttribute('src', CHECK_SRC);
+        b.appendChild(img);
+        b.addEventListener('click', () => clicks.push('untrusted'));
+        doc.body.appendChild(b);
+      } else if (lab === 'Check mark button') {
+        clicks.push('react');
+        chip(doc, entry, CHECK_SRC);
+      }
+    }, true);
+    doc.addEventListener('mouseover', ev => {
+      if (!(ev.clientX > 0)) return;
+      const row = ev.target.closest && ev.target.closest('[data-testid^="message-"]');
+      if (!row || doc.querySelector('[aria-label="+"]')) return;
+      const b = doc.createElement('button');
+      b.setAttribute('aria-label', '+');
+      b.addEventListener('click', () => clicks.push('untrusted-open'));
+      doc.body.appendChild(b);
+    }, true);
+    await sleep(200);
+    entry = msg(doc, 34, 'out', 'on my way');
+    panel(doc).appendChild(entry);
+    await sleep(80);
+    const r = await det.uiReact(uuid(34), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.step, 'placed');
+    assert.deepStrictEqual(clicks, ['react']);
+  });
+
+  await test('v1.4.26: a fresh self-send during startup settle arms the watchdog and is held', async () => {
+    const s = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 5000, ackMs: 40, batchDelayMs: 5 },
+      beforeStart(doc) { panel(doc).appendChild(msg(doc, 41, 'in', 'earlier')); },
+    });
+    await sleep(30);
+    panel(s.doc).appendChild(msg(s.doc, 42, 'out', 'on my way', { time: new Date().toISOString() }));
+    await sleep(90);
+    const u = unacked(s.statuses);
+    assert.strictEqual(s.logs.length, 0);
+    assert.strictEqual(u.length, 1, s.statuses.map(x => x.status).join(','));
+    assert.strictEqual(u[0].status, 'unacked');
+    assert.strictEqual(u[0].conversationId, '111-222');
+    assert.ok(!('text' in u[0]));
+    assert.ok(!JSON.stringify(s.statuses).includes('on my way'));
+    s.det.stop();
+  });
+
+  await test('v1.4.26: a bubble with no clock during startup settle stays history and stays quiet', async () => {
+    const s = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 5000, ackMs: 40, batchDelayMs: 5 },
+      beforeStart(doc) { panel(doc).appendChild(msg(doc, 43, 'in', 'earlier')); },
+    });
+    await sleep(30);
+    panel(s.doc).appendChild(msg(s.doc, 44, 'out', 'on my way'));
+    await sleep(90);
+    assert.strictEqual(s.logs.length, 0);
+    assert.strictEqual(unacked(s.statuses).length, 0, s.statuses.map(x => x.status).join(','));
+    s.det.stop();
+  });
+
+  await test('v1.4.26: a fresh self-send already on the page when the script attaches is sent', async () => {
+    const s = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 40, ackMs: 5000, batchDelayMs: 5 },
+      beforeStart(doc) {
+        panel(doc).appendChild(msg(doc, 45, 'in', 'earlier'));
+        panel(doc).appendChild(msg(doc, 46, 'out', 'on my way', { time: new Date().toISOString() }));
+      },
+    });
+    await sleep(180);
+    assert.strictEqual(s.logs.length, 1);
+    assert.strictEqual(s.logs[0].direction, 'outbound');
+    assert.ok(!JSON.stringify(s.statuses).includes('on my way'));
+    assert.strictEqual(unacked(s.statuses).length, 0, s.statuses.map(x => x.status).join(','));
+    s.det.stop();
+  });
+
+  await test('v1.4.26: an old self-send already on the page stays history', async () => {
+    const seen = new Set();
+    const s = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 40, ackMs: 40, batchDelayMs: 5 },
+      seenSet: seen,
+      beforeStart(doc) { panel(doc).appendChild(msg(doc, 47, 'out', 'on my way', { time: '2020-01-01T00:00:00Z' })); },
+    });
+    await sleep(120);
+    assert.strictEqual(s.logs.length, 0);
+    assert.strictEqual(s.statuses.length, 0);
+    const seenFresh = new Set([uuid(48)]);
+    const s2 = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 40, ackMs: 40, batchDelayMs: 5 },
+      seenSet: seenFresh,
+      beforeStart(doc) { panel(doc).appendChild(msg(doc, 48, 'out', 'on my way', { time: new Date().toISOString() })); },
+    });
+    await sleep(120);
+    assert.strictEqual(s2.logs.length, 0);
+    assert.strictEqual(s2.statuses.length, 0);
+    s.det.stop();
+    s2.det.stop();
   });
 
   console.log(`${passed} passed, ${failed} failed (v1.4.6 UI engine)`);

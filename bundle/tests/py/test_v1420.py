@@ -126,7 +126,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.25 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.26 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -156,7 +156,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.25 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.26 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -240,7 +240,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.25 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.26 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()

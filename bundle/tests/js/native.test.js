@@ -10,6 +10,7 @@ const CONV = '1111-2222';
 
 function env(opts = {}) {
   const store = {}, listeners = [], nativeCalls = [], badge = {}, scripts = [], reloads = [];
+  let onRemoved = () => {};
   let hostConfig = Object.assign({ ok: true, version: '1.3.2', paused: false, dryRun: true,
     relayConversationId: CONV, contacts: [{ name: 'Test Contact', label: 'Test', handle: '15555550123' }] }, opts.config || {});
   const local = {
@@ -19,6 +20,7 @@ function env(opts = {}) {
   const chrome = {
     runtime: {
       id: 'ext', onMessage: { addListener: f => listeners.push(f) }, onInstalled: { addListener() {} }, onStartup: { addListener() {} },
+      getURL: opts.getURL ? (() => 'chrome-extension://ext/background.js') : undefined,
       sendNativeMessage: async (host, msg) => {
         nativeCalls.push({ host, msg });
         if (opts.hostDown) throw new Error('Specified native messaging host not found.');
@@ -31,20 +33,29 @@ function env(opts = {}) {
     action: { async setBadgeText(o) { badge.text = o.text; }, async setBadgeBackgroundColor() {} },
     alarms: { create() {}, onAlarm: { addListener() {} } },
     tabs: {
-      onUpdated: { addListener() {} }, onRemoved: { addListener() {} },
+      onUpdated: { addListener() {} }, onRemoved: { addListener(fn) { onRemoved = fn; } },
       query: async () => (opts.tabList || []),
       reload: async id => { reloads.push(id); },
-      sendMessage: async () => null,
+      sendMessage: async (_tabId, msg) => {
+        if (msg && msg.type === 'relay-ping') {
+          if (opts.pingFail) return null;
+          return { ok: true, pong: true };
+        }
+        return null;
+      },
     },
     scripting: opts.noScripting ? undefined : {
       executeScript: async req => {
         if (opts.scriptFail) throw new Error('inject failed');
+        if (opts.allFramesFail && req.target && req.target.allFrames) throw new Error('frame');
         scripts.push(req);
         return [];
       },
     },
   };
-  const ctx = { chrome, console: { log() {}, warn() {} } };
+  // withTimeout (the chat-tab ping) needs timers. A bare vm context does not have them,
+  // and a missing timer used to look like a dead content script.
+  const ctx = { chrome, console: { log() {}, warn() {} }, setTimeout, clearTimeout };
   vm.runInNewContext(BG, ctx);
   let n = 0;
   const send = over => {
@@ -52,12 +63,13 @@ function env(opts = {}) {
     listeners.forEach(f => f({ type: 'relay-log', item }, { id: 'ext', tab: { id: 1 }, frameId: 3 }, () => {}));
   };
   const ask = msg => new Promise(res => listeners.forEach(f => f(msg, { id: 'ext' }, res)));
+  const poke = (msg, sender) => new Promise(res => listeners.forEach(f => f(msg, sender || { id: 'ext' }, res)));
   const sends = () => nativeCalls.filter(c => c.msg.type === 'send').map(c => c.msg);
   const signal = sig => listeners.forEach(f => f({ type: 'relay-signal', signal: sig }, { id: 'ext', tab: { id: 1 } }, () => {}));
-  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, scripts, reloads, setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
+  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, poke, scripts, reloads, dropTab: id => onRemoved(id), setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
 }
 let passed = 0, failed = 0;
-async function test(name, fn) { try { await fn(); passed++; console.log('PASS', name); } catch (e) { failed++; console.log('FAIL', name, '\n   ', e.stack.split('\n').slice(0, 2).join(' | ')); } }
+async function test(name, fn) { try { await fn(); passed++; console.log('PASS', name); } catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); } }
 
 (async () => {
   await test('normalizeHandle: E.164 for phones (+1 default), lowercase emails; same rules as the host', async () => {
@@ -289,6 +301,79 @@ async function test(name, fn) { try { await fn(); passed++; console.log('PASS', 
     await bad.ctx.ensureContentScripts();
     assert.deepStrictEqual(bad.reloads.slice().sort(), [7, 9], 'each chat tab reloads once');
     assert.strictEqual(bad.scripts.length, 0);
+    const warned = bad.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'unacked');
+    assert.strictEqual(warned.length, 2);
+    assert.deepStrictEqual(Object.keys(warned[0].msg).sort(), ['status', 'type']);
+  });
+
+  await test('a chat tab that does not answer ping is reloaded once and warned once', async () => {
+    const e = env({ pingFail: true, tabList: [
+      { id: 7, url: 'https://x.com/i/chat/111-222' },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(Array.from(e.reloads), [7], 'reloads=' + Array.from(e.reloads).join(','));
+    assert.ok(e.scripts.every(s => s.files && s.files[0] === 'content.js' && !s.world), 'scripts=' + e.scripts.length);
+    const u = () => e.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'unacked');
+    assert.strictEqual(u().length, 1, e.nativeCalls.map(c => c.msg && (c.msg.type + ':' + (c.msg.status || ''))).join(','));
+    assert.deepStrictEqual(Object.keys(u()[0].msg).sort(), ['status', 'type']);
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [7], 'the next pass does not reload again');
+    assert.strictEqual(u().length, 1, 'the warning is once');
+    e.dropTab(7);
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [7, 7], 'closing the tab allows one more reload');
+    assert.strictEqual(u().length, 2);
+  });
+
+  await test('allFrames failure still injects the top frame and does not reload a live script', async () => {
+    const e = env({ allFramesFail: true, tabList: [
+      { id: 7, url: '', pendingUrl: 'https://x.com/messages/9' },
+    ] });
+    await e.ctx.ensureContentScripts();
+    assert.strictEqual(e.reloads.length, 0);
+    assert.strictEqual(e.scripts.length, 1);
+    assert.strictEqual(Array.from(e.scripts[0].target.frameIds).join(','), '0');
+    assert.ok(!e.scripts[0].target.allFrames);
+    assert.strictEqual(e.scripts[0].files[0], 'content.js');
+  });
+
+  await test('a discarded chat tab is reloaded once and warned once', async () => {
+    const e = env({ tabList: [
+      { id: 4, url: 'https://x.com/i/chat/abc', discarded: true },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4]);
+    assert.ok(e.scripts.every(s => s.target.tabId !== 4));
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4]);
+    const u = e.nativeCalls.filter(c => c.msg && c.msg.status === 'unacked');
+    assert.strictEqual(u.length, 1);
+  });
+
+  await test('relay-arm-act installs the main-world click helper on that frame', async () => {
+    const e = env();
+    // The worker does not answer this message; waiting on sendResponse would hang.
+    e.poke({ type: 'relay-arm-act' }, { id: 'ext', tab: { id: 7 }, frameId: 0 });
+    await sleep(20);
+    assert.strictEqual(e.scripts.length, 1);
+    assert.strictEqual(e.scripts[0].world, 'MAIN');
+    assert.strictEqual(e.scripts[0].target.tabId, 7);
+    assert.strictEqual(Array.from(e.scripts[0].target.frameIds).join(','), '0');
+    assert.strictEqual(typeof e.scripts[0].func, 'function');
+    assert.ok(!e.scripts[0].files);
+  });
+
+  await test('reloading the extension injects open chat tabs without a blanket reload', async () => {
+    const e = env({ getURL: true, tabList: [
+      { id: 7, url: 'https://x.com/i/chat/111-222' },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await sleep(40);
+    assert.ok(e.scripts.length >= 2);
+    assert.ok(e.scripts.every(s => s.files && s.files[0] === 'content.js'));
+    assert.deepStrictEqual(e.reloads, []);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

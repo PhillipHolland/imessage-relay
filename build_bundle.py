@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.25, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.26, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=3289474e1b6a9f10a13cadb398001e451dcdb3f9273fab5bf55ed0cb10bed614 nl=1
-# iMessage Relay v1.4.25
+@@@@ FILE README.md mode=644 sha256=4963760ac82ceea2b88ff6ea4e71cd86a03d05c49e55c044e77e8e35b9349e43 nl=1
+# iMessage Relay v1.4.26
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.26 (Chrome extension 1.4.26 + Mac helper; `relay_post.py` does not change): a ✅ on your own sent message is placed from the hover tray. The "+" opens the emoji picker, and a twemoji chip counts as placed. A background or unfocused X Chat tab is injected again after the extension reloads. If that script is not running, or a fresh self-send is not picked up, the chat posts the reload warning instead of staying silent. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.25 (Mac helper and installer only; the extension stays 1.4.24, so no reload; `relay_post.py` does not change): the test suite no longer clears Full Disk Access. A test uninstall was resetting that grant for the live watcher, and a test install could compile a second app with the same bundle id. Tests use a test bundle id in a temp directory, or they skip the compile. `install.sh` will not rebuild or re-sign the live app unless `--rebuild-watcher-app` is set. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.24 (Chrome extension 1.4.24 + Mac helper; `relay_post.py` does not change): a native Reply in the relay chat gets a send or a visible reason. Open x.com tabs are injected again after the extension reloads, so Cmd+R is no longer required for the content script to attach. A quote that is only the message body (no "Name:" prefix) goes to the sender that body was relayed from, or to the one name in the 💬 header above that bubble. Two matches still ask who it is for. If the Mac does not answer a typed send within 10 seconds, the chat says to reload X Chat and retype. A ✅ on the sent message is the confirmation; `→ name ✓✓` is posted only when that reaction does not land. A delivery failure still warns. Reload the extension (it asks for a scripting permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.23 (Mac helper only; the extension stays 1.4.21, so no reload; `relay_post.py` does not change): an upgrade that already runs the watcher applet restarts it in place and does not unload the LaunchAgent. Unloading it could hang, and killing that unload made macOS delete the app's Full Disk Access grant, so the watcher came back unable to read chat.db. A denied open is retried a few times before the chat is told Full Disk Access is missing, and a later success says watching is back. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -189,9 +190,9 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.25)
+## Limits (v1.4.26)
 - A native Reply that quotes only the message body goes to that sender when one person sent it, or when the 💬 header above that bubble names one person. Two matches ask who it is for.
-- A typed reply that gets no answer from the Mac within 10 seconds says to reload X Chat and retype. A ✅ on the sent message is the confirmation. `→ name ✓✓` is posted only when that reaction does not land. A failed delivery still warns.
+- A typed reply that gets no answer from the Mac within 10 seconds says to reload X Chat and retype. A background X Chat tab is injected again after the extension reloads. If that script is missing, or a fresh self-send is not picked up, the same warning is posted. A ✅ on the sent message is the confirmation. `→ name ✓✓` is posted only when that reaction does not land. A failed delivery still warns.
 - A lone emoji used as a native Reply to a contact's text is sent to that contact. An emoji that does not quote a contact, within 10 minutes of a prompt, is still only a prompt answer.
 - `/snooze` holds inbound texts the same way quiet hours do, then delivers one digest. A command can set at most 24 hours; a hand-edited time more than 36 hours ahead is ignored. `/pause` does not keep texts.
 - "Chrome hasn't checked in" means the extension has not talked to the Mac. Closing the chat tab while Chrome stays open does not raise it.
@@ -1338,7 +1339,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=6d660bb6a089656dfd74800c28d36f1df75f542171db2d220927687d4b173d14 nl=1
+@@@@ FILE extension/background.js mode=644 sha256=d7b442e699056da3ddafa75e58d3ed997d4c31d3f651eee0e3ea2f49462b661c nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -2127,6 +2128,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.type === 'relay-hello') return false;   // frame instance announced itself; no coordination needed
+  if (msg.type === 'relay-arm-act' && sender.tab) {   // v1.4.26: MAIN-world React click helper
+    armPageAct(sender.tab.id, sender.frameId).catch(() => {});
+    return false;
+  }
   if (msg.type === 'relay-status') {
     getConfig(true).then(async () => {
       const { status = {}, events = [] } = await chrome.storage.local.get(['status', 'events']);
@@ -2145,34 +2150,137 @@ function boot() {
 }
 // v1.4.24: a service-worker restart does not reattach a content script that died when the extension
 // reloaded. Inject content.js into open x.com tabs (the page guard makes a second copy a no-op).
-// Reload a chat tab once only if that inject fails. Do not reload on the minute alarm after that.
+// v1.4.26: allFrames can throw on one subframe and take the whole tab with it, so the main frame
+// is tried next. A chat tab that still does not answer relay-ping is reloaded once and the owner
+// hears the unacked line. Do not reload a tab that answered. A blanket reload on update used to
+// race this inject and leave a background tab with no script.
 const reinjectedTabs = new Set();
+const warnedTabs = new Set();
+function isChatUrl(url) { return /^https:\/\/x\.com\/(?:i\/chat|messages)\//.test(String(url || '')); }
+async function pingChat(tabId) {
+  if (!chrome.tabs || !chrome.tabs.sendMessage) return true;
+  try {
+    const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: 'relay-ping' }), 1500);
+    return !!(res && res.pong);
+  } catch (e) { return false; }
+}
+async function injectFile(tabId) {
+  if (!chrome.scripting || !chrome.scripting.executeScript) return false;
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['content.js'] });
+    return true;
+  } catch (e) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content.js'] });
+      return true;
+    } catch (e2) { return false; }
+  }
+}
+async function warnUnwatched(tabId) {
+  if (warnedTabs.has(tabId)) return;
+  warnedTabs.add(tabId);
+  // A later death of this same tab is a new miss. The bubble dedupe key must not swallow it.
+  await handleUnacked({ id: 'tab' + tabId + 'x' + Date.now().toString(36) });
+}
 async function ensureContentScripts() {
   if (!chrome.tabs || !chrome.tabs.query) return;
   let tabs = [];
   try { tabs = await chrome.tabs.query({ url: ['https://x.com/*'] }); } catch (e) { return; }
   for (const t of tabs || []) {
     if (!t || typeof t.id !== 'number') continue;
-    let injected = false;
-    if (chrome.scripting && chrome.scripting.executeScript) {
-      try {
-        await chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: true }, files: ['content.js'] });
-        injected = true;
-      } catch (e) { injected = false; }
+    const url = String(t.url || t.pendingUrl || '');
+    const chat = isChatUrl(url);
+    if (t.discarded && chat) {
+      if (!reinjectedTabs.has(t.id)) {
+        reinjectedTabs.add(t.id);
+        try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
+      }
+      await warnUnwatched(t.id);
+      continue;
     }
-    if (injected || reinjectedTabs.has(t.id)) continue;
-    const url = String(t.url || '');
-    if (!/^https:\/\/x\.com\/(?:i\/chat|messages)\//.test(url)) continue;
+    const injected = await injectFile(t.id);
+    if (!chat) continue;
+    if (injected && await pingChat(t.id)) { warnedTabs.delete(t.id); continue; }
+    if (reinjectedTabs.has(t.id)) { await warnUnwatched(t.id); continue; }
     reinjectedTabs.add(t.id);
     try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
+    await warnUnwatched(t.id);
   }
 }
-// On install or update, reload any open X Chat tabs so the new content script is the one running.
+// Kept for a manual call. v1.4.26 does not run this on install/update: reloading a background
+// X Chat tab raced the inject and the new script never attached.
 async function reloadChatTabs() {
   try {
     const tabs = await chrome.tabs.query({ url: ['https://x.com/i/chat/*', 'https://x.com/messages/*'] });
     for (const t of tabs) { try { await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ } }
   } catch (e) { /* tabs API may be unavailable in tests */ }
+}
+function pageActInstaller() {
+  if (window.__imrActInstalled) return;
+  window.__imrActInstalled = true;
+  function handlers(el) {
+    var out = [], seen = [];
+    function take(obj) {
+      if (!obj || seen.indexOf(obj) >= 0) return;
+      seen.push(obj);
+      var keys = ['onClick', 'onPointerDown', 'onPointerUp', 'onMouseDown', 'onMouseUp', 'onMouseEnter', 'onMouseOver', 'onPointerEnter', 'onPointerOver'];
+      var hit = {}, any = false, i;
+      for (i = 0; i < keys.length; i++) if (typeof obj[keys[i]] === 'function') { hit[keys[i]] = obj[keys[i]]; any = true; }
+      if (any) out.push(hit);
+    }
+    try {
+      var ks = Object.keys(el), i, fiber = null;
+      for (i = 0; i < ks.length; i++) if (ks[i].indexOf('__reactProps$') === 0) take(el[ks[i]]);
+      for (i = 0; i < ks.length; i++) if (ks[i].indexOf('__reactFiber$') === 0 || ks[i].indexOf('__reactInternalInstance$') === 0) fiber = el[ks[i]];
+      for (i = 0; fiber && i < 8; i++, fiber = fiber.return) {
+        if (fiber.memoizedProps) take(fiber.memoizedProps);
+        if (fiber.pendingProps) take(fiber.pendingProps);
+      }
+    } catch (e) { /* not a React node */ }
+    return out;
+  }
+  function ev(el, type) {
+    var r = el.getBoundingClientRect();
+    var x = r.left + Math.max(r.width / 2, 1), y = r.top + Math.max(r.height / 2, 1);
+    return {
+      type: type, target: el, currentTarget: el, bubbles: true, cancelable: true,
+      button: 0, buttons: /down$/.test(type) ? 1 : 0, clientX: x, clientY: y, pageX: x, pageY: y,
+      detail: 1, isTrusted: true, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      nativeEvent: { isTrusted: true, target: el, clientX: x, clientY: y },
+      preventDefault: function () {}, stopPropagation: function () {}, persist: function () {}
+    };
+  }
+  document.addEventListener('imr-act', function (e) {
+    var el = e.target;
+    if (!el || !el.getAttribute) return;
+    var op = el.getAttribute('data-imr-op');
+    var chain = handlers(el), i, p, invoked = false;
+    if (op === 'hover') {
+      for (i = 0; i < chain.length; i++) {
+        p = chain[i];
+        try { if (p.onPointerOver) p.onPointerOver(ev(el, 'pointerover')); } catch (err) {}
+        try { if (p.onPointerEnter) p.onPointerEnter(ev(el, 'pointerenter')); } catch (err) {}
+        try { if (p.onMouseOver) p.onMouseOver(ev(el, 'mouseover')); } catch (err) {}
+        try { if (p.onMouseEnter) p.onMouseEnter(ev(el, 'mouseenter')); } catch (err) {}
+      }
+      return;
+    }
+    if (op !== 'press') return;
+    for (i = 0; i < chain.length; i++) {
+      p = chain[i];
+      if (p.onPointerDown) { invoked = true; try { p.onPointerDown(ev(el, 'pointerdown')); } catch (err) {} }
+      if (p.onMouseDown) { invoked = true; try { p.onMouseDown(ev(el, 'mousedown')); } catch (err) {} }
+      if (p.onPointerUp) { invoked = true; try { p.onPointerUp(ev(el, 'pointerup')); } catch (err) {} }
+      if (p.onMouseUp) { invoked = true; try { p.onMouseUp(ev(el, 'mouseup')); } catch (err) {} }
+      if (p.onClick) { invoked = true; try { p.onClick(ev(el, 'click')); } catch (err) {} }
+    }
+    if (invoked) try { el.setAttribute('data-imr-did', '1'); } catch (err) {}
+  }, true);
+}
+async function armPageAct(tabId, frameId) {
+  if (!chrome.scripting || !chrome.scripting.executeScript || typeof tabId !== 'number') return;
+  const target = typeof frameId === 'number' ? { tabId, frameIds: [frameId] } : { tabId, frameIds: [0] };
+  try { await chrome.scripting.executeScript({ target, world: 'MAIN', func: pageActInstaller }); } catch (e) { /* page closed */ }
 }
 async function onGuessExpiry() {
   const g = await getPendingGuess();
@@ -2186,10 +2294,14 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
   else if (a.name === 'relay-guess-expiry') onGuessExpiry().catch(() => {});
   else if (a.name === 'relay-test-expiry') onTestExpiry().catch(() => {});
 });
-chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
+if (chrome.tabs && chrome.tabs.onRemoved) chrome.tabs.onRemoved.addListener(id => { reinjectedTabs.delete(id); warnedTabs.delete(id); });
+chrome.runtime.onInstalled.addListener(() => { boot(); });
 chrome.runtime.onStartup.addListener(boot);
+// v1.4.26: reloading the extension starts this worker. onInstalled is not reliable then, and
+// onStartup does not fire. Tests omit getURL, so they do not inject on load.
+try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot(); } catch (e) { /* tests */ }
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=599311739a6ffa548913419da7ba7f7bdcf75a6c64022f0f6d056a6fba19f69b nl=1
+@@@@ FILE extension/content.js mode=644 sha256=dd0bdb15e3e6f801ae6258c30302da309e16fedc39a811d31fb1f96aadcb2cfc nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -2945,15 +3057,39 @@ chrome.runtime.onStartup.addListener(boot);
       walkElements(root, add);
     }
 
+    const CATCHUP_MS = 45000;   // v1.4.26: a self-send this fresh is still caught after the script attaches
+    function freshStamp(iso) {
+      const parsed = Date.parse(iso || '');
+      return !!iso && !isNaN(parsed) && parsed <= now() + 5000 && now() - parsed <= CATCHUP_MS;
+    }
+    function holdsSelfSend(a) {
+      // Only a relay-chat self-send with a fresh clock. Startup paint and history stay history.
+      if (!a || !relayChatHere() || seen.has(a.uuid)) return false;
+      if (UI_TAG_RE.test(a.text || '')) return false;
+      const self = a.direction === 'outbound' || (a.direction === 'unknown' && (a.quotedText || a.youSent));
+      return !!(self && freshStamp(a.timeIso));
+    }
     function baseline(reason) {
       rootMemo = null;
       mode = detectMode(chatRoot().el || doc.body);
       const list = allEntries();
-      for (const e of list) { processed.add(e); seenKeys.add(conversationId() + '|id:uuid=' + uuidOf(e)); }
-      stats.baselined += list.length;
+      const keep = new Set();
+      const newest = list.length ? (newestAtTop() ? list[0] : list[list.length - 1]) : null;
+      if (newest) {
+        let a = null;
+        try { a = analyze(newest); } catch (err) { a = null; }
+        if (holdsSelfSend(a)) keep.add(newest);
+      }
+      for (const e of list) {
+        if (keep.has(e)) continue;
+        processed.add(e);
+        seenKeys.add(conversationId() + '|id:uuid=' + uuidOf(e));
+      }
+      stats.baselined += list.length - keep.size;
       try { scanReactions(list); } catch (e) { /* prompts get marked on their next change */ }
       settleUntil = now() + cfg.settleMs;
       recentEmits = [];
+      if (keep.size) { keep.forEach(e => pending.add(e)); schedule(0); }
       info('baseline (' + reason + '): context=' + contextPath() + ' conversation=' + (conversationId() || '(none)') + ' mode=' + mode + ' root=' + chatRoot().selector + ' existing=' + list.length);
     }
 
@@ -3239,6 +3375,14 @@ chrome.runtime.onStartup.addListener(boot);
             win.setTimeout(() => { pending.add(e); schedule(0); }, cfg.emptyRetryDelayMs);
             continue;
           }
+        }
+        // v1.4.26: a fresh self-send during startup settle used to be marked done and dropped.
+        // Hold that one until settle ends and arm the watchdog. Older bubbles stay history.
+        if (baselineReason === 'settling' && holdsSelfSend(a)) {
+          if (a.direction === 'outbound') armUnacked();
+          const wait = Math.max(0, settleUntil - now());
+          win.setTimeout(() => { pending.add(e); schedule(0); }, Math.max(cfg.batchDelayMs, wait));
+          continue;
         }
         processed.add(e);
         if (seenKeys.has(a.key)) { stats.skippedDup++; continue; }
@@ -3562,7 +3706,7 @@ chrome.runtime.onStartup.addListener(boot);
     };
     const SEARCH_WORD = { '\u2705': 'check', '\u{1F440}': 'eyes', '\u2753': 'question', '\u2764': 'heart',
                           '\u{1F44D}': 'thumbs up', '\u{1F44E}': 'thumbs down', '\u{1F602}': 'joy', '\u203C': 'exclamation', '\u26A0': 'warning' };
-    const SEARCH_SEL = 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"],input[placeholder*="moji"],input[aria-label*="moji"]';
+    const SEARCH_SEL = 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"],input[placeholder*="moji"],input[aria-label*="moji"],[role="searchbox"],[role="combobox"]';
     const OPTION_SEL = 'button,[role="button"],[role="menuitem"],[role="menuitemradio"],[role="option"],[role="gridcell"],[role="img"],img[alt]';
     let uiChain = Promise.resolve();
     function uiSerial(fn) { const p = uiChain.then(fn, fn); uiChain = p.catch(() => {}); return p; }
@@ -3584,22 +3728,54 @@ chrome.runtime.onStartup.addListener(boot);
       const all = allEntries();
       return all.find(e => uuidOf(e) === want) || null;
     }
+    function pointOf(el) {
+      const r = rect(el);
+      if (r && (r.width > 0 || r.height > 0)) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      return { x: 1, y: 1 };   // a zero-size box still has to look like a real pointer (CSS :hover will not)
+    }
     function fire(el, types) {
       const W = (el.ownerDocument && el.ownerDocument.defaultView) || win;
+      const p = pointOf(el);
       for (const t of types) {
+        const init = { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, screenX: p.x, screenY: p.y,
+                       button: 0, buttons: /down$/.test(t) ? 1 : 0, view: W };
         let ev;
         try {
-          ev = /^pointer/.test(t) && W.PointerEvent ? new W.PointerEvent(t, { bubbles: true, cancelable: true })
-             : new W.MouseEvent(t, { bubbles: true, cancelable: true });
-        } catch (e) { ev = new W.Event(t, { bubbles: true, cancelable: true }); }
+          ev = /^pointer/.test(t) && W.PointerEvent ? new W.PointerEvent(t, init) : new W.MouseEvent(t, init);
+        } catch (e) {
+          try { ev = new W.MouseEvent(t, init); } catch (e2) { ev = new W.Event(t, { bubbles: true, cancelable: true }); }
+        }
         try { el.dispatchEvent(ev); } catch (e) { /* detached */ }
       }
     }
+    // v1.4.26: X ignores some untrusted clicks. A MAIN-world helper (installed by the background)
+    // reads data-imr-op and calls the React handler. The attribute is the bridge; event detail is not.
+    function pageAct(el, op) {
+      if (!el || !el.setAttribute) return;
+      let id = String(el.getAttribute('data-imr-act') || '');
+      if (!/^[a-z0-9]+$/.test(id)) {
+        id = 'a' + Math.random().toString(36).slice(2, 10);
+        try { el.setAttribute('data-imr-act', id); } catch (e) { return; }
+      }
+      try { el.setAttribute('data-imr-op', op === 'press' ? 'press' : 'hover'); } catch (e) { return; }
+      const W = (el.ownerDocument && el.ownerDocument.defaultView) || win;
+      try { el.dispatchEvent(new W.CustomEvent('imr-act', { bubbles: true, composed: true })); } catch (e) { /* no helper */ }
+    }
     function hover(entry) {
       const b = bodyEl(entry) || entry;
+      const chain = [];
+      for (const el of [b, entry]) if (el && chain.indexOf(el) < 0) chain.push(el);
+      for (let a = parentOf(entry), i = 0; a && i < 4; a = parentOf(a), i++) chain.push(a);
+      for (const el of chain) pageAct(el, 'hover');
       for (const el of [entry, b]) fire(el, ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove']);
     }
-    function press(el) { fire(el, ['pointerdown', 'mousedown', 'pointerup', 'mouseup']); try { el.click(); } catch (e) { fire(el, ['click']); } }
+    function press(el) {
+      try { el.setAttribute('data-imr-did', ''); } catch (e) { /* detached */ }
+      pageAct(el, 'press');
+      if (el.getAttribute && el.getAttribute('data-imr-did') === '1') return;   // React handler already ran
+      fire(el, ['pointerdown', 'mousedown', 'pointerup', 'mouseup']);
+      try { el.click(); } catch (e) { fire(el, ['click']); }
+    }
     function escape() {
       const W = doc.defaultView || win;
       for (const t of [doc.activeElement, doc.body, doc]) {
@@ -3609,42 +3785,97 @@ chrome.runtime.onStartup.addListener(boot);
     }
     function otherEntry(el, entry) { const e = closestEntry(el); return !!(e && e !== entry); }
     function inBody(el, entry) { const b = bodyEl(entry); const q = findQuote(entry); return !!((b && deepContains(b, el)) || (q && deepContains(q, el))); }
-    function findReactButton(entry) {
+    function isOpener(el) {
+      const lab = labelOf(el);
+      const tid = String((el.getAttribute && el.getAttribute('data-testid')) || '');
+      const text = ems(el.textContent || '');
+      const name = ems(lab || text);
+      if (EXPAND_BAD_RE.test(lab) || EXPAND_BAD_RE.test(tid)) return false;
+      // v1.4.26: the hover tray has no "React" button. "+" / "Add reaction" opens the picker.
+      if (name === '+' || text === '+' || EXPAND_RE.test(name)) return true;
+      if (DANGER_RE.test(lab) || DANGER_RE.test(tid)) return false;
+      return REACT_LABEL_RE.test(lab) || /react|emoji|reaction/i.test(tid);
+    }
+    function isComposerControl(el) {
+      return !!(el && el.closest && el.closest('[data-testid*="omposer"],[data-testid*="nbox"],nav'));
+    }
+    function boxOf(el) {
+      const own = rect(el);
+      if (own && (own.width || own.height)) return own;
+      const kids = el && el.children ? el.children : [];
+      for (let i = 0; i < kids.length && i < 6; i++) {
+        const r = rect(kids[i]);
+        if (r && (r.width || r.height)) return r;
+      }
+      return own || { left: 0, top: 0, width: 0, height: 0 };
+    }
+    function findReactButton(entry, appeared) {
       const scopes = [entry];
       for (let a = parentOf(entry), i = 0; a && i < 3; a = parentOf(a), i++) scopes.push(a);
       const seenEls = new Set();
+      const er = boxOf(bodyEl(entry) || entry);
+      const nearTray = el => {
+        if (deepContains(entry, el)) return true;
+        if (el.closest && el.closest('#layers,[role="dialog"],[role="menu"],[role="toolbar"]')) return true;
+        // v1.4.26: a background tab has no layout. A control that appeared on hover is the tray.
+        if (appeared && !appeared.has(el)) return true;
+        const br = rect(el);
+        if ((er.width || er.height) && (br.width || br.height)) {
+          const dx = (br.left + br.width / 2) - (er.left + er.width / 2);
+          const dy = (br.top + br.height / 2) - (er.top + er.height / 2);
+          if (Math.abs(dx) < 420 && Math.abs(dy) < 320) return true;
+        }
+        return false;
+      };
       const pick = list => list.find(el => {
         if (seenEls.has(el)) return false; seenEls.add(el);
-        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el)) return false;
-        const lab = labelOf(el), tid = String(el.getAttribute('data-testid') || '');
-        if (DANGER_RE.test(lab) || DANGER_RE.test(tid)) return false;
-        return REACT_LABEL_RE.test(lab) || /react|emoji/i.test(tid);
+        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el) || isComposerControl(el) || !nearTray(el)) return false;
+        return isOpener(el);
       });
       for (const s of scopes) { const b = pick(safeAll(s, 'button,[role="button"]')); if (b) return b; }
-      return pick(safeAll(doc, '[role="toolbar"] button,[role="toolbar"] [role="button"],[role="menu"] [role="menuitem"]'));
+      const portal = pick(safeAll(doc, '#layers button,#layers [role="button"],[role="dialog"] button,[role="dialog"] [role="button"],[role="toolbar"] button,[role="toolbar"] [role="button"],[role="menu"] [role="menuitem"],[role="menu"] button'));
+      if (portal) return portal;
+      return pick(safeAll(doc, 'button,[role="button"]'));
+    }
+    function emojiCp(emoji) {
+      const want = ems(emoji);
+      return Array.from(want).map(c => c.codePointAt(0).toString(16)).join('-');
+    }
+    function nameHit(lab, emoji) {
+      const want = ems(emoji);
+      const raw = ems(lab).toLowerCase();
+      if (!raw) return false;
+      if (raw === want) return true;
+      const names = EMOJI_NAMES[want] || [];
+      if (names.includes(raw)) return true;
+      const norm = raw.replace(/[:_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (names.includes(norm)) return true;
+      return names.some(nm => raw === nm || raw.startsWith(nm + ' ') || raw.startsWith(nm + ',') || raw.startsWith(nm + ':'));
+    }
+    function emojiArt(el, emoji) {
+      const cp = emojiCp(emoji);
+      if (!cp || !el.getAttribute) return false;
+      const art = String(el.getAttribute('src') || '') + ' ' + String(el.getAttribute('style') || '');
+      return new RegExp('/' + cp + '\\.(svg|png)', 'i').test(art);
     }
     function matchesEmoji(el, emoji) {
-      const want = ems(emoji), names = EMOJI_NAMES[want] || [];
-      const lab = ems(labelOf(el)).toLowerCase();
-      if (lab && (lab === want || names.includes(lab))) return true;
+      const want = ems(emoji);
+      if (nameHit(labelOf(el), emoji)) return true;
       if (el.tagName === 'IMG' && ems(el.getAttribute('alt')) === want) return true;
       const own = ems(el.textContent || '');
       if (own === want) return true;
-      const norm = lab.replace(/[:_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
-      if (norm && names.includes(norm)) return true;
       // v1.4.16: X draws picker emoji as twemoji (img src / background-image .../2705.svg)
-      const cp = Array.from(want).map(c => c.codePointAt(0).toString(16)).join('-');
-      const art = String((el.getAttribute('src') || '') + ' ' + (el.getAttribute('style') || ''));
-      if (cp && new RegExp('/' + cp + '\\.(svg|png)', 'i').test(art)) return true;
+      if (emojiArt(el, emoji)) return true;
+      const cp = emojiCp(emoji);
       const ims = el.querySelectorAll ? el.querySelectorAll('img') : [], im = ims.length === 1 ? ims[0] : null;
-      return !!(im && im !== el && (ems(im.getAttribute('alt')) === want || new RegExp('/' + cp + '\\.(svg|png)', 'i').test(String(im.getAttribute('src') || ''))) &&
+      return !!(im && im !== el && (ems(im.getAttribute('alt')) === want || (cp && new RegExp('/' + cp + '\\.(svg|png)', 'i').test(String(im.getAttribute('src') || '')))) &&
                 !ems(el.textContent || ''));
     }
     function findEmojiOption(entry, emoji, exclude) {
       const list = safeAll(doc, OPTION_SEL);
       for (const el of list) {
         if (exclude && exclude.has(el)) continue;
-        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el)) continue;
+        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el) || isComposerControl(el)) continue;
         if (!matchesEmoji(el, emoji)) continue;
         const btn = el.tagName === 'IMG' || el.getAttribute('role') === 'img'
           ? (el.closest ? el.closest('button,[role="button"],[role="menuitem"],[role="option"],[role="gridcell"]') : null) || el : el;
@@ -3652,15 +3883,59 @@ chrome.runtime.onStartup.addListener(boot);
       }
       return null;
     }
+    function inActionTray(el, entry) {
+      // The open tray (quick reactions + Reply/Delete, or the picker) is not a placed reaction.
+      // A page shell that also wraps the bubble (a grid, or #layers around the app) is not the tray.
+      if (el.closest) {
+        const portal = el.closest('#layers,[role="dialog"],[role="menu"],[role="listbox"],[role="grid"]');
+        if (portal && (!entry || !portal.contains(entry))) return true;
+      }
+      const box = el.parentElement;
+      if (!box || box === entry) return false;
+      if (!box.querySelectorAll) return false;
+      const nodes = box.querySelectorAll('button,[role="button"],[role="menuitem"]');
+      for (let i = 0; i < nodes.length && i < 24; i++) {
+        const lab = ems(labelOf(nodes[i]) || nodes[i].textContent || '');
+        if (/^(reply|delete|forward|copy|pin|report|info)$/i.test(lab)) return true;
+      }
+      return false;
+    }
+    function reactionRoots(entry) {
+      const roots = [entry];
+      for (const dir of ['previousElementSibling', 'nextElementSibling']) {
+        let s = entry[dir];
+        for (let i = 0; s && i < 2; i++, s = s[dir]) {
+          if (isUuidEntry(s)) break;
+          if (s.querySelector && s.querySelector('[data-testid^="message-"]')) break;
+          roots.push(s);
+        }
+      }
+      return roots;
+    }
     function reactionCount(entry, emoji) {
+      // v1.4.26: a placed ✅ is often only a twemoji img (empty alt) or an aria-label, not a text node.
       const want = ems(emoji);
       let n = 0;
-      walkElements(entry, el => {
-        if (inBody(el, entry)) return;
-        if (el.closest && el.closest('[role="menu"],[role="menuitem"],[role="dialog"],[role="toolbar"],[role="tooltip"],[role="listbox"],button[aria-haspopup]')) return;
-        for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType === 3 && ems(c.nodeValue).includes(want)) n++;
-        if (ems(el.getAttribute('alt')) === want) n++;
-      });
+      const seen = new Set();
+      const hit = el => ems(el.getAttribute && el.getAttribute('alt')) === want || nameHit(labelOf(el), emoji) || emojiArt(el, emoji);
+      for (const root of reactionRoots(entry)) {
+        walkElements(root, el => {
+          if (seen.has(el)) return;
+          seen.add(el);
+          if (root !== entry) {
+            const owner = closestEntry(el);
+            if (owner && owner !== entry) return;
+          }
+          if (inActionTray(el, entry)) return;
+          if (inBody(el, entry)) {
+            // Message text is not a reaction. A chip image drawn inside the bubble is.
+            if (el.tagName === 'IMG' && hit(el)) n++;
+            return;
+          }
+          for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType === 3 && ems(c.nodeValue).includes(want)) n++;
+          if (hit(el)) n++;
+        });
+      }
       return n;
     }
     function vocabSeen(entry) {
@@ -3707,37 +3982,46 @@ chrome.runtime.onStartup.addListener(boot);
       if (want !== ems('\u2753')) clearPrompt(uuid);     // a sent / read / mirrored message is no longer a prompt
       const before = reactionCount(entry, want);
       if (before > 0) { if (opt && opt.prompt) watchPrompt(uuid, entry); return out(true, 'already'); }
-      hover(entry);
-      const btn = await waitFor(() => findReactButton(entry), 1200, 40);
-      if (!btn) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
-      const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));   // e.g. an existing pill
-      const preBtns = new Set(safeAll(doc, 'button,[role="button"]'));
-      // v1.4.16: the chat list's own "Search" box exists before the picker opens. v1.4.15 typed "check" into
-      // THAT box (the first search input on the page), never into the picker's, and the full picker only
-      // renders the emoji in view (no ✅ without a search), so every ✅ ended 'no-emoji' after 4 x 1.2 s.
-      // Only a search box that appeared with the picker is used.
-      const preInputs = new Set(safeAll(doc, 'input,textarea'));
-      press(btn);
-      let typed = null, expanded = false;
-      const step = () => {
-        const o = findEmojiOption(entry, want, stale);
-        if (o) return o;
-        const search = safeAll(doc, SEARCH_SEL).find(el => !preInputs.has(el) && el !== typed && !otherEntry(el, entry) &&
-          !/composer|inbox|conversation/i.test(String(el.getAttribute('data-testid') || '')) &&
-          !(el.closest && el.closest('[data-testid*="omposer"],[data-testid*="nbox"],nav')));
-        if (search) { typed = search; setNativeValue(search, SEARCH_WORD[want] || ''); return null; }
-        if (!expanded && !typed && realNow() - t0 > 350) {
-          // X's hover bar shows only a few quick reactions (no ✅): open the full picker with a NEW button
-          // (appeared with the bar) labelled for more emoji/reactions, never a message action.
-          const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
-            !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
-          if (more) { expanded = true; press(more); }
-        }
+      // v1.4.16: the chat list's own "Search" box exists before the picker opens. Only a search box
+      // that appears with the picker is used. Stale emoji nodes are pills already on the page.
+      const preInputs = new Set(safeAll(doc, 'input,textarea,[role="searchbox"],[role="combobox"]'));
+      const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));
+      const resting = new Set(safeAll(doc, 'button,[role="button"]'));
+      const grab = () => {
+        hover(entry);
+        const direct = findEmojiOption(entry, want, stale);
+        if (direct && !inBody(direct, entry)) return { kind: 'option', el: direct };
+        const opener = findReactButton(entry, resting);
+        if (opener) return { kind: 'open', el: opener };
         return null;
       };
-      const option = await waitFor(step, 3000, 40);
-      if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry), searched: !!typed, expanded }); }
-      press(option);
+      const first = await waitFor(grab, 1200, 40);
+      if (!first) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
+      let typed = null, expanded = false;
+      if (first.kind === 'option') press(first.el);
+      else {
+        // Snapshot buttons once the tray is open so its "+" is not pressed again as "more".
+        const preBtns = new Set(safeAll(doc, 'button,[role="button"]'));
+        press(first.el);
+        const step = () => {
+          const o = findEmojiOption(entry, want, stale);
+          if (o) return o;
+          const search = safeAll(doc, SEARCH_SEL).find(el => !preInputs.has(el) && el !== typed && !otherEntry(el, entry) &&
+            !/composer|inbox|conversation/i.test(String(el.getAttribute('data-testid') || '')) &&
+            !(el.closest && el.closest('[data-testid*="omposer"],[data-testid*="nbox"],nav')));
+          if (search) { typed = search; setNativeValue(search, SEARCH_WORD[want] || ''); return null; }
+          if (!expanded && !typed && realNow() - t0 > 350) {
+            // Quick row has no ✅: open the full picker with a NEW button, never Reply/Delete.
+            const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
+              !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
+            if (more) { expanded = true; press(more); }
+          }
+          return null;
+        };
+        const option = await waitFor(step, 3000, 40);
+        if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry), searched: !!typed, expanded }); }
+        press(option);
+      }
       const ok = await waitFor(() => reactionCount(entry, want) > before, 2500, 40);
       if (!ok) { escape(); return out(false, 'not-placed'); }
       if (opt && opt.prompt) watchPrompt(uuid, entry);
@@ -3921,6 +4205,7 @@ chrome.runtime.onStartup.addListener(boot);
       hasEntries() { return allEntries().length > 0 || !!lastEls.any; },
       rebaseline: baseline,
       flushNow() { if (flushTimer) { win.clearTimeout(flushTimer); flushTimer = null; } flush(); },
+      nudge() { try { const root = chatRoot().el; if (root) pending.add(root); schedule(0); } catch (e) { /* doc gone */ } },
       debugSnapshot,
       pageStructure,               // v1.4.3: popup "Copy page structure" (text-free)
       structureOf,
@@ -3952,6 +4237,19 @@ chrome.runtime.onStartup.addListener(boot);
   if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
   if (window.__imessageRelayLoaded) return;
   window.__imessageRelayLoaded = true;
+  // v1.4.26: a background tab must answer before storage resolves. A ping that waited on
+  // storage looked like a dead script, and the worker then reloaded the tab it had just injected.
+  try {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (!msg || msg.type !== 'relay-ping') return false;
+      try { sendResponse({ ok: true, pong: true }); } catch (e) { /* port closed */ }
+      return false;
+    });
+  } catch (e) { /* runtime gone */ }
+  try {
+    const arm = chrome.runtime.sendMessage({ type: 'relay-arm-act' });
+    if (arm && arm.catch) arm.catch(() => {});
+  } catch (e) { /* extension reloading */ }
 
   const isTop = window === window.top;
   const role = isTop ? 'top' : 'frame';
@@ -4091,6 +4389,10 @@ chrome.runtime.onStartup.addListener(boot);
     setInterval(() => {
       if (mainDetector && !state.paused && mainDetector.hasEntries()) send({ type: 'relay-ui-tick' });
     }, 15000);
+    // v1.4.26: a background tab can delay mutation delivery. Rescan even while hidden.
+    setInterval(() => { if (mainDetector) mainDetector.nudge(); }, 2000);
+    try { document.addEventListener('visibilitychange', () => { if (mainDetector) mainDetector.nudge(); }); } catch (e) { /* tests */ }
+    send({ type: 'relay-arm-act' });   // MAIN-world click helper for the reaction tray
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -4115,7 +4417,7 @@ chrome.runtime.onStartup.addListener(boot);
       return false;
     }
     if (msg && msg.type === 'relay-ui') {                 // v1.4.6: background asks for one UI action
-      if (!mainDetector || !mainDetector.hasEntries()) return false;
+      if (!mainDetector || !mainDetector.hasEntries()) { sendResponse({ ok: false, step: 'no-entry' }); return false; }
       if (state.paused) { sendResponse({ ok: false, step: 'paused' }); return false; }
       let p;
       if (msg.action === 'react') p = mainDetector.uiReact(String(msg.uuid || ''), String(msg.emoji || ''), { prompt: !!msg.prompt });
@@ -4136,11 +4438,11 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=775060861a03000540fbf966c4ee074aaa482c89f66f58932efe3a2b30169563 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=deda01c2ab2146fcb1595486cbd53dc0e8f3624aefefe8b61292595fce5fc4c4 nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.24",
+  "version": "1.4.26",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -7862,7 +8164,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=7234dd5bc21049dd98adb8d8983d2beeac64a29adb875eb5ecb537ee3ea606d3 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=8232140323998da9c204417a6bc55537dcd359b979f797c24af8484ff3ec9695 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7888,8 +8190,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.25'
-EXTENSION_VERSION = '1.4.24'   # v1.4.25 does not change the extension (still 1.4.24)
+VERSION = '1.4.26'
+EXTENSION_VERSION = '1.4.26'   # v1.4.26 changes the extension
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -16542,7 +16844,7 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/native.test.js mode=644 sha256=e261efd195b67d06908a325d2cee314f666d258b762f74a22d0557fbc0fa1e2e nl=1
+@@@@ FILE tests/js/native.test.js mode=644 sha256=626a89e40c855d184b55d008c515fcfbef45c129d98f3668a01f83fcdaae6357 nl=1
 /* Background (service worker) tests: config from the host (get_config), reply gating,
  * handle normalization, popup status, self-test relay, and "no bodies in storage". Run:
  *   NODE_PATH=/path/to/node_modules node tests/js/native.test.js
@@ -16555,6 +16857,7 @@ const CONV = '1111-2222';
 
 function env(opts = {}) {
   const store = {}, listeners = [], nativeCalls = [], badge = {}, scripts = [], reloads = [];
+  let onRemoved = () => {};
   let hostConfig = Object.assign({ ok: true, version: '1.3.2', paused: false, dryRun: true,
     relayConversationId: CONV, contacts: [{ name: 'Test Contact', label: 'Test', handle: '15555550123' }] }, opts.config || {});
   const local = {
@@ -16564,6 +16867,7 @@ function env(opts = {}) {
   const chrome = {
     runtime: {
       id: 'ext', onMessage: { addListener: f => listeners.push(f) }, onInstalled: { addListener() {} }, onStartup: { addListener() {} },
+      getURL: opts.getURL ? (() => 'chrome-extension://ext/background.js') : undefined,
       sendNativeMessage: async (host, msg) => {
         nativeCalls.push({ host, msg });
         if (opts.hostDown) throw new Error('Specified native messaging host not found.');
@@ -16576,20 +16880,29 @@ function env(opts = {}) {
     action: { async setBadgeText(o) { badge.text = o.text; }, async setBadgeBackgroundColor() {} },
     alarms: { create() {}, onAlarm: { addListener() {} } },
     tabs: {
-      onUpdated: { addListener() {} }, onRemoved: { addListener() {} },
+      onUpdated: { addListener() {} }, onRemoved: { addListener(fn) { onRemoved = fn; } },
       query: async () => (opts.tabList || []),
       reload: async id => { reloads.push(id); },
-      sendMessage: async () => null,
+      sendMessage: async (_tabId, msg) => {
+        if (msg && msg.type === 'relay-ping') {
+          if (opts.pingFail) return null;
+          return { ok: true, pong: true };
+        }
+        return null;
+      },
     },
     scripting: opts.noScripting ? undefined : {
       executeScript: async req => {
         if (opts.scriptFail) throw new Error('inject failed');
+        if (opts.allFramesFail && req.target && req.target.allFrames) throw new Error('frame');
         scripts.push(req);
         return [];
       },
     },
   };
-  const ctx = { chrome, console: { log() {}, warn() {} } };
+  // withTimeout (the chat-tab ping) needs timers. A bare vm context does not have them,
+  // and a missing timer used to look like a dead content script.
+  const ctx = { chrome, console: { log() {}, warn() {} }, setTimeout, clearTimeout };
   vm.runInNewContext(BG, ctx);
   let n = 0;
   const send = over => {
@@ -16597,12 +16910,13 @@ function env(opts = {}) {
     listeners.forEach(f => f({ type: 'relay-log', item }, { id: 'ext', tab: { id: 1 }, frameId: 3 }, () => {}));
   };
   const ask = msg => new Promise(res => listeners.forEach(f => f(msg, { id: 'ext' }, res)));
+  const poke = (msg, sender) => new Promise(res => listeners.forEach(f => f(msg, sender || { id: 'ext' }, res)));
   const sends = () => nativeCalls.filter(c => c.msg.type === 'send').map(c => c.msg);
   const signal = sig => listeners.forEach(f => f({ type: 'relay-signal', signal: sig }, { id: 'ext', tab: { id: 1 } }, () => {}));
-  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, scripts, reloads, setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
+  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, poke, scripts, reloads, dropTab: id => onRemoved(id), setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
 }
 let passed = 0, failed = 0;
-async function test(name, fn) { try { await fn(); passed++; console.log('PASS', name); } catch (e) { failed++; console.log('FAIL', name, '\n   ', e.stack.split('\n').slice(0, 2).join(' | ')); } }
+async function test(name, fn) { try { await fn(); passed++; console.log('PASS', name); } catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); } }
 
 (async () => {
   await test('normalizeHandle: E.164 for phones (+1 default), lowercase emails; same rules as the host', async () => {
@@ -16834,6 +17148,79 @@ async function test(name, fn) { try { await fn(); passed++; console.log('PASS', 
     await bad.ctx.ensureContentScripts();
     assert.deepStrictEqual(bad.reloads.slice().sort(), [7, 9], 'each chat tab reloads once');
     assert.strictEqual(bad.scripts.length, 0);
+    const warned = bad.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'unacked');
+    assert.strictEqual(warned.length, 2);
+    assert.deepStrictEqual(Object.keys(warned[0].msg).sort(), ['status', 'type']);
+  });
+
+  await test('a chat tab that does not answer ping is reloaded once and warned once', async () => {
+    const e = env({ pingFail: true, tabList: [
+      { id: 7, url: 'https://x.com/i/chat/111-222' },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(Array.from(e.reloads), [7], 'reloads=' + Array.from(e.reloads).join(','));
+    assert.ok(e.scripts.every(s => s.files && s.files[0] === 'content.js' && !s.world), 'scripts=' + e.scripts.length);
+    const u = () => e.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'unacked');
+    assert.strictEqual(u().length, 1, e.nativeCalls.map(c => c.msg && (c.msg.type + ':' + (c.msg.status || ''))).join(','));
+    assert.deepStrictEqual(Object.keys(u()[0].msg).sort(), ['status', 'type']);
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [7], 'the next pass does not reload again');
+    assert.strictEqual(u().length, 1, 'the warning is once');
+    e.dropTab(7);
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [7, 7], 'closing the tab allows one more reload');
+    assert.strictEqual(u().length, 2);
+  });
+
+  await test('allFrames failure still injects the top frame and does not reload a live script', async () => {
+    const e = env({ allFramesFail: true, tabList: [
+      { id: 7, url: '', pendingUrl: 'https://x.com/messages/9' },
+    ] });
+    await e.ctx.ensureContentScripts();
+    assert.strictEqual(e.reloads.length, 0);
+    assert.strictEqual(e.scripts.length, 1);
+    assert.strictEqual(Array.from(e.scripts[0].target.frameIds).join(','), '0');
+    assert.ok(!e.scripts[0].target.allFrames);
+    assert.strictEqual(e.scripts[0].files[0], 'content.js');
+  });
+
+  await test('a discarded chat tab is reloaded once and warned once', async () => {
+    const e = env({ tabList: [
+      { id: 4, url: 'https://x.com/i/chat/abc', discarded: true },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4]);
+    assert.ok(e.scripts.every(s => s.target.tabId !== 4));
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4]);
+    const u = e.nativeCalls.filter(c => c.msg && c.msg.status === 'unacked');
+    assert.strictEqual(u.length, 1);
+  });
+
+  await test('relay-arm-act installs the main-world click helper on that frame', async () => {
+    const e = env();
+    // The worker does not answer this message; waiting on sendResponse would hang.
+    e.poke({ type: 'relay-arm-act' }, { id: 'ext', tab: { id: 7 }, frameId: 0 });
+    await sleep(20);
+    assert.strictEqual(e.scripts.length, 1);
+    assert.strictEqual(e.scripts[0].world, 'MAIN');
+    assert.strictEqual(e.scripts[0].target.tabId, 7);
+    assert.strictEqual(Array.from(e.scripts[0].target.frameIds).join(','), '0');
+    assert.strictEqual(typeof e.scripts[0].func, 'function');
+    assert.ok(!e.scripts[0].files);
+  });
+
+  await test('reloading the extension injects open chat tabs without a blanket reload', async () => {
+    const e = env({ getURL: true, tabList: [
+      { id: 7, url: 'https://x.com/i/chat/111-222' },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await sleep(40);
+    assert.ok(e.scripts.length >= 2);
+    assert.ok(e.scripts.every(s => s.files && s.files[0] === 'content.js'));
+    assert.deepStrictEqual(e.reloads, []);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
@@ -17374,7 +17761,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=1fcbf9d63c1e63fe837c18bb2285691579c043a63017e4c5a5cc71a716d6b5be nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=53ceaf2e941916a41369b226616d0e8d9d7ab97998ac2d34d10f0bb15fe9397c nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -17429,7 +17816,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.24');
+  assert.strictEqual(m.version, '1.4.26');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'scripting', 'storage']);
@@ -17771,7 +18158,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/ui.test.js mode=644 sha256=fc54326ebad876eae660ec1758ba9b5cb32e6ae908aa4f65fdf35752d39c1ffd nl=1
+@@@@ FILE tests/js/ui.test.js mode=644 sha256=273f46e2deb01df921e84cd307589ab8718c27a935e3fdcd17732715054505b2 nl=1
 /* v1.4.6: the UI engine (reactions on the owner's own messages, typed 🤖 prompts, undo), on a fake X Chat UI. Run:
  *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
  */
@@ -17810,6 +18197,7 @@ function setup(html, url, opts = {}) {
     now: opts.now, ownerCheck: opts.ownerCheck,
     seen: { has: u => seenSet.has(u), add: u => seenSet.add(u) },
   });
+  if (opts.beforeStart) opts.beforeStart(window.document, window);
   det.start();
   return { window, doc: window.document, det, logs, statuses, state, dom, seenSet, reacts };
 }
@@ -17844,6 +18232,7 @@ function react(doc, entry, emoji) {
   return pill;
 }
 const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
+const unacked = list => list.filter(s => s && s.status === 'unacked');
 
 
 const msgBase = msg;
@@ -18057,6 +18446,219 @@ function composer(doc, opts = {}) {
     react(doc, e, '\u{1F5D1}\uFE0F');
     await sleep(250);
     assert.strictEqual(reacts.length, 0);
+  });
+
+  const EYES = '\u{1F440}';
+  const CHECK_SRC = 'https://abs.twimg.com/emoji/v2/svg/2705.svg';
+  const EYES_SRC = 'https://abs.twimg.com/emoji/v2/svg/1f440.svg';
+  function chip(doc, entry, src) {
+    const img = doc.createElement('img');
+    img.setAttribute('alt', '');
+    img.setAttribute('src', src);
+    entry.appendChild(img);
+  }
+  // Current X Chat tray: a hover sheet (portal), quick emoji, "+", then Reply/Delete. No "React" label.
+  function hoverTray(doc, opts = {}) {
+    const clicks = [];
+    const host = doc.createElement('div');
+    if (opts.where === 'layers') host.id = 'layers';
+    doc.body.appendChild(host);
+    doc.addEventListener('mouseover', ev => {
+      if (!(ev.clientX > 0)) return;
+      const entry = ev.target.closest && ev.target.closest('[data-testid^="message-"]');
+      if (!entry || String(entry.getAttribute('data-testid') || '').startsWith('message-text-')) return;
+      if (host.querySelector('.tray')) return;
+      const tray = doc.createElement('div');
+      tray.className = 'tray';
+      if (opts.where === 'layers') tray.setAttribute('role', 'menu');
+      const add = (label, fn) => {
+        const b = doc.createElement('button');
+        b.setAttribute('aria-label', label);
+        b.addEventListener('click', () => { clicks.push(label); if (fn) fn(); });
+        tray.appendChild(b);
+      };
+      if (opts.eyes) add(EYES, () => chip(doc, entry, EYES_SRC));
+      if (!opts.actionsOnly) add('+', () => {
+        const b = doc.createElement('button');
+        b.setAttribute('aria-label', 'Check mark button');
+        const img = doc.createElement('img');
+        img.setAttribute('alt', '');
+        img.setAttribute('src', CHECK_SRC);
+        b.appendChild(img);
+        b.addEventListener('click', () => { clicks.push('check'); chip(doc, entry, CHECK_SRC); });
+        tray.appendChild(b);
+      });
+      ['Reply', 'Delete', 'Forward', 'Copy', 'Pin'].forEach(label => add(label));
+      host.appendChild(tray);
+    }, true);
+    return { clicks };
+  }
+
+  await test('v1.4.26: hover tray places ✅ from "+" onto a twemoji chip and never clicks Reply', async () => {
+    const { doc, det } = setup();
+    const ui = hoverTray(doc, { where: 'layers' });
+    await sleep(200);
+    const e = msg(doc, 30, 'out', 'on my way');
+    panel(doc).appendChild(e);
+    await sleep(80);
+    const r = await det.uiReact(uuid(30), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.step, 'placed');
+    assert.deepStrictEqual(ui.clicks, ['+', 'check']);
+    assert.strictEqual((await det.uiReact(uuid(30), CHECK)).step, 'already');
+    assert.deepStrictEqual(ui.clicks, ['+', 'check']);
+  });
+
+  await test('v1.4.26: eyes on the quick row are clicked; Reply is not', async () => {
+    const { doc, det } = setup();
+    const ui = hoverTray(doc, { where: 'layers', eyes: true });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 31, 'out', 'see you'));
+    await sleep(80);
+    const r = await det.uiReact(uuid(31), EYES);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.deepStrictEqual(ui.clicks, [EYES]);
+  });
+
+  await test('v1.4.26: a "+" that appears on hover with no layout and no portal role still opens ✅', async () => {
+    const { doc, det } = setup();
+    const ui = hoverTray(doc, { where: 'portal' });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 32, 'out', 'on my way'));
+    await sleep(80);
+    const r = await det.uiReact(uuid(32), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.step, 'placed');
+    assert.deepStrictEqual(ui.clicks, ['+', 'check']);
+  });
+
+  await test('v1.4.26: Reply Delete Forward Copy Pin are never the react control', async () => {
+    const { doc, det } = setup();
+    const ui = hoverTray(doc, { where: 'layers', actionsOnly: true });
+    await sleep(200);
+    panel(doc).appendChild(msg(doc, 33, 'out', 'on my way'));
+    await sleep(80);
+    const r = await det.uiReact(uuid(33), CHECK);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.step, 'no-react-button');
+    assert.deepStrictEqual(ui.clicks, []);
+  });
+
+  await test('v1.4.26: a page handler places ✅ and the untrusted click is not sent again', async () => {
+    const { doc, det } = setup();
+    const clicks = [];
+    let entry = null;
+    doc.addEventListener('imr-act', ev => {
+      const el = ev.target;
+      if (!el || !el.getAttribute || el.getAttribute('data-imr-op') !== 'press') return;
+      el.setAttribute('data-imr-did', '1');
+      const lab = el.getAttribute('aria-label') || '';
+      if (lab === '+') {
+        const b = doc.createElement('button');
+        b.setAttribute('aria-label', 'Check mark button');
+        const img = doc.createElement('img');
+        img.setAttribute('alt', '');
+        img.setAttribute('src', CHECK_SRC);
+        b.appendChild(img);
+        b.addEventListener('click', () => clicks.push('untrusted'));
+        doc.body.appendChild(b);
+      } else if (lab === 'Check mark button') {
+        clicks.push('react');
+        chip(doc, entry, CHECK_SRC);
+      }
+    }, true);
+    doc.addEventListener('mouseover', ev => {
+      if (!(ev.clientX > 0)) return;
+      const row = ev.target.closest && ev.target.closest('[data-testid^="message-"]');
+      if (!row || doc.querySelector('[aria-label="+"]')) return;
+      const b = doc.createElement('button');
+      b.setAttribute('aria-label', '+');
+      b.addEventListener('click', () => clicks.push('untrusted-open'));
+      doc.body.appendChild(b);
+    }, true);
+    await sleep(200);
+    entry = msg(doc, 34, 'out', 'on my way');
+    panel(doc).appendChild(entry);
+    await sleep(80);
+    const r = await det.uiReact(uuid(34), CHECK);
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.step, 'placed');
+    assert.deepStrictEqual(clicks, ['react']);
+  });
+
+  await test('v1.4.26: a fresh self-send during startup settle arms the watchdog and is held', async () => {
+    const s = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 5000, ackMs: 40, batchDelayMs: 5 },
+      beforeStart(doc) { panel(doc).appendChild(msg(doc, 41, 'in', 'earlier')); },
+    });
+    await sleep(30);
+    panel(s.doc).appendChild(msg(s.doc, 42, 'out', 'on my way', { time: new Date().toISOString() }));
+    await sleep(90);
+    const u = unacked(s.statuses);
+    assert.strictEqual(s.logs.length, 0);
+    assert.strictEqual(u.length, 1, s.statuses.map(x => x.status).join(','));
+    assert.strictEqual(u[0].status, 'unacked');
+    assert.strictEqual(u[0].conversationId, '111-222');
+    assert.ok(!('text' in u[0]));
+    assert.ok(!JSON.stringify(s.statuses).includes('on my way'));
+    s.det.stop();
+  });
+
+  await test('v1.4.26: a bubble with no clock during startup settle stays history and stays quiet', async () => {
+    const s = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 5000, ackMs: 40, batchDelayMs: 5 },
+      beforeStart(doc) { panel(doc).appendChild(msg(doc, 43, 'in', 'earlier')); },
+    });
+    await sleep(30);
+    panel(s.doc).appendChild(msg(s.doc, 44, 'out', 'on my way'));
+    await sleep(90);
+    assert.strictEqual(s.logs.length, 0);
+    assert.strictEqual(unacked(s.statuses).length, 0, s.statuses.map(x => x.status).join(','));
+    s.det.stop();
+  });
+
+  await test('v1.4.26: a fresh self-send already on the page when the script attaches is sent', async () => {
+    const s = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 40, ackMs: 5000, batchDelayMs: 5 },
+      beforeStart(doc) {
+        panel(doc).appendChild(msg(doc, 45, 'in', 'earlier'));
+        panel(doc).appendChild(msg(doc, 46, 'out', 'on my way', { time: new Date().toISOString() }));
+      },
+    });
+    await sleep(180);
+    assert.strictEqual(s.logs.length, 1);
+    assert.strictEqual(s.logs[0].direction, 'outbound');
+    assert.ok(!JSON.stringify(s.statuses).includes('on my way'));
+    assert.strictEqual(unacked(s.statuses).length, 0, s.statuses.map(x => x.status).join(','));
+    s.det.stop();
+  });
+
+  await test('v1.4.26: an old self-send already on the page stays history', async () => {
+    const seen = new Set();
+    const s = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 40, ackMs: 40, batchDelayMs: 5 },
+      seenSet: seen,
+      beforeStart(doc) { panel(doc).appendChild(msg(doc, 47, 'out', 'on my way', { time: '2020-01-01T00:00:00Z' })); },
+    });
+    await sleep(120);
+    assert.strictEqual(s.logs.length, 0);
+    assert.strictEqual(s.statuses.length, 0);
+    const seenFresh = new Set([uuid(48)]);
+    const s2 = setup(undefined, undefined, {
+      state: { conversationFilter: '111-222' },
+      config: { settleMs: 40, ackMs: 40, batchDelayMs: 5 },
+      seenSet: seenFresh,
+      beforeStart(doc) { panel(doc).appendChild(msg(doc, 48, 'out', 'on my way', { time: new Date().toISOString() })); },
+    });
+    await sleep(120);
+    assert.strictEqual(s2.logs.length, 0);
+    assert.strictEqual(s2.statuses.length, 0);
+    s.det.stop();
+    s2.det.stop();
   });
 
   console.log(`${passed} passed, ${failed} failed (v1.4.6 UI engine)`);
@@ -24561,7 +25163,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=26a09c1f456ef4ad2cbf286cbeb9054d4881395bec0b8603ec61c15ff52e582b nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=f8e739bfe60a3e3bdd72935984ee5ce3e997bfa33071e01046fa487d5be6489e nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -24690,7 +25292,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.25 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.26 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -24720,7 +25322,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.25 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.26 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -24804,7 +25406,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.25 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.26 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -27134,7 +27736,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=698c45813184fd792173e632918b40b99bbac997a623cf0bb42b79a76749ac82 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=fd25f8e454a65573b65d1bb1c0f7ae929eed83349477b8184e99ce9c39083c35 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -27327,7 +27929,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.25')
+        self.assertEqual(m.rc.VERSION, '1.4.26')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

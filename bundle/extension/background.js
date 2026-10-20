@@ -786,6 +786,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.type === 'relay-hello') return false;   // frame instance announced itself; no coordination needed
+  if (msg.type === 'relay-arm-act' && sender.tab) {   // v1.4.26: MAIN-world React click helper
+    armPageAct(sender.tab.id, sender.frameId).catch(() => {});
+    return false;
+  }
   if (msg.type === 'relay-status') {
     getConfig(true).then(async () => {
       const { status = {}, events = [] } = await chrome.storage.local.get(['status', 'events']);
@@ -804,34 +808,137 @@ function boot() {
 }
 // v1.4.24: a service-worker restart does not reattach a content script that died when the extension
 // reloaded. Inject content.js into open x.com tabs (the page guard makes a second copy a no-op).
-// Reload a chat tab once only if that inject fails. Do not reload on the minute alarm after that.
+// v1.4.26: allFrames can throw on one subframe and take the whole tab with it, so the main frame
+// is tried next. A chat tab that still does not answer relay-ping is reloaded once and the owner
+// hears the unacked line. Do not reload a tab that answered. A blanket reload on update used to
+// race this inject and leave a background tab with no script.
 const reinjectedTabs = new Set();
+const warnedTabs = new Set();
+function isChatUrl(url) { return /^https:\/\/x\.com\/(?:i\/chat|messages)\//.test(String(url || '')); }
+async function pingChat(tabId) {
+  if (!chrome.tabs || !chrome.tabs.sendMessage) return true;
+  try {
+    const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: 'relay-ping' }), 1500);
+    return !!(res && res.pong);
+  } catch (e) { return false; }
+}
+async function injectFile(tabId) {
+  if (!chrome.scripting || !chrome.scripting.executeScript) return false;
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['content.js'] });
+    return true;
+  } catch (e) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content.js'] });
+      return true;
+    } catch (e2) { return false; }
+  }
+}
+async function warnUnwatched(tabId) {
+  if (warnedTabs.has(tabId)) return;
+  warnedTabs.add(tabId);
+  // A later death of this same tab is a new miss. The bubble dedupe key must not swallow it.
+  await handleUnacked({ id: 'tab' + tabId + 'x' + Date.now().toString(36) });
+}
 async function ensureContentScripts() {
   if (!chrome.tabs || !chrome.tabs.query) return;
   let tabs = [];
   try { tabs = await chrome.tabs.query({ url: ['https://x.com/*'] }); } catch (e) { return; }
   for (const t of tabs || []) {
     if (!t || typeof t.id !== 'number') continue;
-    let injected = false;
-    if (chrome.scripting && chrome.scripting.executeScript) {
-      try {
-        await chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: true }, files: ['content.js'] });
-        injected = true;
-      } catch (e) { injected = false; }
+    const url = String(t.url || t.pendingUrl || '');
+    const chat = isChatUrl(url);
+    if (t.discarded && chat) {
+      if (!reinjectedTabs.has(t.id)) {
+        reinjectedTabs.add(t.id);
+        try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
+      }
+      await warnUnwatched(t.id);
+      continue;
     }
-    if (injected || reinjectedTabs.has(t.id)) continue;
-    const url = String(t.url || '');
-    if (!/^https:\/\/x\.com\/(?:i\/chat|messages)\//.test(url)) continue;
+    const injected = await injectFile(t.id);
+    if (!chat) continue;
+    if (injected && await pingChat(t.id)) { warnedTabs.delete(t.id); continue; }
+    if (reinjectedTabs.has(t.id)) { await warnUnwatched(t.id); continue; }
     reinjectedTabs.add(t.id);
     try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
+    await warnUnwatched(t.id);
   }
 }
-// On install or update, reload any open X Chat tabs so the new content script is the one running.
+// Kept for a manual call. v1.4.26 does not run this on install/update: reloading a background
+// X Chat tab raced the inject and the new script never attached.
 async function reloadChatTabs() {
   try {
     const tabs = await chrome.tabs.query({ url: ['https://x.com/i/chat/*', 'https://x.com/messages/*'] });
     for (const t of tabs) { try { await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ } }
   } catch (e) { /* tabs API may be unavailable in tests */ }
+}
+function pageActInstaller() {
+  if (window.__imrActInstalled) return;
+  window.__imrActInstalled = true;
+  function handlers(el) {
+    var out = [], seen = [];
+    function take(obj) {
+      if (!obj || seen.indexOf(obj) >= 0) return;
+      seen.push(obj);
+      var keys = ['onClick', 'onPointerDown', 'onPointerUp', 'onMouseDown', 'onMouseUp', 'onMouseEnter', 'onMouseOver', 'onPointerEnter', 'onPointerOver'];
+      var hit = {}, any = false, i;
+      for (i = 0; i < keys.length; i++) if (typeof obj[keys[i]] === 'function') { hit[keys[i]] = obj[keys[i]]; any = true; }
+      if (any) out.push(hit);
+    }
+    try {
+      var ks = Object.keys(el), i, fiber = null;
+      for (i = 0; i < ks.length; i++) if (ks[i].indexOf('__reactProps$') === 0) take(el[ks[i]]);
+      for (i = 0; i < ks.length; i++) if (ks[i].indexOf('__reactFiber$') === 0 || ks[i].indexOf('__reactInternalInstance$') === 0) fiber = el[ks[i]];
+      for (i = 0; fiber && i < 8; i++, fiber = fiber.return) {
+        if (fiber.memoizedProps) take(fiber.memoizedProps);
+        if (fiber.pendingProps) take(fiber.pendingProps);
+      }
+    } catch (e) { /* not a React node */ }
+    return out;
+  }
+  function ev(el, type) {
+    var r = el.getBoundingClientRect();
+    var x = r.left + Math.max(r.width / 2, 1), y = r.top + Math.max(r.height / 2, 1);
+    return {
+      type: type, target: el, currentTarget: el, bubbles: true, cancelable: true,
+      button: 0, buttons: /down$/.test(type) ? 1 : 0, clientX: x, clientY: y, pageX: x, pageY: y,
+      detail: 1, isTrusted: true, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      nativeEvent: { isTrusted: true, target: el, clientX: x, clientY: y },
+      preventDefault: function () {}, stopPropagation: function () {}, persist: function () {}
+    };
+  }
+  document.addEventListener('imr-act', function (e) {
+    var el = e.target;
+    if (!el || !el.getAttribute) return;
+    var op = el.getAttribute('data-imr-op');
+    var chain = handlers(el), i, p, invoked = false;
+    if (op === 'hover') {
+      for (i = 0; i < chain.length; i++) {
+        p = chain[i];
+        try { if (p.onPointerOver) p.onPointerOver(ev(el, 'pointerover')); } catch (err) {}
+        try { if (p.onPointerEnter) p.onPointerEnter(ev(el, 'pointerenter')); } catch (err) {}
+        try { if (p.onMouseOver) p.onMouseOver(ev(el, 'mouseover')); } catch (err) {}
+        try { if (p.onMouseEnter) p.onMouseEnter(ev(el, 'mouseenter')); } catch (err) {}
+      }
+      return;
+    }
+    if (op !== 'press') return;
+    for (i = 0; i < chain.length; i++) {
+      p = chain[i];
+      if (p.onPointerDown) { invoked = true; try { p.onPointerDown(ev(el, 'pointerdown')); } catch (err) {} }
+      if (p.onMouseDown) { invoked = true; try { p.onMouseDown(ev(el, 'mousedown')); } catch (err) {} }
+      if (p.onPointerUp) { invoked = true; try { p.onPointerUp(ev(el, 'pointerup')); } catch (err) {} }
+      if (p.onMouseUp) { invoked = true; try { p.onMouseUp(ev(el, 'mouseup')); } catch (err) {} }
+      if (p.onClick) { invoked = true; try { p.onClick(ev(el, 'click')); } catch (err) {} }
+    }
+    if (invoked) try { el.setAttribute('data-imr-did', '1'); } catch (err) {}
+  }, true);
+}
+async function armPageAct(tabId, frameId) {
+  if (!chrome.scripting || !chrome.scripting.executeScript || typeof tabId !== 'number') return;
+  const target = typeof frameId === 'number' ? { tabId, frameIds: [frameId] } : { tabId, frameIds: [0] };
+  try { await chrome.scripting.executeScript({ target, world: 'MAIN', func: pageActInstaller }); } catch (e) { /* page closed */ }
 }
 async function onGuessExpiry() {
   const g = await getPendingGuess();
@@ -845,5 +952,9 @@ if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a 
   else if (a.name === 'relay-guess-expiry') onGuessExpiry().catch(() => {});
   else if (a.name === 'relay-test-expiry') onTestExpiry().catch(() => {});
 });
-chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
+if (chrome.tabs && chrome.tabs.onRemoved) chrome.tabs.onRemoved.addListener(id => { reinjectedTabs.delete(id); warnedTabs.delete(id); });
+chrome.runtime.onInstalled.addListener(() => { boot(); });
 chrome.runtime.onStartup.addListener(boot);
+// v1.4.26: reloading the extension starts this worker. onInstalled is not reliable then, and
+// onStartup does not fire. Tests omit getURL, so they do not inject on load.
+try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot(); } catch (e) { /* tests */ }

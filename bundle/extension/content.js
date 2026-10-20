@@ -753,15 +753,39 @@
       walkElements(root, add);
     }
 
+    const CATCHUP_MS = 45000;   // v1.4.26: a self-send this fresh is still caught after the script attaches
+    function freshStamp(iso) {
+      const parsed = Date.parse(iso || '');
+      return !!iso && !isNaN(parsed) && parsed <= now() + 5000 && now() - parsed <= CATCHUP_MS;
+    }
+    function holdsSelfSend(a) {
+      // Only a relay-chat self-send with a fresh clock. Startup paint and history stay history.
+      if (!a || !relayChatHere() || seen.has(a.uuid)) return false;
+      if (UI_TAG_RE.test(a.text || '')) return false;
+      const self = a.direction === 'outbound' || (a.direction === 'unknown' && (a.quotedText || a.youSent));
+      return !!(self && freshStamp(a.timeIso));
+    }
     function baseline(reason) {
       rootMemo = null;
       mode = detectMode(chatRoot().el || doc.body);
       const list = allEntries();
-      for (const e of list) { processed.add(e); seenKeys.add(conversationId() + '|id:uuid=' + uuidOf(e)); }
-      stats.baselined += list.length;
+      const keep = new Set();
+      const newest = list.length ? (newestAtTop() ? list[0] : list[list.length - 1]) : null;
+      if (newest) {
+        let a = null;
+        try { a = analyze(newest); } catch (err) { a = null; }
+        if (holdsSelfSend(a)) keep.add(newest);
+      }
+      for (const e of list) {
+        if (keep.has(e)) continue;
+        processed.add(e);
+        seenKeys.add(conversationId() + '|id:uuid=' + uuidOf(e));
+      }
+      stats.baselined += list.length - keep.size;
       try { scanReactions(list); } catch (e) { /* prompts get marked on their next change */ }
       settleUntil = now() + cfg.settleMs;
       recentEmits = [];
+      if (keep.size) { keep.forEach(e => pending.add(e)); schedule(0); }
       info('baseline (' + reason + '): context=' + contextPath() + ' conversation=' + (conversationId() || '(none)') + ' mode=' + mode + ' root=' + chatRoot().selector + ' existing=' + list.length);
     }
 
@@ -1047,6 +1071,14 @@
             win.setTimeout(() => { pending.add(e); schedule(0); }, cfg.emptyRetryDelayMs);
             continue;
           }
+        }
+        // v1.4.26: a fresh self-send during startup settle used to be marked done and dropped.
+        // Hold that one until settle ends and arm the watchdog. Older bubbles stay history.
+        if (baselineReason === 'settling' && holdsSelfSend(a)) {
+          if (a.direction === 'outbound') armUnacked();
+          const wait = Math.max(0, settleUntil - now());
+          win.setTimeout(() => { pending.add(e); schedule(0); }, Math.max(cfg.batchDelayMs, wait));
+          continue;
         }
         processed.add(e);
         if (seenKeys.has(a.key)) { stats.skippedDup++; continue; }
@@ -1370,7 +1402,7 @@
     };
     const SEARCH_WORD = { '\u2705': 'check', '\u{1F440}': 'eyes', '\u2753': 'question', '\u2764': 'heart',
                           '\u{1F44D}': 'thumbs up', '\u{1F44E}': 'thumbs down', '\u{1F602}': 'joy', '\u203C': 'exclamation', '\u26A0': 'warning' };
-    const SEARCH_SEL = 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"],input[placeholder*="moji"],input[aria-label*="moji"]';
+    const SEARCH_SEL = 'input[type="search"],input[placeholder*="earch"],input[aria-label*="earch"],input[placeholder*="moji"],input[aria-label*="moji"],[role="searchbox"],[role="combobox"]';
     const OPTION_SEL = 'button,[role="button"],[role="menuitem"],[role="menuitemradio"],[role="option"],[role="gridcell"],[role="img"],img[alt]';
     let uiChain = Promise.resolve();
     function uiSerial(fn) { const p = uiChain.then(fn, fn); uiChain = p.catch(() => {}); return p; }
@@ -1392,22 +1424,54 @@
       const all = allEntries();
       return all.find(e => uuidOf(e) === want) || null;
     }
+    function pointOf(el) {
+      const r = rect(el);
+      if (r && (r.width > 0 || r.height > 0)) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      return { x: 1, y: 1 };   // a zero-size box still has to look like a real pointer (CSS :hover will not)
+    }
     function fire(el, types) {
       const W = (el.ownerDocument && el.ownerDocument.defaultView) || win;
+      const p = pointOf(el);
       for (const t of types) {
+        const init = { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, screenX: p.x, screenY: p.y,
+                       button: 0, buttons: /down$/.test(t) ? 1 : 0, view: W };
         let ev;
         try {
-          ev = /^pointer/.test(t) && W.PointerEvent ? new W.PointerEvent(t, { bubbles: true, cancelable: true })
-             : new W.MouseEvent(t, { bubbles: true, cancelable: true });
-        } catch (e) { ev = new W.Event(t, { bubbles: true, cancelable: true }); }
+          ev = /^pointer/.test(t) && W.PointerEvent ? new W.PointerEvent(t, init) : new W.MouseEvent(t, init);
+        } catch (e) {
+          try { ev = new W.MouseEvent(t, init); } catch (e2) { ev = new W.Event(t, { bubbles: true, cancelable: true }); }
+        }
         try { el.dispatchEvent(ev); } catch (e) { /* detached */ }
       }
     }
+    // v1.4.26: X ignores some untrusted clicks. A MAIN-world helper (installed by the background)
+    // reads data-imr-op and calls the React handler. The attribute is the bridge; event detail is not.
+    function pageAct(el, op) {
+      if (!el || !el.setAttribute) return;
+      let id = String(el.getAttribute('data-imr-act') || '');
+      if (!/^[a-z0-9]+$/.test(id)) {
+        id = 'a' + Math.random().toString(36).slice(2, 10);
+        try { el.setAttribute('data-imr-act', id); } catch (e) { return; }
+      }
+      try { el.setAttribute('data-imr-op', op === 'press' ? 'press' : 'hover'); } catch (e) { return; }
+      const W = (el.ownerDocument && el.ownerDocument.defaultView) || win;
+      try { el.dispatchEvent(new W.CustomEvent('imr-act', { bubbles: true, composed: true })); } catch (e) { /* no helper */ }
+    }
     function hover(entry) {
       const b = bodyEl(entry) || entry;
+      const chain = [];
+      for (const el of [b, entry]) if (el && chain.indexOf(el) < 0) chain.push(el);
+      for (let a = parentOf(entry), i = 0; a && i < 4; a = parentOf(a), i++) chain.push(a);
+      for (const el of chain) pageAct(el, 'hover');
       for (const el of [entry, b]) fire(el, ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove']);
     }
-    function press(el) { fire(el, ['pointerdown', 'mousedown', 'pointerup', 'mouseup']); try { el.click(); } catch (e) { fire(el, ['click']); } }
+    function press(el) {
+      try { el.setAttribute('data-imr-did', ''); } catch (e) { /* detached */ }
+      pageAct(el, 'press');
+      if (el.getAttribute && el.getAttribute('data-imr-did') === '1') return;   // React handler already ran
+      fire(el, ['pointerdown', 'mousedown', 'pointerup', 'mouseup']);
+      try { el.click(); } catch (e) { fire(el, ['click']); }
+    }
     function escape() {
       const W = doc.defaultView || win;
       for (const t of [doc.activeElement, doc.body, doc]) {
@@ -1417,42 +1481,97 @@
     }
     function otherEntry(el, entry) { const e = closestEntry(el); return !!(e && e !== entry); }
     function inBody(el, entry) { const b = bodyEl(entry); const q = findQuote(entry); return !!((b && deepContains(b, el)) || (q && deepContains(q, el))); }
-    function findReactButton(entry) {
+    function isOpener(el) {
+      const lab = labelOf(el);
+      const tid = String((el.getAttribute && el.getAttribute('data-testid')) || '');
+      const text = ems(el.textContent || '');
+      const name = ems(lab || text);
+      if (EXPAND_BAD_RE.test(lab) || EXPAND_BAD_RE.test(tid)) return false;
+      // v1.4.26: the hover tray has no "React" button. "+" / "Add reaction" opens the picker.
+      if (name === '+' || text === '+' || EXPAND_RE.test(name)) return true;
+      if (DANGER_RE.test(lab) || DANGER_RE.test(tid)) return false;
+      return REACT_LABEL_RE.test(lab) || /react|emoji|reaction/i.test(tid);
+    }
+    function isComposerControl(el) {
+      return !!(el && el.closest && el.closest('[data-testid*="omposer"],[data-testid*="nbox"],nav'));
+    }
+    function boxOf(el) {
+      const own = rect(el);
+      if (own && (own.width || own.height)) return own;
+      const kids = el && el.children ? el.children : [];
+      for (let i = 0; i < kids.length && i < 6; i++) {
+        const r = rect(kids[i]);
+        if (r && (r.width || r.height)) return r;
+      }
+      return own || { left: 0, top: 0, width: 0, height: 0 };
+    }
+    function findReactButton(entry, appeared) {
       const scopes = [entry];
       for (let a = parentOf(entry), i = 0; a && i < 3; a = parentOf(a), i++) scopes.push(a);
       const seenEls = new Set();
+      const er = boxOf(bodyEl(entry) || entry);
+      const nearTray = el => {
+        if (deepContains(entry, el)) return true;
+        if (el.closest && el.closest('#layers,[role="dialog"],[role="menu"],[role="toolbar"]')) return true;
+        // v1.4.26: a background tab has no layout. A control that appeared on hover is the tray.
+        if (appeared && !appeared.has(el)) return true;
+        const br = rect(el);
+        if ((er.width || er.height) && (br.width || br.height)) {
+          const dx = (br.left + br.width / 2) - (er.left + er.width / 2);
+          const dy = (br.top + br.height / 2) - (er.top + er.height / 2);
+          if (Math.abs(dx) < 420 && Math.abs(dy) < 320) return true;
+        }
+        return false;
+      };
       const pick = list => list.find(el => {
         if (seenEls.has(el)) return false; seenEls.add(el);
-        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el)) return false;
-        const lab = labelOf(el), tid = String(el.getAttribute('data-testid') || '');
-        if (DANGER_RE.test(lab) || DANGER_RE.test(tid)) return false;
-        return REACT_LABEL_RE.test(lab) || /react|emoji/i.test(tid);
+        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el) || isComposerControl(el) || !nearTray(el)) return false;
+        return isOpener(el);
       });
       for (const s of scopes) { const b = pick(safeAll(s, 'button,[role="button"]')); if (b) return b; }
-      return pick(safeAll(doc, '[role="toolbar"] button,[role="toolbar"] [role="button"],[role="menu"] [role="menuitem"]'));
+      const portal = pick(safeAll(doc, '#layers button,#layers [role="button"],[role="dialog"] button,[role="dialog"] [role="button"],[role="toolbar"] button,[role="toolbar"] [role="button"],[role="menu"] [role="menuitem"],[role="menu"] button'));
+      if (portal) return portal;
+      return pick(safeAll(doc, 'button,[role="button"]'));
+    }
+    function emojiCp(emoji) {
+      const want = ems(emoji);
+      return Array.from(want).map(c => c.codePointAt(0).toString(16)).join('-');
+    }
+    function nameHit(lab, emoji) {
+      const want = ems(emoji);
+      const raw = ems(lab).toLowerCase();
+      if (!raw) return false;
+      if (raw === want) return true;
+      const names = EMOJI_NAMES[want] || [];
+      if (names.includes(raw)) return true;
+      const norm = raw.replace(/[:_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (names.includes(norm)) return true;
+      return names.some(nm => raw === nm || raw.startsWith(nm + ' ') || raw.startsWith(nm + ',') || raw.startsWith(nm + ':'));
+    }
+    function emojiArt(el, emoji) {
+      const cp = emojiCp(emoji);
+      if (!cp || !el.getAttribute) return false;
+      const art = String(el.getAttribute('src') || '') + ' ' + String(el.getAttribute('style') || '');
+      return new RegExp('/' + cp + '\\.(svg|png)', 'i').test(art);
     }
     function matchesEmoji(el, emoji) {
-      const want = ems(emoji), names = EMOJI_NAMES[want] || [];
-      const lab = ems(labelOf(el)).toLowerCase();
-      if (lab && (lab === want || names.includes(lab))) return true;
+      const want = ems(emoji);
+      if (nameHit(labelOf(el), emoji)) return true;
       if (el.tagName === 'IMG' && ems(el.getAttribute('alt')) === want) return true;
       const own = ems(el.textContent || '');
       if (own === want) return true;
-      const norm = lab.replace(/[:_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
-      if (norm && names.includes(norm)) return true;
       // v1.4.16: X draws picker emoji as twemoji (img src / background-image .../2705.svg)
-      const cp = Array.from(want).map(c => c.codePointAt(0).toString(16)).join('-');
-      const art = String((el.getAttribute('src') || '') + ' ' + (el.getAttribute('style') || ''));
-      if (cp && new RegExp('/' + cp + '\\.(svg|png)', 'i').test(art)) return true;
+      if (emojiArt(el, emoji)) return true;
+      const cp = emojiCp(emoji);
       const ims = el.querySelectorAll ? el.querySelectorAll('img') : [], im = ims.length === 1 ? ims[0] : null;
-      return !!(im && im !== el && (ems(im.getAttribute('alt')) === want || new RegExp('/' + cp + '\\.(svg|png)', 'i').test(String(im.getAttribute('src') || ''))) &&
+      return !!(im && im !== el && (ems(im.getAttribute('alt')) === want || (cp && new RegExp('/' + cp + '\\.(svg|png)', 'i').test(String(im.getAttribute('src') || '')))) &&
                 !ems(el.textContent || ''));
     }
     function findEmojiOption(entry, emoji, exclude) {
       const list = safeAll(doc, OPTION_SEL);
       for (const el of list) {
         if (exclude && exclude.has(el)) continue;
-        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el)) continue;
+        if (otherEntry(el, entry) || inBody(el, entry) || isExcluded(el) || isComposerControl(el)) continue;
         if (!matchesEmoji(el, emoji)) continue;
         const btn = el.tagName === 'IMG' || el.getAttribute('role') === 'img'
           ? (el.closest ? el.closest('button,[role="button"],[role="menuitem"],[role="option"],[role="gridcell"]') : null) || el : el;
@@ -1460,15 +1579,59 @@
       }
       return null;
     }
+    function inActionTray(el, entry) {
+      // The open tray (quick reactions + Reply/Delete, or the picker) is not a placed reaction.
+      // A page shell that also wraps the bubble (a grid, or #layers around the app) is not the tray.
+      if (el.closest) {
+        const portal = el.closest('#layers,[role="dialog"],[role="menu"],[role="listbox"],[role="grid"]');
+        if (portal && (!entry || !portal.contains(entry))) return true;
+      }
+      const box = el.parentElement;
+      if (!box || box === entry) return false;
+      if (!box.querySelectorAll) return false;
+      const nodes = box.querySelectorAll('button,[role="button"],[role="menuitem"]');
+      for (let i = 0; i < nodes.length && i < 24; i++) {
+        const lab = ems(labelOf(nodes[i]) || nodes[i].textContent || '');
+        if (/^(reply|delete|forward|copy|pin|report|info)$/i.test(lab)) return true;
+      }
+      return false;
+    }
+    function reactionRoots(entry) {
+      const roots = [entry];
+      for (const dir of ['previousElementSibling', 'nextElementSibling']) {
+        let s = entry[dir];
+        for (let i = 0; s && i < 2; i++, s = s[dir]) {
+          if (isUuidEntry(s)) break;
+          if (s.querySelector && s.querySelector('[data-testid^="message-"]')) break;
+          roots.push(s);
+        }
+      }
+      return roots;
+    }
     function reactionCount(entry, emoji) {
+      // v1.4.26: a placed ✅ is often only a twemoji img (empty alt) or an aria-label, not a text node.
       const want = ems(emoji);
       let n = 0;
-      walkElements(entry, el => {
-        if (inBody(el, entry)) return;
-        if (el.closest && el.closest('[role="menu"],[role="menuitem"],[role="dialog"],[role="toolbar"],[role="tooltip"],[role="listbox"],button[aria-haspopup]')) return;
-        for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType === 3 && ems(c.nodeValue).includes(want)) n++;
-        if (ems(el.getAttribute('alt')) === want) n++;
-      });
+      const seen = new Set();
+      const hit = el => ems(el.getAttribute && el.getAttribute('alt')) === want || nameHit(labelOf(el), emoji) || emojiArt(el, emoji);
+      for (const root of reactionRoots(entry)) {
+        walkElements(root, el => {
+          if (seen.has(el)) return;
+          seen.add(el);
+          if (root !== entry) {
+            const owner = closestEntry(el);
+            if (owner && owner !== entry) return;
+          }
+          if (inActionTray(el, entry)) return;
+          if (inBody(el, entry)) {
+            // Message text is not a reaction. A chip image drawn inside the bubble is.
+            if (el.tagName === 'IMG' && hit(el)) n++;
+            return;
+          }
+          for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType === 3 && ems(c.nodeValue).includes(want)) n++;
+          if (hit(el)) n++;
+        });
+      }
       return n;
     }
     function vocabSeen(entry) {
@@ -1515,37 +1678,46 @@
       if (want !== ems('\u2753')) clearPrompt(uuid);     // a sent / read / mirrored message is no longer a prompt
       const before = reactionCount(entry, want);
       if (before > 0) { if (opt && opt.prompt) watchPrompt(uuid, entry); return out(true, 'already'); }
-      hover(entry);
-      const btn = await waitFor(() => findReactButton(entry), 1200, 40);
-      if (!btn) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
-      const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));   // e.g. an existing pill
-      const preBtns = new Set(safeAll(doc, 'button,[role="button"]'));
-      // v1.4.16: the chat list's own "Search" box exists before the picker opens. v1.4.15 typed "check" into
-      // THAT box (the first search input on the page), never into the picker's, and the full picker only
-      // renders the emoji in view (no ✅ without a search), so every ✅ ended 'no-emoji' after 4 x 1.2 s.
-      // Only a search box that appeared with the picker is used.
-      const preInputs = new Set(safeAll(doc, 'input,textarea'));
-      press(btn);
-      let typed = null, expanded = false;
-      const step = () => {
-        const o = findEmojiOption(entry, want, stale);
-        if (o) return o;
-        const search = safeAll(doc, SEARCH_SEL).find(el => !preInputs.has(el) && el !== typed && !otherEntry(el, entry) &&
-          !/composer|inbox|conversation/i.test(String(el.getAttribute('data-testid') || '')) &&
-          !(el.closest && el.closest('[data-testid*="omposer"],[data-testid*="nbox"],nav')));
-        if (search) { typed = search; setNativeValue(search, SEARCH_WORD[want] || ''); return null; }
-        if (!expanded && !typed && realNow() - t0 > 350) {
-          // X's hover bar shows only a few quick reactions (no ✅): open the full picker with a NEW button
-          // (appeared with the bar) labelled for more emoji/reactions, never a message action.
-          const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
-            !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
-          if (more) { expanded = true; press(more); }
-        }
+      // v1.4.16: the chat list's own "Search" box exists before the picker opens. Only a search box
+      // that appears with the picker is used. Stale emoji nodes are pills already on the page.
+      const preInputs = new Set(safeAll(doc, 'input,textarea,[role="searchbox"],[role="combobox"]'));
+      const stale = new Set(safeAll(doc, OPTION_SEL).filter(el => matchesEmoji(el, want)));
+      const resting = new Set(safeAll(doc, 'button,[role="button"]'));
+      const grab = () => {
+        hover(entry);
+        const direct = findEmojiOption(entry, want, stale);
+        if (direct && !inBody(direct, entry)) return { kind: 'option', el: direct };
+        const opener = findReactButton(entry, resting);
+        if (opener) return { kind: 'open', el: opener };
         return null;
       };
-      const option = await waitFor(step, 3000, 40);
-      if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry), searched: !!typed, expanded }); }
-      press(option);
+      const first = await waitFor(grab, 1200, 40);
+      if (!first) return out(false, 'no-react-button', { vocab: vocabSeen(entry) });
+      let typed = null, expanded = false;
+      if (first.kind === 'option') press(first.el);
+      else {
+        // Snapshot buttons once the tray is open so its "+" is not pressed again as "more".
+        const preBtns = new Set(safeAll(doc, 'button,[role="button"]'));
+        press(first.el);
+        const step = () => {
+          const o = findEmojiOption(entry, want, stale);
+          if (o) return o;
+          const search = safeAll(doc, SEARCH_SEL).find(el => !preInputs.has(el) && el !== typed && !otherEntry(el, entry) &&
+            !/composer|inbox|conversation/i.test(String(el.getAttribute('data-testid') || '')) &&
+            !(el.closest && el.closest('[data-testid*="omposer"],[data-testid*="nbox"],nav')));
+          if (search) { typed = search; setNativeValue(search, SEARCH_WORD[want] || ''); return null; }
+          if (!expanded && !typed && realNow() - t0 > 350) {
+            // Quick row has no ✅: open the full picker with a NEW button, never Reply/Delete.
+            const more = safeAll(doc, 'button,[role="button"]').find(el => !preBtns.has(el) && !otherEntry(el, entry) && !inBody(el, entry) &&
+              !isExcluded(el) && EXPAND_RE.test(ems(labelOf(el) || el.textContent || '')) && !EXPAND_BAD_RE.test(labelOf(el)));
+            if (more) { expanded = true; press(more); }
+          }
+          return null;
+        };
+        const option = await waitFor(step, 3000, 40);
+        if (!option) { escape(); return out(false, 'no-emoji', { vocab: vocabSeen(entry), searched: !!typed, expanded }); }
+        press(option);
+      }
       const ok = await waitFor(() => reactionCount(entry, want) > before, 2500, 40);
       if (!ok) { escape(); return out(false, 'not-placed'); }
       if (opt && opt.prompt) watchPrompt(uuid, entry);
@@ -1729,6 +1901,7 @@
       hasEntries() { return allEntries().length > 0 || !!lastEls.any; },
       rebaseline: baseline,
       flushNow() { if (flushTimer) { win.clearTimeout(flushTimer); flushTimer = null; } flush(); },
+      nudge() { try { const root = chatRoot().el; if (root) pending.add(root); schedule(0); } catch (e) { /* doc gone */ } },
       debugSnapshot,
       pageStructure,               // v1.4.3: popup "Copy page structure" (text-free)
       structureOf,
@@ -1760,6 +1933,19 @@
   if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
   if (window.__imessageRelayLoaded) return;
   window.__imessageRelayLoaded = true;
+  // v1.4.26: a background tab must answer before storage resolves. A ping that waited on
+  // storage looked like a dead script, and the worker then reloaded the tab it had just injected.
+  try {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (!msg || msg.type !== 'relay-ping') return false;
+      try { sendResponse({ ok: true, pong: true }); } catch (e) { /* port closed */ }
+      return false;
+    });
+  } catch (e) { /* runtime gone */ }
+  try {
+    const arm = chrome.runtime.sendMessage({ type: 'relay-arm-act' });
+    if (arm && arm.catch) arm.catch(() => {});
+  } catch (e) { /* extension reloading */ }
 
   const isTop = window === window.top;
   const role = isTop ? 'top' : 'frame';
@@ -1899,6 +2085,10 @@
     setInterval(() => {
       if (mainDetector && !state.paused && mainDetector.hasEntries()) send({ type: 'relay-ui-tick' });
     }, 15000);
+    // v1.4.26: a background tab can delay mutation delivery. Rescan even while hidden.
+    setInterval(() => { if (mainDetector) mainDetector.nudge(); }, 2000);
+    try { document.addEventListener('visibilitychange', () => { if (mainDetector) mainDetector.nudge(); }); } catch (e) { /* tests */ }
+    send({ type: 'relay-arm-act' });   // MAIN-world click helper for the reaction tray
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -1923,7 +2113,7 @@
       return false;
     }
     if (msg && msg.type === 'relay-ui') {                 // v1.4.6: background asks for one UI action
-      if (!mainDetector || !mainDetector.hasEntries()) return false;
+      if (!mainDetector || !mainDetector.hasEntries()) { sendResponse({ ok: false, step: 'no-entry' }); return false; }
       if (state.paused) { sendResponse({ ok: false, step: 'paused' }); return false; }
       let p;
       if (msg.action === 'react') p = mainDetector.uiReact(String(msg.uuid || ''), String(msg.emoji || ''), { prompt: !!msg.prompt });
