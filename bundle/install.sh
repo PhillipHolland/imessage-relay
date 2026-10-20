@@ -14,8 +14,8 @@
 #   --open-settings   always open System Settings > Full Disk Access and reveal the watcher app
 #                     (default: only when the watcher cannot read chat.db yet)
 #   --no-open-settings never open them
-#   --rebuild-watcher-app  rebuild ~/Applications/iMessage Relay Watcher.app. Rebuilding (re-signing)
-#                     invalidates its Full Disk Access grant: drag it in again afterwards.
+#   --rebuild-watcher-app  rebuild the live watcher app. Refused unless this flag is set.
+#                     Rebuilding or re-signing invalidates Full Disk Access: drag it in again.
 #   --brief           guided setup (v1.3.8): print only a short checklist instead of the long
 #                     "Next steps" (the bot runs `relayctl setup` right after this)
 # An existing install is detected (bin/relay_common.py VERSION) and upgraded in place.
@@ -238,11 +238,32 @@ for name, sub, always in browsers:
     print('host:      %-13s %s' % (name, out))
 PY
 
+# The live app is the one in the account's real home, not $HOME. Tests set HOME to a temp
+# directory. Compiling another applet with this bundle id (osacompile registers it with Launch
+# Services) makes macOS drop Full Disk Access on the running watcher. A test bundle id is allowed
+# only for that temp app, never for the live one.
+LIVE_ID="com.imessage-relay.watcher"
+LIVE_HOME="$("$PY" -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
+LIVE_WAPP="$LIVE_HOME/Applications/iMessage Relay Watcher.app"
+if [[ -n "${IMESSAGE_RELAY_WATCHER_BUNDLE_ID:-}" ]]; then
+  if [[ ! "${IMESSAGE_RELAY_WATCHER_BUNDLE_ID}" =~ ^[A-Za-z][A-Za-z0-9.-]{1,200}$ ]]; then
+    echo "error: IMESSAGE_RELAY_WATCHER_BUNDLE_ID is not a bundle id" >&2
+    exit 5
+  fi
+  if [[ "${IMESSAGE_RELAY_WATCHER_BUNDLE_ID}" == "$LIVE_ID" ]]; then
+    echo "error: IMESSAGE_RELAY_WATCHER_BUNDLE_ID must not be the live watcher bundle id" >&2
+    exit 5
+  fi
+  WAPP_ID="${IMESSAGE_RELAY_WATCHER_BUNDLE_ID}"
+fi
+
 # 4) The watcher app. macOS ignores Full Disk Access granted to Apple's Python (Python.app or
 #    python3), so the watcher runs inside a tiny AppleScript applet that the owner drags into
 #    Full Disk Access. The applet runs bin/watch_launcher.py, which runs the current watcher, so
 #    updates never touch the app. Rebuilding/re-signing it would invalidate the grant: it is
 #    built only when missing, or with --rebuild-watcher-app.
+# IMESSAGE_RELAY_SKIP_WATCHER_APP=1 (tests only, with IMESSAGE_RELAY_ALLOW_NON_MAC=1) skips the
+# compile entirely. A real install must not set it.
 # An existing install may run a watcher app from another path (for example one built by hand):
 # if the current LaunchAgent starts an applet that exists, keep using exactly that app.
 EXISTING_APP="$("$PY" - "$PLIST" "$APP/fda_binary.txt" <<'PY'
@@ -286,9 +307,45 @@ PY
 if [[ -n "$EXISTING_APP" ]]; then WAPP="$EXISTING_APP"; fi
 WAPP_STATE="kept"
 as_str() { local v="${1//\\/\\\\}"; v="${v//\"/\\\"}"; printf '"%s"' "$v"; }   # AppleScript string literal
-if [[ -d "$WAPP" && $REBUILD_APP -eq 0 ]]; then
+if [[ "${IMESSAGE_RELAY_SKIP_WATCHER_APP:-}" == "1" && "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" == "1" ]]; then
+  WAPP_STATE="skipped"
+elif [[ -d "$WAPP" && $REBUILD_APP -eq 0 ]]; then
   WAPP_STATE="kept"
 elif command -v osacompile >/dev/null 2>&1 && command -v codesign >/dev/null 2>&1; then
+  # osacompile registers the applet with Launch Services. A second copy that uses the live
+  # bundle id makes tccd drop Full Disk Access on the running watcher. Never compile, sign,
+  # or delete that app unless --rebuild-watcher-app, and never compile the live bundle id
+  # at any other path.
+  guard="$("$PY" - "$WAPP" "$LIVE_WAPP" "$WAPP_ID" "$LIVE_ID" "$REBUILD_APP" <<'PY'
+import os, sys
+wapp, live, bid, live_id, rebuild = sys.argv[1:6]
+
+def norm(p):
+    return os.path.normpath(os.path.realpath(p))
+
+same = norm(wapp) == norm(live)
+if same and bid != live_id:
+    print('foreign-on-live')
+elif bid == live_id and not same:
+    print('twin')
+elif same and rebuild != '1' and os.path.isdir(live):
+    print('live')
+else:
+    print('ok')
+PY
+)"
+  if [[ "$guard" == "twin" ]]; then
+    echo "error: refusing to build or sign the live watcher bundle id outside the installed app. --rebuild-watcher-app only rebuilds that app." >&2
+    exit 5
+  fi
+  if [[ "$guard" == "live" ]]; then
+    echo "error: refusing to rebuild or re-sign the live watcher app without --rebuild-watcher-app" >&2
+    exit 5
+  fi
+  if [[ "$guard" == "foreign-on-live" ]]; then
+    echo "error: refusing to change the live watcher app's bundle id" >&2
+    exit 5
+  fi
   [[ -d "$WAPP" ]] && rm -rf "$WAPP"
   mkdir -p "$WAPP_DIR"
   osacompile -o "$WAPP" \
@@ -309,15 +366,19 @@ PY
 else
   WAPP_STATE="unavailable"
 fi
-if [[ -x "$WAPP/Contents/MacOS/applet" ]]; then
+if [[ "$WAPP_STATE" != "skipped" && -x "$WAPP/Contents/MacOS/applet" ]]; then
   echo "watcher app: $WAPP ($WAPP_STATE)"
   echo "$WAPP" > "$APP/fda_binary.txt"
   PROGRAM_ARGS=("$WAPP/Contents/MacOS/applet")
 else
-  if [[ "$(uname -s)" == "Darwin" ]]; then
+  if [[ "$(uname -s)" == "Darwin" && "$WAPP_STATE" != "skipped" ]]; then
     echo "error: could not build $WAPP (osacompile/codesign missing?)" >&2; exit 4
   fi
-  echo "watcher app: not built (no osacompile: not a Mac); the LaunchAgent runs Python directly"
+  if [[ "$WAPP_STATE" == "skipped" ]]; then
+    echo "watcher app: not built (skipped)"
+  else
+    echo "watcher app: not built (no osacompile: not a Mac); the LaunchAgent runs Python directly"
+  fi
   echo "(not built)" > "$APP/fda_binary.txt"
   PROGRAM_ARGS=("$PY" "$BIN/watch_launcher.py")
 fi
@@ -421,7 +482,7 @@ PY
 )
 fi
 echo "chat.db:   watcher access: $FDA"
-if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1 && [[ -d "$WAPP" ]]; then
+if [[ "$WAPP_STATE" != "skipped" && "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1 && [[ -d "$WAPP" ]]; then
   if [[ "$OPEN_SETTINGS" == "always" || ( "$OPEN_SETTINGS" == "auto" && "$FDA" != "ok" ) ]]; then
     open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" || true
     open -R "$WAPP" || true

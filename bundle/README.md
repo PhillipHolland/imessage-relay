@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.24
+# iMessage Relay v1.4.25
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,6 +22,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.25 (Mac helper and installer only; the extension stays 1.4.24, so no reload; `relay_post.py` does not change): the test suite no longer clears Full Disk Access. A test uninstall was resetting that grant for the live watcher, and a test install could compile a second app with the same bundle id. Tests use a test bundle id in a temp directory, or they skip the compile. `install.sh` will not rebuild or re-sign the live app unless `--rebuild-watcher-app` is set. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.24 (Chrome extension 1.4.24 + Mac helper; `relay_post.py` does not change): a native Reply in the relay chat gets a send or a visible reason. Open x.com tabs are injected again after the extension reloads, so Cmd+R is no longer required for the content script to attach. A quote that is only the message body (no "Name:" prefix) goes to the sender that body was relayed from, or to the one name in the 💬 header above that bubble. Two matches still ask who it is for. If the Mac does not answer a typed send within 10 seconds, the chat says to reload X Chat and retype. A ✅ on the sent message is the confirmation; `→ name ✓✓` is posted only when that reaction does not land. A delivery failure still warns. Reload the extension (it asks for a scripting permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.23 (Mac helper only; the extension stays 1.4.21, so no reload; `relay_post.py` does not change): an upgrade that already runs the watcher applet restarts it in place and does not unload the LaunchAgent. Unloading it could hang, and killing that unload made macOS delete the app's Full Disk Access grant, so the watcher came back unable to read chat.db. A denied open is retried a few times before the chat is told Full Disk Access is missing, and a later success says watching is back. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.22 (Mac helper + routine relay_post.py; the extension stays 1.4.21, so no reload): chat lines are shorter. The conversation header stays `💬 name · time`. Someone who is not a contact reads `⚠️ name · not a contact:`. Spam reads `🚫 name · spam:`. Promo and receipt have no icon. A confirmation is `→ name ✓` or `→ name ✓✓`. A held digest is `While you were away · N texts` and still uses • under each name. `/status` says `replies to name`. Health lines are one sentence; the spam count still starts with 🚫. `/test` is unchanged. **Update relay_post.py on the bot**, then re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -169,7 +170,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.24)
+## Limits (v1.4.25)
 - A native Reply that quotes only the message body goes to that sender when one person sent it, or when the 💬 header above that bubble names one person. Two matches ask who it is for.
 - A typed reply that gets no answer from the Mac within 10 seconds says to reload X Chat and retype. A ✅ on the sent message is the confirmation. `→ name ✓✓` is posted only when that reaction does not land. A failed delivery still warns.
 - A lone emoji used as a native Reply to a contact's text is sent to that contact. An emoji that does not quote a contact, within 10 minutes of a prompt, is still only a prompt answer.

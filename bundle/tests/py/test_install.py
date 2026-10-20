@@ -19,8 +19,14 @@ import unittest
 from helpers import ROOT, ChatDb
 
 APP_NAME = 'iMessage Relay Watcher.app'
+# Not the live id (com.imessage-relay.watcher). The extra suffix keeps a test applet from being
+# the same bundle as ~/Applications/iMessage Relay Watcher.app. uninstall.sh still removes it,
+# because that live id is a prefix of this string.
+TEST_BUNDLE_ID = 'com.imessage-relay.watcher.test'
+LIVE_BUNDLE_ID = 'com.imessage-relay.watcher'
 
 # Stand-ins for the macOS tools the installer uses to build the watcher app.
+# These never exec, and they never register anything with Launch Services.
 FAKE_OSACOMPILE = r"""#!/bin/bash
 out=""; script=""
 while [[ $# -gt 0 ]]; do
@@ -38,7 +44,27 @@ cat > "$out/Contents/Info.plist" <<'EOF'
 EOF
 """
 FAKE_CODESIGN = '#!/bin/bash\necho "codesign $*" >> "$HOME/tool.log"\n'
+# If a test forgets the fake tools, these run instead of /usr/bin/osacompile, codesign, tccutil,
+# or lsregister. Exit non-zero so install.sh cannot keep going into a real code-sign.
+BLOCK_TOOL = """#!/bin/bash
+echo "blocked:${0##*/}" >> "$HOME/tool.log"
+exit 99
+"""
 
+
+def shield_real_mac_tools(home, env):
+    """Put non-running stand-ins ahead of /usr/bin and force a test-only bundle id."""
+    bindir = os.path.join(home, 'bin')
+    os.makedirs(bindir, exist_ok=True)
+    for name in ('osacompile', 'codesign', 'tccutil', 'lsregister'):
+        path = os.path.join(bindir, name)
+        if not os.path.exists(path):
+            with open(path, 'w') as f:
+                f.write(BLOCK_TOOL)
+            os.chmod(path, 0o755)
+    env['PATH'] = bindir + os.pathsep + env.get('PATH', '/usr/bin:/bin')
+    env['IMESSAGE_RELAY_WATCHER_BUNDLE_ID'] = TEST_BUNDLE_ID
+    return env
 
 
 def rtext(p):
@@ -84,6 +110,7 @@ class Install(unittest.TestCase):
         os.chmod(os.path.join(bindir, 'launchctl'), 0o755)
         os.chmod(os.path.join(bindir, 'open'), 0o755)
         self.env['PATH'] = bindir + ':' + self.env['PATH']
+        shield_real_mac_tools(self.home, self.env)
 
     def fake_mac_tools(self):
         d = os.path.join(self.home, 'fakebin')
@@ -137,7 +164,8 @@ class Install(unittest.TestCase):
         # watcher app: applet wrapper running the stable launcher, own bundle id, no Dock icon, ad-hoc signed
         with open(os.path.join(self.wapp, 'Contents', 'Info.plist'), 'rb') as f:
             info = plistlib.load(f)
-        self.assertEqual((info['CFBundleIdentifier'], info['LSUIElement']), ('com.imessage-relay.watcher', True))
+        self.assertEqual((info['CFBundleIdentifier'], info['LSUIElement']), (TEST_BUNDLE_ID, True))
+        self.assertNotEqual(info['CFBundleIdentifier'], LIVE_BUNDLE_ID)
         script = rtext(os.path.join(self.wapp, 'Contents', 'Resources', 'script.txt'))
         self.assertIn('do shell script', script)
         self.assertIn('quoted form of "%s"' % os.path.join(self.app, 'bin', 'watch_launcher.py'), script)
@@ -201,6 +229,7 @@ class Install(unittest.TestCase):
         self.assertEqual(self.sh('uninstall.sh').returncode, 0)
         self.assertFalse(os.path.exists(self.app))
         self.assertEqual(self.sh('uninstall.sh').returncode, 0)
+        self.assertFalse(any('tccutil' in ln for ln in self.tool_log()))
 
     def test_uninstall_keep_logs_and_cleans_extras(self):
         # item 14: default removes the log; --keep-logs keeps it; extracted src + bundle are removed.
@@ -225,11 +254,15 @@ class Install(unittest.TestCase):
         self.assertEqual(u2.returncode, 0, u2.stderr)
         self.assertFalse(os.path.exists(logp), 'the log is removed by default')
         self.assertFalse(os.path.exists(self.app))
+        self.assertFalse(any('tccutil' in ln for ln in self.tool_log()))
 
     def test_launcher_runs_watcher_and_status_reads_the_log(self):
-        p = self.sh('install.sh', '--no-launchagent')       # no osacompile here: Python fallback
+        self.env['IMESSAGE_RELAY_SKIP_WATCHER_APP'] = '1'   # do not compile, even if osacompile exists
+        p = self.sh('install.sh', '--no-launchagent')
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('watcher app: not built', p.stdout)
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
         launcher = os.path.join(self.app, 'bin', 'watch_launcher.py')
         self.assertEqual(self.plist()['ProgramArguments'], [sys.executable, launcher])
         env = dict(self.env)
@@ -305,10 +338,13 @@ class Install(unittest.TestCase):
         self.assertIn('Left', u.stdout)
 
     def test_upgrade_migrates_last_inbound_to_roster(self):
+        self.env['IMESSAGE_RELAY_SKIP_WATCHER_APP'] = '1'
         os.makedirs(self.app)
         wj(os.path.join(self.app, 'last_inbound.json'), {'recent': [{'handle': '+1 555-555-0123', 'at': 5.0}]})
         p = self.sh('install.sh', '--no-launchagent')
         self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
         self.assertFalse(os.path.exists(os.path.join(self.app, 'last_inbound.json')))
         self.assertEqual(rj(os.path.join(self.app, 'roster.json'))['entries'],
                          [{'handle': '+15555550123', 'label': '', 'lastInboundAt': 5.0}])
@@ -322,11 +358,13 @@ class Install(unittest.TestCase):
         self.assertEqual(u.returncode, 0, u.stderr)
         self.assertTrue(os.path.exists(self.wapp))
         self.assertIn('Left', u.stdout)
+        self.assertFalse(any('tccutil' in ln for ln in self.tool_log()))
 
 
     def test_prunes_stale_bin_modules_but_keeps_everything_else(self):
         # v1.3.7: a module removed from the bundle is pruned from bin/ on the next install, while config,
         # roster, the fdatest shim, the applescript and live modules are untouched.
+        self.env['IMESSAGE_RELAY_SKIP_WATCHER_APP'] = '1'
         p = self.sh('install.sh', '--no-launchagent')
         self.assertEqual(p.returncode, 0, p.stderr)
         binp = os.path.join(self.app, 'bin')
@@ -353,6 +391,42 @@ class Install(unittest.TestCase):
         self.assertEqual((cfg['dryRun'], cfg['contacts'][0]['name']), (False, 'Keep Me'))
         self.assertEqual(rtext(roster), roster_before, 'roster untouched')
         self.assertIn("'bin', 'watch_launcher.py'", rtext(os.path.join(self.app, 'fdatest.py')))
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
+
+    def test_refuses_live_bundle_id_outside_the_live_app(self):
+        # Fake compilers only: if the guard fails open, the log shows osacompile and the real
+        # tool is still not on PATH. A temp-home build with the live bundle id is refused even
+        # with --rebuild-watcher-app, because that flag rebuilds only the installed app.
+        self.fake_mac_tools()
+        self.env.pop('IMESSAGE_RELAY_WATCHER_BUNDLE_ID', None)
+        p = self.sh('install.sh', '--no-launchagent')
+        self.assertEqual(p.returncode, 5, p.stderr + p.stdout)
+        self.assertIn('refusing to build or sign', p.stderr)
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
+        p2 = self.sh('install.sh', '--no-launchagent', '--rebuild-watcher-app')
+        self.assertEqual(p2.returncode, 5, p2.stderr + p2.stdout)
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
+
+    def test_blocker_runs_instead_of_real_osacompile(self):
+        p = self.sh('install.sh', '--no-launchagent')
+        self.assertNotEqual(p.returncode, 0)
+        self.assertTrue(any(ln == 'blocked:osacompile' for ln in self.tool_log()), self.tool_log())
+        self.assertFalse(any('tccutil' in ln or ln.startswith('blocked:codesign') for ln in self.tool_log()))
+        self.assertFalse(os.path.exists(os.path.join(self.wapp, 'Contents', 'MacOS', 'applet')))
+
+    def test_installer_source_refuses_to_touch_the_live_app(self):
+        src = rtext(os.path.join(ROOT, 'install.sh'))
+        un = rtext(os.path.join(ROOT, 'uninstall.sh'))
+        self.assertIn('WAPP_ID="com.imessage-relay.watcher"', src)
+        self.assertIn('refusing to rebuild or re-sign the live watcher app without --rebuild-watcher-app', src)
+        self.assertIn('refusing to build or sign the live watcher bundle id', src)
+        self.assertNotIn('lsregister', src)
+        self.assertNotIn('lsregister', un)
+        self.assertIn('[[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" != "1" ]] && command -v tccutil', un)
+        self.assertLess(un.index('tccutil reset'), un.index('client-secret'))
 
     def test_loaded_applet_restarts_with_kickstart_not_bootout(self):
         # v1.4.23: an upgrade whose LaunchAgent already runs the watcher applet must restart with
@@ -444,7 +518,8 @@ class InstallCopiesEveryModule(unittest.TestCase):
         # redirect the installer away from $HOME/.imessage-relay. Drop every IMESSAGE_RELAY_* first.
         env = {k: v for k, v in os.environ.items() if not k.startswith('IMESSAGE_RELAY_')}
         env.update(HOME=cls.home, IMESSAGE_RELAY_ALLOW_NON_MAC='1',
-                   IMESSAGE_RELAY_PYTHON=sys.executable)
+                   IMESSAGE_RELAY_PYTHON=sys.executable, IMESSAGE_RELAY_SKIP_WATCHER_APP='1')
+        shield_real_mac_tools(cls.home, env)
         cls.proc = subprocess.run(
             ['bash', _INSTALL, '--owner-handle', '+1 555 555 0123', '--no-launchagent'],
             env=env, cwd=_BUNDLE, capture_output=True, text=True, timeout=120)
@@ -452,6 +527,8 @@ class InstallCopiesEveryModule(unittest.TestCase):
 
     def test_installer_succeeded(self):
         self.assertEqual(self.proc.returncode, 0, self.proc.stderr[-2000:])
+        self.assertIn('watcher app: not built', self.proc.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'tool.log')))
 
     def test_every_mac_helper_py_landed_in_bin(self):
         installed = set(os.listdir(self.bin)) if os.path.isdir(self.bin) else set()
@@ -508,7 +585,9 @@ class InstallDetectsExistingAndBrief(unittest.TestCase):
 
     def run_install(self, home, *extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith('IMESSAGE_RELAY_')}
-        env.update(HOME=home, IMESSAGE_RELAY_ALLOW_NON_MAC='1', IMESSAGE_RELAY_PYTHON=sys.executable)
+        env.update(HOME=home, IMESSAGE_RELAY_ALLOW_NON_MAC='1', IMESSAGE_RELAY_PYTHON=sys.executable,
+                   IMESSAGE_RELAY_SKIP_WATCHER_APP='1')
+        shield_real_mac_tools(home, env)
         return subprocess.run(['bash', _INSTALL, '--no-launchagent'] + list(extra), env=env, cwd=_BUNDLE,
                               capture_output=True, text=True, timeout=120)
 
@@ -517,6 +596,8 @@ class InstallDetectsExistingAndBrief(unittest.TestCase):
         p1 = self.run_install(home)
         self.assertEqual(p1.returncode, 0, p1.stderr[-2000:])
         self.assertIn('previous:  none: fresh install', p1.stdout)
+        self.assertIn('watcher app: not built', p1.stdout)
+        self.assertFalse(os.path.exists(os.path.join(home, 'tool.log')))
         self.assertIn('"upgrade":false', p1.stdout)
         # pretend the installed copy is an older release: the next run must report an upgrade from it
         rcp = os.path.join(home, '.imessage-relay', 'bin', 'relay_common.py')

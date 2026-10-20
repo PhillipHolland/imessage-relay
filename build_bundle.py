@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.24, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.25, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=03dde958413cfb6ca5b63117122bc62351343605d7f1a193016c8aa80fd6f0e8 nl=1
-# iMessage Relay v1.4.24
+@@@@ FILE README.md mode=644 sha256=3289474e1b6a9f10a13cadb398001e451dcdb3f9273fab5bf55ed0cb10bed614 nl=1
+# iMessage Relay v1.4.25
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.25 (Mac helper and installer only; the extension stays 1.4.24, so no reload; `relay_post.py` does not change): the test suite no longer clears Full Disk Access. A test uninstall was resetting that grant for the live watcher, and a test install could compile a second app with the same bundle id. Tests use a test bundle id in a temp directory, or they skip the compile. `install.sh` will not rebuild or re-sign the live app unless `--rebuild-watcher-app` is set. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.24 (Chrome extension 1.4.24 + Mac helper; `relay_post.py` does not change): a native Reply in the relay chat gets a send or a visible reason. Open x.com tabs are injected again after the extension reloads, so Cmd+R is no longer required for the content script to attach. A quote that is only the message body (no "Name:" prefix) goes to the sender that body was relayed from, or to the one name in the 💬 header above that bubble. Two matches still ask who it is for. If the Mac does not answer a typed send within 10 seconds, the chat says to reload X Chat and retype. A ✅ on the sent message is the confirmation; `→ name ✓✓` is posted only when that reaction does not land. A delivery failure still warns. Reload the extension (it asks for a scripting permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.23 (Mac helper only; the extension stays 1.4.21, so no reload; `relay_post.py` does not change): an upgrade that already runs the watcher applet restarts it in place and does not unload the LaunchAgent. Unloading it could hang, and killing that unload made macOS delete the app's Full Disk Access grant, so the watcher came back unable to read chat.db. A denied open is retried a few times before the chat is told Full Disk Access is missing, and a later success says watching is back. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.22 (Mac helper + routine relay_post.py; the extension stays 1.4.21, so no reload): chat lines are shorter. The conversation header stays `💬 name · time`. Someone who is not a contact reads `⚠️ name · not a contact:`. Spam reads `🚫 name · spam:`. Promo and receipt have no icon. A confirmation is `→ name ✓` or `→ name ✓✓`. A held digest is `While you were away · N texts` and still uses • under each name. `/status` says `replies to name`. Health lines are one sentence; the spam count still starts with 🚫. `/test` is unchanged. **Update relay_post.py on the bot**, then re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -188,7 +189,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.24)
+## Limits (v1.4.25)
 - A native Reply that quotes only the message body goes to that sender when one person sent it, or when the 💬 header above that bubble names one person. Two matches ask who it is for.
 - A typed reply that gets no answer from the Mac within 10 seconds says to reload X Chat and retype. A ✅ on the sent message is the confirmation. `→ name ✓✓` is posted only when that reaction does not land. A failed delivery still warns.
 - A lone emoji used as a native Reply to a contact's text is sent to that contact. An emoji that does not quote a contact, within 10 minutes of a prompt, is still only a prompt answer.
@@ -318,7 +319,7 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing"|"recovered"|"chrome_away"|"chrome_back","detail","at"}` (no message body; the four health lines notify)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=7de8b6670cfdc6e5baebeafdd62cd8450a3e414914dae52648c1f7268f54772f nl=1
+@@@@ FILE install.sh mode=755 sha256=a30c80dfa25059dae7c3c15986843b3d155d0e95eb1f509a303fbc884b7c32f2 nl=1
 #!/bin/bash
 # iMessage Relay v1.4.8 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
@@ -335,8 +336,8 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 #   --open-settings   always open System Settings > Full Disk Access and reveal the watcher app
 #                     (default: only when the watcher cannot read chat.db yet)
 #   --no-open-settings never open them
-#   --rebuild-watcher-app  rebuild ~/Applications/iMessage Relay Watcher.app. Rebuilding (re-signing)
-#                     invalidates its Full Disk Access grant: drag it in again afterwards.
+#   --rebuild-watcher-app  rebuild the live watcher app. Refused unless this flag is set.
+#                     Rebuilding or re-signing invalidates Full Disk Access: drag it in again.
 #   --brief           guided setup (v1.3.8): print only a short checklist instead of the long
 #                     "Next steps" (the bot runs `relayctl setup` right after this)
 # An existing install is detected (bin/relay_common.py VERSION) and upgraded in place.
@@ -559,11 +560,32 @@ for name, sub, always in browsers:
     print('host:      %-13s %s' % (name, out))
 PY
 
+# The live app is the one in the account's real home, not $HOME. Tests set HOME to a temp
+# directory. Compiling another applet with this bundle id (osacompile registers it with Launch
+# Services) makes macOS drop Full Disk Access on the running watcher. A test bundle id is allowed
+# only for that temp app, never for the live one.
+LIVE_ID="com.imessage-relay.watcher"
+LIVE_HOME="$("$PY" -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
+LIVE_WAPP="$LIVE_HOME/Applications/iMessage Relay Watcher.app"
+if [[ -n "${IMESSAGE_RELAY_WATCHER_BUNDLE_ID:-}" ]]; then
+  if [[ ! "${IMESSAGE_RELAY_WATCHER_BUNDLE_ID}" =~ ^[A-Za-z][A-Za-z0-9.-]{1,200}$ ]]; then
+    echo "error: IMESSAGE_RELAY_WATCHER_BUNDLE_ID is not a bundle id" >&2
+    exit 5
+  fi
+  if [[ "${IMESSAGE_RELAY_WATCHER_BUNDLE_ID}" == "$LIVE_ID" ]]; then
+    echo "error: IMESSAGE_RELAY_WATCHER_BUNDLE_ID must not be the live watcher bundle id" >&2
+    exit 5
+  fi
+  WAPP_ID="${IMESSAGE_RELAY_WATCHER_BUNDLE_ID}"
+fi
+
 # 4) The watcher app. macOS ignores Full Disk Access granted to Apple's Python (Python.app or
 #    python3), so the watcher runs inside a tiny AppleScript applet that the owner drags into
 #    Full Disk Access. The applet runs bin/watch_launcher.py, which runs the current watcher, so
 #    updates never touch the app. Rebuilding/re-signing it would invalidate the grant: it is
 #    built only when missing, or with --rebuild-watcher-app.
+# IMESSAGE_RELAY_SKIP_WATCHER_APP=1 (tests only, with IMESSAGE_RELAY_ALLOW_NON_MAC=1) skips the
+# compile entirely. A real install must not set it.
 # An existing install may run a watcher app from another path (for example one built by hand):
 # if the current LaunchAgent starts an applet that exists, keep using exactly that app.
 EXISTING_APP="$("$PY" - "$PLIST" "$APP/fda_binary.txt" <<'PY'
@@ -607,9 +629,45 @@ PY
 if [[ -n "$EXISTING_APP" ]]; then WAPP="$EXISTING_APP"; fi
 WAPP_STATE="kept"
 as_str() { local v="${1//\\/\\\\}"; v="${v//\"/\\\"}"; printf '"%s"' "$v"; }   # AppleScript string literal
-if [[ -d "$WAPP" && $REBUILD_APP -eq 0 ]]; then
+if [[ "${IMESSAGE_RELAY_SKIP_WATCHER_APP:-}" == "1" && "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" == "1" ]]; then
+  WAPP_STATE="skipped"
+elif [[ -d "$WAPP" && $REBUILD_APP -eq 0 ]]; then
   WAPP_STATE="kept"
 elif command -v osacompile >/dev/null 2>&1 && command -v codesign >/dev/null 2>&1; then
+  # osacompile registers the applet with Launch Services. A second copy that uses the live
+  # bundle id makes tccd drop Full Disk Access on the running watcher. Never compile, sign,
+  # or delete that app unless --rebuild-watcher-app, and never compile the live bundle id
+  # at any other path.
+  guard="$("$PY" - "$WAPP" "$LIVE_WAPP" "$WAPP_ID" "$LIVE_ID" "$REBUILD_APP" <<'PY'
+import os, sys
+wapp, live, bid, live_id, rebuild = sys.argv[1:6]
+
+def norm(p):
+    return os.path.normpath(os.path.realpath(p))
+
+same = norm(wapp) == norm(live)
+if same and bid != live_id:
+    print('foreign-on-live')
+elif bid == live_id and not same:
+    print('twin')
+elif same and rebuild != '1' and os.path.isdir(live):
+    print('live')
+else:
+    print('ok')
+PY
+)"
+  if [[ "$guard" == "twin" ]]; then
+    echo "error: refusing to build or sign the live watcher bundle id outside the installed app. --rebuild-watcher-app only rebuilds that app." >&2
+    exit 5
+  fi
+  if [[ "$guard" == "live" ]]; then
+    echo "error: refusing to rebuild or re-sign the live watcher app without --rebuild-watcher-app" >&2
+    exit 5
+  fi
+  if [[ "$guard" == "foreign-on-live" ]]; then
+    echo "error: refusing to change the live watcher app's bundle id" >&2
+    exit 5
+  fi
   [[ -d "$WAPP" ]] && rm -rf "$WAPP"
   mkdir -p "$WAPP_DIR"
   osacompile -o "$WAPP" \
@@ -630,15 +688,19 @@ PY
 else
   WAPP_STATE="unavailable"
 fi
-if [[ -x "$WAPP/Contents/MacOS/applet" ]]; then
+if [[ "$WAPP_STATE" != "skipped" && -x "$WAPP/Contents/MacOS/applet" ]]; then
   echo "watcher app: $WAPP ($WAPP_STATE)"
   echo "$WAPP" > "$APP/fda_binary.txt"
   PROGRAM_ARGS=("$WAPP/Contents/MacOS/applet")
 else
-  if [[ "$(uname -s)" == "Darwin" ]]; then
+  if [[ "$(uname -s)" == "Darwin" && "$WAPP_STATE" != "skipped" ]]; then
     echo "error: could not build $WAPP (osacompile/codesign missing?)" >&2; exit 4
   fi
-  echo "watcher app: not built (no osacompile: not a Mac); the LaunchAgent runs Python directly"
+  if [[ "$WAPP_STATE" == "skipped" ]]; then
+    echo "watcher app: not built (skipped)"
+  else
+    echo "watcher app: not built (no osacompile: not a Mac); the LaunchAgent runs Python directly"
+  fi
   echo "(not built)" > "$APP/fda_binary.txt"
   PROGRAM_ARGS=("$PY" "$BIN/watch_launcher.py")
 fi
@@ -742,7 +804,7 @@ PY
 )
 fi
 echo "chat.db:   watcher access: $FDA"
-if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1 && [[ -d "$WAPP" ]]; then
+if [[ "$WAPP_STATE" != "skipped" && "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1 && [[ -d "$WAPP" ]]; then
   if [[ "$OPEN_SETTINGS" == "always" || ( "$OPEN_SETTINGS" == "auto" && "$FDA" != "ok" ) ]]; then
     open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" || true
     open -R "$WAPP" || true
@@ -842,12 +904,13 @@ fi
 [[ $fail -eq 0 ]] && echo "ALL TESTS PASSED" || echo "SOME TESTS FAILED"
 exit $fail
 @@@@ END
-@@@@ FILE uninstall.sh mode=755 sha256=33640d32489f398053af985e0e82d48c16ea7c4577665d9cf43b980ab0c5e5fc nl=1
+@@@@ FILE uninstall.sh mode=755 sha256=96e0de5f0c29e184b6191901544ab6b08f6bafb254b0412cf8abff6fa05e1c0a nl=1
 #!/bin/bash
 # iMessage Relay uninstaller. Idempotent. Usage: ./uninstall.sh [--keep-config] [--keep-logs]
 # Removes the LaunchAgent, the watcher app (~/Applications/iMessage Relay Watcher.app), the native
 # host manifests (all browsers), ~/.imessage-relay (config, roster), the extracted source and
-# bundle files, and the log. It also resets the watcher's Full Disk Access grant with tccutil.
+# bundle files, and the log. It also resets the watcher's Full Disk Access grant with tccutil
+# (not when IMESSAGE_RELAY_ALLOW_NON_MAC=1: that is a test, and the reset would clear the live grant).
 #   --keep-config  keeps config.json (this also keeps the stored webhook key).
 #   --keep-logs    keeps ~/Library/Logs/imessage-relay.log (counts only; never message bodies).
 set -euo pipefail
@@ -855,6 +918,9 @@ APP="${IMESSAGE_RELAY_HOME:-$HOME/.imessage-relay}"
 LOG="${IMESSAGE_RELAY_LOG:-$HOME/Library/Logs/imessage-relay.log}"
 LABEL="com.imessage-relay.watch"
 WATCHER_BUNDLE_ID="com.imessage-relay.watcher"
+# Real account home, not $HOME. Tests point HOME at a temp directory; that must not delete
+# the installed app or reset its Full Disk Access grant.
+LIVE_WAPP="$(/usr/bin/python3 -c 'import os, pwd; print(os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "Applications", "iMessage Relay Watcher.app"))' 2>/dev/null || true)"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 SUPPORT="$HOME/Library/Application Support"
 KEEP_CONFIG=0; KEEP_LOGS=0
@@ -884,6 +950,13 @@ fi
 rm -f "$PLIST"
 for WAPP in "$HOME/Applications/iMessage Relay Watcher.app" "$AGENT_APP"; do
   [[ -n "$WAPP" && -d "$WAPP" ]] || continue
+  if [[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" == "1" && -n "$LIVE_WAPP" ]]; then
+    same="$(/usr/bin/python3 -c 'import os,sys; a,b=sys.argv[1:3]; n=lambda p: os.path.normpath(os.path.realpath(p)); print("yes" if a and b and n(a)==n(b) else "no")' "$WAPP" "$LIVE_WAPP" 2>/dev/null || echo no)"
+    if [[ "$same" == "yes" ]]; then
+      echo "Left $WAPP in place (a test run does not remove the live watcher app)"
+      continue
+    fi
+  fi
   if grep -qa "$WATCHER_BUNDLE_ID" "$WAPP/Contents/Info.plist" 2>/dev/null; then
     rm -rf "$WAPP"; echo "Removed $WAPP"
   else
@@ -897,7 +970,10 @@ for sub in "Google/Chrome" "Google/Chrome Beta" "Google/Chrome Canary" "Chromium
   [[ -d "$nmh" ]] && rmdir "$nmh" 2>/dev/null || true
 done
 # Reset the watcher's Full Disk Access grant so a fresh install re-prompts cleanly.
-if command -v tccutil >/dev/null 2>&1; then
+# Tests set IMESSAGE_RELAY_ALLOW_NON_MAC=1. tccutil talks to the real TCC database for this
+# bundle id even when HOME is a temp directory, which drops the live grant under the running
+# watcher. A test must not call it.
+if [[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" != "1" ]] && command -v tccutil >/dev/null 2>&1; then
   tccutil reset SystemPolicyAllFiles "$WATCHER_BUNDLE_ID" >/dev/null 2>&1 || true
 fi
 # v1.4.18: direct-post secrets live in the login keychain, not in config.json. Delete them even
@@ -7786,7 +7862,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=2183e3d3f6d41323837d1e2ef2aefe4e2d08af4d8b537976d7d847185122d8d0 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=7234dd5bc21049dd98adb8d8983d2beeac64a29adb875eb5ecb537ee3ea606d3 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7812,8 +7888,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.24'
-EXTENSION_VERSION = '1.4.24'   # v1.4.24 changes the extension (reload it; open chats are reinjected)
+VERSION = '1.4.25'
+EXTENSION_VERSION = '1.4.24'   # v1.4.25 does not change the extension (still 1.4.24)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -19248,7 +19324,7 @@ class EndToEnd(Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_install.py mode=644 sha256=8a7f676d223dd29a7d6462d0c14d3502a57df2825828463034efb3580b6de596 nl=1
+@@@@ FILE tests/py/test_install.py mode=644 sha256=23d2d424a402a2809a645e0b6236fb73783a4f96c72d4b76dd02f9cfdacb4773 nl=1
 """install.sh / uninstall.sh in a fake HOME (Linux-runnable: launchctl is skipped when absent).
 
 Two suites:
@@ -19270,8 +19346,14 @@ import unittest
 from helpers import ROOT, ChatDb
 
 APP_NAME = 'iMessage Relay Watcher.app'
+# Not the live id (com.imessage-relay.watcher). The extra suffix keeps a test applet from being
+# the same bundle as ~/Applications/iMessage Relay Watcher.app. uninstall.sh still removes it,
+# because that live id is a prefix of this string.
+TEST_BUNDLE_ID = 'com.imessage-relay.watcher.test'
+LIVE_BUNDLE_ID = 'com.imessage-relay.watcher'
 
 # Stand-ins for the macOS tools the installer uses to build the watcher app.
+# These never exec, and they never register anything with Launch Services.
 FAKE_OSACOMPILE = r"""#!/bin/bash
 out=""; script=""
 while [[ $# -gt 0 ]]; do
@@ -19289,7 +19371,27 @@ cat > "$out/Contents/Info.plist" <<'EOF'
 EOF
 """
 FAKE_CODESIGN = '#!/bin/bash\necho "codesign $*" >> "$HOME/tool.log"\n'
+# If a test forgets the fake tools, these run instead of /usr/bin/osacompile, codesign, tccutil,
+# or lsregister. Exit non-zero so install.sh cannot keep going into a real code-sign.
+BLOCK_TOOL = """#!/bin/bash
+echo "blocked:${0##*/}" >> "$HOME/tool.log"
+exit 99
+"""
 
+
+def shield_real_mac_tools(home, env):
+    """Put non-running stand-ins ahead of /usr/bin and force a test-only bundle id."""
+    bindir = os.path.join(home, 'bin')
+    os.makedirs(bindir, exist_ok=True)
+    for name in ('osacompile', 'codesign', 'tccutil', 'lsregister'):
+        path = os.path.join(bindir, name)
+        if not os.path.exists(path):
+            with open(path, 'w') as f:
+                f.write(BLOCK_TOOL)
+            os.chmod(path, 0o755)
+    env['PATH'] = bindir + os.pathsep + env.get('PATH', '/usr/bin:/bin')
+    env['IMESSAGE_RELAY_WATCHER_BUNDLE_ID'] = TEST_BUNDLE_ID
+    return env
 
 
 def rtext(p):
@@ -19335,6 +19437,7 @@ class Install(unittest.TestCase):
         os.chmod(os.path.join(bindir, 'launchctl'), 0o755)
         os.chmod(os.path.join(bindir, 'open'), 0o755)
         self.env['PATH'] = bindir + ':' + self.env['PATH']
+        shield_real_mac_tools(self.home, self.env)
 
     def fake_mac_tools(self):
         d = os.path.join(self.home, 'fakebin')
@@ -19388,7 +19491,8 @@ class Install(unittest.TestCase):
         # watcher app: applet wrapper running the stable launcher, own bundle id, no Dock icon, ad-hoc signed
         with open(os.path.join(self.wapp, 'Contents', 'Info.plist'), 'rb') as f:
             info = plistlib.load(f)
-        self.assertEqual((info['CFBundleIdentifier'], info['LSUIElement']), ('com.imessage-relay.watcher', True))
+        self.assertEqual((info['CFBundleIdentifier'], info['LSUIElement']), (TEST_BUNDLE_ID, True))
+        self.assertNotEqual(info['CFBundleIdentifier'], LIVE_BUNDLE_ID)
         script = rtext(os.path.join(self.wapp, 'Contents', 'Resources', 'script.txt'))
         self.assertIn('do shell script', script)
         self.assertIn('quoted form of "%s"' % os.path.join(self.app, 'bin', 'watch_launcher.py'), script)
@@ -19452,6 +19556,7 @@ class Install(unittest.TestCase):
         self.assertEqual(self.sh('uninstall.sh').returncode, 0)
         self.assertFalse(os.path.exists(self.app))
         self.assertEqual(self.sh('uninstall.sh').returncode, 0)
+        self.assertFalse(any('tccutil' in ln for ln in self.tool_log()))
 
     def test_uninstall_keep_logs_and_cleans_extras(self):
         # item 14: default removes the log; --keep-logs keeps it; extracted src + bundle are removed.
@@ -19476,11 +19581,15 @@ class Install(unittest.TestCase):
         self.assertEqual(u2.returncode, 0, u2.stderr)
         self.assertFalse(os.path.exists(logp), 'the log is removed by default')
         self.assertFalse(os.path.exists(self.app))
+        self.assertFalse(any('tccutil' in ln for ln in self.tool_log()))
 
     def test_launcher_runs_watcher_and_status_reads_the_log(self):
-        p = self.sh('install.sh', '--no-launchagent')       # no osacompile here: Python fallback
+        self.env['IMESSAGE_RELAY_SKIP_WATCHER_APP'] = '1'   # do not compile, even if osacompile exists
+        p = self.sh('install.sh', '--no-launchagent')
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('watcher app: not built', p.stdout)
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
         launcher = os.path.join(self.app, 'bin', 'watch_launcher.py')
         self.assertEqual(self.plist()['ProgramArguments'], [sys.executable, launcher])
         env = dict(self.env)
@@ -19556,10 +19665,13 @@ class Install(unittest.TestCase):
         self.assertIn('Left', u.stdout)
 
     def test_upgrade_migrates_last_inbound_to_roster(self):
+        self.env['IMESSAGE_RELAY_SKIP_WATCHER_APP'] = '1'
         os.makedirs(self.app)
         wj(os.path.join(self.app, 'last_inbound.json'), {'recent': [{'handle': '+1 555-555-0123', 'at': 5.0}]})
         p = self.sh('install.sh', '--no-launchagent')
         self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
         self.assertFalse(os.path.exists(os.path.join(self.app, 'last_inbound.json')))
         self.assertEqual(rj(os.path.join(self.app, 'roster.json'))['entries'],
                          [{'handle': '+15555550123', 'label': '', 'lastInboundAt': 5.0}])
@@ -19573,11 +19685,13 @@ class Install(unittest.TestCase):
         self.assertEqual(u.returncode, 0, u.stderr)
         self.assertTrue(os.path.exists(self.wapp))
         self.assertIn('Left', u.stdout)
+        self.assertFalse(any('tccutil' in ln for ln in self.tool_log()))
 
 
     def test_prunes_stale_bin_modules_but_keeps_everything_else(self):
         # v1.3.7: a module removed from the bundle is pruned from bin/ on the next install, while config,
         # roster, the fdatest shim, the applescript and live modules are untouched.
+        self.env['IMESSAGE_RELAY_SKIP_WATCHER_APP'] = '1'
         p = self.sh('install.sh', '--no-launchagent')
         self.assertEqual(p.returncode, 0, p.stderr)
         binp = os.path.join(self.app, 'bin')
@@ -19604,6 +19718,42 @@ class Install(unittest.TestCase):
         self.assertEqual((cfg['dryRun'], cfg['contacts'][0]['name']), (False, 'Keep Me'))
         self.assertEqual(rtext(roster), roster_before, 'roster untouched')
         self.assertIn("'bin', 'watch_launcher.py'", rtext(os.path.join(self.app, 'fdatest.py')))
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
+
+    def test_refuses_live_bundle_id_outside_the_live_app(self):
+        # Fake compilers only: if the guard fails open, the log shows osacompile and the real
+        # tool is still not on PATH. A temp-home build with the live bundle id is refused even
+        # with --rebuild-watcher-app, because that flag rebuilds only the installed app.
+        self.fake_mac_tools()
+        self.env.pop('IMESSAGE_RELAY_WATCHER_BUNDLE_ID', None)
+        p = self.sh('install.sh', '--no-launchagent')
+        self.assertEqual(p.returncode, 5, p.stderr + p.stdout)
+        self.assertIn('refusing to build or sign', p.stderr)
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
+        p2 = self.sh('install.sh', '--no-launchagent', '--rebuild-watcher-app')
+        self.assertEqual(p2.returncode, 5, p2.stderr + p2.stdout)
+        self.assertEqual(self.tool_log(), [])
+        self.assertFalse(os.path.exists(self.wapp))
+
+    def test_blocker_runs_instead_of_real_osacompile(self):
+        p = self.sh('install.sh', '--no-launchagent')
+        self.assertNotEqual(p.returncode, 0)
+        self.assertTrue(any(ln == 'blocked:osacompile' for ln in self.tool_log()), self.tool_log())
+        self.assertFalse(any('tccutil' in ln or ln.startswith('blocked:codesign') for ln in self.tool_log()))
+        self.assertFalse(os.path.exists(os.path.join(self.wapp, 'Contents', 'MacOS', 'applet')))
+
+    def test_installer_source_refuses_to_touch_the_live_app(self):
+        src = rtext(os.path.join(ROOT, 'install.sh'))
+        un = rtext(os.path.join(ROOT, 'uninstall.sh'))
+        self.assertIn('WAPP_ID="com.imessage-relay.watcher"', src)
+        self.assertIn('refusing to rebuild or re-sign the live watcher app without --rebuild-watcher-app', src)
+        self.assertIn('refusing to build or sign the live watcher bundle id', src)
+        self.assertNotIn('lsregister', src)
+        self.assertNotIn('lsregister', un)
+        self.assertIn('[[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" != "1" ]] && command -v tccutil', un)
+        self.assertLess(un.index('tccutil reset'), un.index('client-secret'))
 
     def test_loaded_applet_restarts_with_kickstart_not_bootout(self):
         # v1.4.23: an upgrade whose LaunchAgent already runs the watcher applet must restart with
@@ -19695,7 +19845,8 @@ class InstallCopiesEveryModule(unittest.TestCase):
         # redirect the installer away from $HOME/.imessage-relay. Drop every IMESSAGE_RELAY_* first.
         env = {k: v for k, v in os.environ.items() if not k.startswith('IMESSAGE_RELAY_')}
         env.update(HOME=cls.home, IMESSAGE_RELAY_ALLOW_NON_MAC='1',
-                   IMESSAGE_RELAY_PYTHON=sys.executable)
+                   IMESSAGE_RELAY_PYTHON=sys.executable, IMESSAGE_RELAY_SKIP_WATCHER_APP='1')
+        shield_real_mac_tools(cls.home, env)
         cls.proc = subprocess.run(
             ['bash', _INSTALL, '--owner-handle', '+1 555 555 0123', '--no-launchagent'],
             env=env, cwd=_BUNDLE, capture_output=True, text=True, timeout=120)
@@ -19703,6 +19854,8 @@ class InstallCopiesEveryModule(unittest.TestCase):
 
     def test_installer_succeeded(self):
         self.assertEqual(self.proc.returncode, 0, self.proc.stderr[-2000:])
+        self.assertIn('watcher app: not built', self.proc.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'tool.log')))
 
     def test_every_mac_helper_py_landed_in_bin(self):
         installed = set(os.listdir(self.bin)) if os.path.isdir(self.bin) else set()
@@ -19759,7 +19912,9 @@ class InstallDetectsExistingAndBrief(unittest.TestCase):
 
     def run_install(self, home, *extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith('IMESSAGE_RELAY_')}
-        env.update(HOME=home, IMESSAGE_RELAY_ALLOW_NON_MAC='1', IMESSAGE_RELAY_PYTHON=sys.executable)
+        env.update(HOME=home, IMESSAGE_RELAY_ALLOW_NON_MAC='1', IMESSAGE_RELAY_PYTHON=sys.executable,
+                   IMESSAGE_RELAY_SKIP_WATCHER_APP='1')
+        shield_real_mac_tools(home, env)
         return subprocess.run(['bash', _INSTALL, '--no-launchagent'] + list(extra), env=env, cwd=_BUNDLE,
                               capture_output=True, text=True, timeout=120)
 
@@ -19768,6 +19923,8 @@ class InstallDetectsExistingAndBrief(unittest.TestCase):
         p1 = self.run_install(home)
         self.assertEqual(p1.returncode, 0, p1.stderr[-2000:])
         self.assertIn('previous:  none: fresh install', p1.stdout)
+        self.assertIn('watcher app: not built', p1.stdout)
+        self.assertFalse(os.path.exists(os.path.join(home, 'tool.log')))
         self.assertIn('"upgrade":false', p1.stdout)
         # pretend the installed copy is an older release: the next run must report an upgrade from it
         rcp = os.path.join(home, '.imessage-relay', 'bin', 'relay_common.py')
@@ -24404,7 +24561,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=10cce5439e428fba309c4b23c42935140e27dc2ca0acbb7aed7c12c972f16f27 nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=26a09c1f456ef4ad2cbf286cbeb9054d4881395bec0b8603ec61c15ff52e582b nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -24533,7 +24690,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.24 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.25 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -24563,7 +24720,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.24 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.25 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -24647,7 +24804,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.24 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.25 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -26977,7 +27134,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=8e63cfe42f8f3c76c027ef583636fea8f6f436acf24764d85954a1986cd5cfc6 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=698c45813184fd792173e632918b40b99bbac997a623cf0bb42b79a76749ac82 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -27170,7 +27327,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.24')
+        self.assertEqual(m.rc.VERSION, '1.4.25')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

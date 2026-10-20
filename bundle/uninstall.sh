@@ -2,7 +2,8 @@
 # iMessage Relay uninstaller. Idempotent. Usage: ./uninstall.sh [--keep-config] [--keep-logs]
 # Removes the LaunchAgent, the watcher app (~/Applications/iMessage Relay Watcher.app), the native
 # host manifests (all browsers), ~/.imessage-relay (config, roster), the extracted source and
-# bundle files, and the log. It also resets the watcher's Full Disk Access grant with tccutil.
+# bundle files, and the log. It also resets the watcher's Full Disk Access grant with tccutil
+# (not when IMESSAGE_RELAY_ALLOW_NON_MAC=1: that is a test, and the reset would clear the live grant).
 #   --keep-config  keeps config.json (this also keeps the stored webhook key).
 #   --keep-logs    keeps ~/Library/Logs/imessage-relay.log (counts only; never message bodies).
 set -euo pipefail
@@ -10,6 +11,9 @@ APP="${IMESSAGE_RELAY_HOME:-$HOME/.imessage-relay}"
 LOG="${IMESSAGE_RELAY_LOG:-$HOME/Library/Logs/imessage-relay.log}"
 LABEL="com.imessage-relay.watch"
 WATCHER_BUNDLE_ID="com.imessage-relay.watcher"
+# Real account home, not $HOME. Tests point HOME at a temp directory; that must not delete
+# the installed app or reset its Full Disk Access grant.
+LIVE_WAPP="$(/usr/bin/python3 -c 'import os, pwd; print(os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "Applications", "iMessage Relay Watcher.app"))' 2>/dev/null || true)"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 SUPPORT="$HOME/Library/Application Support"
 KEEP_CONFIG=0; KEEP_LOGS=0
@@ -39,6 +43,13 @@ fi
 rm -f "$PLIST"
 for WAPP in "$HOME/Applications/iMessage Relay Watcher.app" "$AGENT_APP"; do
   [[ -n "$WAPP" && -d "$WAPP" ]] || continue
+  if [[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" == "1" && -n "$LIVE_WAPP" ]]; then
+    same="$(/usr/bin/python3 -c 'import os,sys; a,b=sys.argv[1:3]; n=lambda p: os.path.normpath(os.path.realpath(p)); print("yes" if a and b and n(a)==n(b) else "no")' "$WAPP" "$LIVE_WAPP" 2>/dev/null || echo no)"
+    if [[ "$same" == "yes" ]]; then
+      echo "Left $WAPP in place (a test run does not remove the live watcher app)"
+      continue
+    fi
+  fi
   if grep -qa "$WATCHER_BUNDLE_ID" "$WAPP/Contents/Info.plist" 2>/dev/null; then
     rm -rf "$WAPP"; echo "Removed $WAPP"
   else
@@ -52,7 +63,10 @@ for sub in "Google/Chrome" "Google/Chrome Beta" "Google/Chrome Canary" "Chromium
   [[ -d "$nmh" ]] && rmdir "$nmh" 2>/dev/null || true
 done
 # Reset the watcher's Full Disk Access grant so a fresh install re-prompts cleanly.
-if command -v tccutil >/dev/null 2>&1; then
+# Tests set IMESSAGE_RELAY_ALLOW_NON_MAC=1. tccutil talks to the real TCC database for this
+# bundle id even when HOME is a temp directory, which drops the live grant under the running
+# watcher. A test must not call it.
+if [[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" != "1" ]] && command -v tccutil >/dev/null 2>&1; then
   tccutil reset SystemPolicyAllFiles "$WATCHER_BUNDLE_ID" >/dev/null 2>&1 || true
 fi
 # v1.4.18: direct-post secrets live in the login keychain, not in config.json. Delete them even
