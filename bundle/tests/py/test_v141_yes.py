@@ -24,7 +24,7 @@ class BareWords(Base):
     def test_plain_yes_confirms_block(self):
         self.send('/block Test Contact')
         self.assertNotIn('+15555550123', self.cfg().get('mute', []))
-        self.assertIn('reply yes within 2 min', self.posts[-1][0].get('detail', ''))
+        self.assertIn('Reply yes within 2 min', self.posts[-1][0].get('detail', ''))
         self.clock.t += 10
         r = self.send('Yes')
         self.assertEqual(self.osa(), [], 'the word is never texted')

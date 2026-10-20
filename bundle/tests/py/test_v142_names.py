@@ -79,7 +79,8 @@ class Names(Base):
         r = self.send('jordn rivera: hi')
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual(self.osa(), [])
-        self.assertIn('Did you mean Jordan Rivera?', self.confirms()[-1]['detail'])
+        self.assertEqual(self.confirms()[-1]['detail'],
+                         'Text Jordan Rivera (+1 \u2022\u2022\u20220188)? Reply yes within 2 min.')
         self.clock.t += 10
         r = self.send('jordn rivera: hi', confirmed=True, handle='+15555550188')
         self.assertEqual(self.sent(), [('hi', '+15555550188')])

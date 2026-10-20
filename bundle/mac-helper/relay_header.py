@@ -14,12 +14,10 @@ import time
 import relay_common as rc
 
 GROUP_SEP = ' \u00b7 '
-UNKNOWN_TAG = '\u26a0\ufe0f Unknown \u00b7 '
-TAGS = {'spam': '\U0001f6ab Spam \u00b7 ', 'promotion': '\U0001f3f7\ufe0f Promo \u00b7 ',
-        'transaction': '\U0001f9fe '}
 HEADER_ICON = '\U0001f4ac'
 HEADER_GAP_DEFAULT_MIN = 30
-_PHOTO_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
+# A photo-only body is never a quiet name. Still matches an older "📷 Photo" line.
+_PHOTO_PLACEHOLDER = re.compile(r'(?:\U0001f4f7 )?(?:Photo|\d+ photos)$')
 
 
 def state_path():
@@ -28,6 +26,23 @@ def state_path():
 
 def _label(p, default='someone'):
     return str(p.get('label') or p.get('contactName') or default).strip() or default
+
+
+def _filing(m, gl):
+    """v1.4.22: the name leads. Safety tags keep a leading icon; filing tags are a quiet word.
+    Groups are never tagged. Keep in lockstep with routine/relay_post.py. Returns (prefix, suffix)."""
+    if gl:
+        return '', ''
+    tag = str(m.get('tag') or '')
+    if tag == 'spam':
+        return '\U0001f6ab ', ' \u00b7 spam'
+    if tag == 'promotion':
+        return '', ' \u00b7 promo'
+    if tag == 'transaction':
+        return '', ' \u00b7 receipt'
+    if m.get('unknown'):
+        return '\u26a0\ufe0f ', ' \u00b7 not a contact'
+    return '', ''
 
 
 def _hdr_meta(m):
@@ -77,18 +92,15 @@ def add_headers(lines, gap_min, state, now=None):
 
 
 def _message_line(m):
-    """`<label>: <text>` or `<group.label> · <label>: <text>`. A tapback joins with a space, not a colon."""
+    """`<label>: <text>` or `<group.label> · <label>: <text>`. A tapback joins with a space, not a colon.
+    A safety tag leads (`⚠️ <label> · not a contact:`, `🚫 <label> · spam:`). Promo and receipt are quiet words."""
     label = _label(m)
     text = str(m.get('text') or '')
     g = m.get('group') or {}
     gl = str(g.get('label') or g.get('name') or '').strip()
-    head = (gl + GROUP_SEP if gl else '') + label
-    tag = TAGS.get(str(m.get('tag') or '')) if not gl else None
-    if tag:
-        head = tag + head
-    elif m.get('unknown') and not gl:
-        head = UNKNOWN_TAG + head
-    if (m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown')
+    prefix, suffix = _filing(m, gl)
+    head = prefix + (gl + GROUP_SEP if gl else '') + label + suffix
+    if (m.get('quiet') and not gl and not m.get('reaction') and not prefix and not suffix
             and not m.get('media') and not _PHOTO_PLACEHOLDER.fullmatch(text.strip())):
         return text
     sep = ' ' if m.get('reaction') else ': '

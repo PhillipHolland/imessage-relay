@@ -126,7 +126,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.21 \u00b7 watcher 4s ago \u00b7 Messages open \u00b7 last text 2m \u00b7 bare reply \u2192 Alex')
+            'On \u00b7 v1.4.22 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -134,15 +134,16 @@ class Host(unittest.TestCase):
     def test_status_variants_and_paused(self):
         self.write_status(chatDb='unavailable')
         self.send('/status')
-        self.assertIn('watcher blind', self.posts[-1]['detail'])
+        self.assertIn('watcher can\u2019t read', self.posts[-1]['detail'])
         self.assertNotIn('4s ago', self.posts[-1]['detail'])
         os.unlink(os.path.join(self.rc.APP_DIR, 'status.json'))
         self.send('/status')
         d = self.posts[-1]['detail']
-        self.assertIn('watcher unseen', d)
+        self.assertIn('watcher not seen', d)
         self.assertIn('Messages not checked', d)
         self.assertIn('no texts yet', d)
-        self.assertIn('bare reply \u2192 name someone', d)
+        self.assertIn('name someone', d)
+        self.assertNotIn('bare reply', d)
         self.write_status(messagesRunning=False, lastForwardAt=self.rc.iso_utc(self.t - 10))
         self.send('/status')
         self.assertIn('Messages closed', self.posts[-1]['detail'])
@@ -151,11 +152,11 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(SAM, self.t - 40, label='Sam')
         self.write_status()
         self.send('/status')
-        self.assertIn('bare reply \u2192 unclear', self.posts[-1]['detail'])
+        self.assertIn('replies unclear', self.posts[-1]['detail'])
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.21 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.22 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -163,9 +164,9 @@ class Host(unittest.TestCase):
         self.assertEqual(self.h.HELP_TEXT, (
             '/status \u00b7 /who\n'
             '/pause \u00b7 /resume \u00b7 /snooze\n'
-            '/block Name \u00b7 /unblock Name\n'
-            '/add Name\n'
-            'Sam: your message\n'
+            '/block name \u00b7 /unblock name\n'
+            '/add name\n'
+            'name: your message\n'
             '/test \u00b7 /help'))
         n = len(self.osa())
         self.send('/help')
@@ -189,7 +190,7 @@ class Host(unittest.TestCase):
         self.assertFalse(cfg['paused'])
         self.assertEqual(cfg['snoozeUntil'], want)
         self.assertEqual(self.rc.format_clock(want), '7:00 AM')
-        detail = 'Snoozing until 7:00 AM. Tonight\u2019s texts arrive as one digest. /resume'
+        detail = 'Snoozing until 7:00 AM. Texts arrive as one digest. /resume'
         self.assertEqual(self.posts[-1]['detail'], detail)
         self.assertNotIn('text', self.posts[-1])
         log = read_log()
@@ -197,7 +198,7 @@ class Host(unittest.TestCase):
         self.assertIn('"seconds":', log)
         self.assertNotIn('Tonight', log)
         self.send('/resume')
-        self.assertEqual(self.posts[-1]['detail'], 'Resumed. Relaying is back on.')
+        self.assertEqual(self.posts[-1]['detail'], 'Relaying is back on.')
         self.assertNotIn('snoozeUntil', self.rc.read_raw_config())
         self.assertFalse(self.rc.load_config()['paused'])
 
@@ -206,7 +207,7 @@ class Host(unittest.TestCase):
         stored = self.rc.load_config()['snoozeUntil']
         self.assertEqual(stored, int(round(self.t + 8 * 3600)))
         self.assertTrue(self.posts[-1]['detail'].startswith('Snoozing until %s.' % self.rc.format_clock(stored)))
-        self.assertIn('Tonight\u2019s texts arrive as one digest. /resume', self.posts[-1]['detail'])
+        self.assertIn('Texts arrive as one digest. /resume', self.posts[-1]['detail'])
         before = json.dumps(self.rc.read_raw_config(), sort_keys=True)
         r = self.send('/snooze tomorrow')
         self.assertFalse(r.get('ok'))
@@ -239,7 +240,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.21 \u00b7 watcher 4s ago \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.22 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -492,27 +493,27 @@ class Routine(unittest.TestCase):
         self.assertEqual(m.watch.CHROME_BACK, 'Chrome is open again. Replies will send.')
         self.assertEqual(
             m.watch.CHROME_AWAY,
-            'Chrome hasn\u2019t checked in, so replies from your phone won\u2019t send. Open Chrome on the Mac.')
+            'Chrome hasn\u2019t checked in, so replies won\u2019t send. Open Chrome on the Mac.')
         self.assertEqual(self.line({'type': 'status', 'status': 'fda_missing', 'id': 'a'}), rp.FDA_LINE)
         custom = '\u26a0\ufe0f Texts stopped: custom.'
         self.assertEqual(self.line({'type': 'status', 'status': 'fda_missing', 'detail': custom, 'id': 'b'}), custom)
         self.assertEqual(self.line({'type': 'status', 'status': 'fda_missing', 'detail': 'plain prose', 'id': 'c'}),
                          rp.FDA_LINE)
         self.assertEqual(self.line({'type': 'status', 'status': 'recovered', 'detail': 'Watching Messages again.', 'id': 'd'}),
-                         '\u2139\ufe0f Watching Messages again.')
+                         'Watching Messages again.')
         away = self.line({'type': 'status', 'status': 'chrome_away', 'detail': m.watch.CHROME_AWAY, 'id': 'e'})
-        self.assertEqual(away, '\u2139\ufe0f ' + m.watch.CHROME_AWAY)
+        self.assertEqual(away, m.watch.CHROME_AWAY)
         self.assertNotIn('\u26a0\ufe0f\u26a0', away)
         self.assertEqual(self.line({'type': 'status', 'status': 'chrome_back', 'detail': m.watch.CHROME_BACK, 'id': 'f'}),
-                         '\u2139\ufe0f Chrome is open again. Replies will send.')
+                         'Chrome is open again. Replies will send.')
         self.assertEqual(self.line({'type': 'status', 'detail': m.host.HELP_TEXT, 'id': 'h'}),
-                         '\u2139\ufe0f ' + m.host.HELP_TEXT)
+                         m.host.HELP_TEXT)
         self.assertGreaterEqual(m.host.HELP_TEXT.count('\n'), 5)
         self.assertEqual(self.line({'type': 'status', 'status': 'paused', 'detail': m.host.PAUSE_DETAIL, 'id': 'p'}),
-                         '\u2139\ufe0f ' + m.host.PAUSE_DETAIL)
-        snooze = 'Snoozing until 7:00 AM. Tonight\u2019s texts arrive as one digest. /resume'
+                         m.host.PAUSE_DETAIL)
+        snooze = 'Snoozing until 7:00 AM. Texts arrive as one digest. /resume'
         self.assertEqual(self.line({'type': 'status', 'status': 'snoozing', 'detail': snooze, 'id': 's'}),
-                         '\u2139\ufe0f ' + snooze)
+                         snooze)
         fda = self._post({'type': 'status', 'status': 'fda_missing', 'id': 'fda1'})
         self.assertTrue(fda['sends'][0]['should_notify'])
         self.assertIsNone(fda['sends'][0]['reply_to'])

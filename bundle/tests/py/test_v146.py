@@ -549,11 +549,11 @@ class QuietNames(test_watch.Base):
 class RecapAndFormatting(unittest.TestCase):
     def test_tags(self):
         line = lambda **m: rp.format_event(dict({'type': 'message', 'label': 'Alex', 'text': 'hi'}, **m))['lines'][0]['text']
-        self.assertEqual(line(tag='promotion'), '\U0001f3f7\ufe0f Promo \u00b7 Alex: hi')
-        self.assertEqual(line(tag='transaction'), '\U0001f9fe Alex: hi')
-        self.assertEqual(line(tag='spam'), '\U0001f6ab Spam \u00b7 Alex: hi')
+        self.assertEqual(line(tag='promotion'), 'Alex \u00b7 promo: hi')
+        self.assertEqual(line(tag='transaction'), 'Alex \u00b7 receipt: hi')
+        self.assertEqual(line(tag='spam'), '\U0001f6ab Alex \u00b7 spam: hi')
         self.assertEqual(line(quiet=True), 'hi')
-        self.assertEqual(line(quiet=True, unknown=True), '\u26a0\ufe0f Unknown \u00b7 Alex: hi', 'tagged lines always name')
+        self.assertEqual(line(quiet=True, unknown=True), '\u26a0\ufe0f Alex \u00b7 not a contact: hi', 'tagged lines always name')
         self.assertEqual(line(quiet=True, group={'label': 'Family'}), 'Family \u00b7 Alex: hi', 'groups unchanged')
 
     def test_spam_summary_status(self):

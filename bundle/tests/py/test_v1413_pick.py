@@ -64,7 +64,7 @@ class PendingPick(Base):
         refused = [p for p, _ in self.posts[n:] if p.get('type') == 'refused']
         self.assertEqual(len(refused), 1)
         self.assertEqual(refused[0].get('reason'), 'not_sent')
-        self.assertIn('nothing I could send', refused[0].get('detail') or '')
+        self.assertEqual(refused[0].get('detail') or '', 'There was nothing to send.')
         self.assertNotIn('text', refused[0])
         n = len(self.posts)
         self.m.host.handle_request(

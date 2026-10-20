@@ -184,31 +184,32 @@ def missing_images(rows):
     return any(r['kind'] == 'image' and (not r['path'] or not os.path.isfile(r['path'])) for r in rows)
 
 
-_KIND_WORD = {'image': ('\U0001f4f7', 'Photo'), 'video': ('\U0001f3a5', 'Video'), 'audio': ('\U0001f3a4', 'Voice message'),
-              'file': ('\U0001f4ce', 'File')}
+_KIND_WORD = {'image': 'Photo', 'video': 'Video', 'audio': 'Voice message', 'file': 'File'}
 
 
 def notice(row, reason):
     """One body-free line for an attachment that is not relayed. Type and size only, never a name.
-    reason: 'too_large' | 'unsupported' | 'unavailable' | 'off' | 'digest'."""
-    emoji, word = _KIND_WORD.get(row.get('kind'), _KIND_WORD['file'])
-    if row.get('sticker'):
-        emoji, word = '\U0001f9f7', 'Sticker'
-    elif row.get('kind') == 'file' and row.get('ext'):
+    reason: 'too_large' | 'unsupported' | 'unavailable' | 'off' | 'digest'. No decorative icon."""
+    word = 'Sticker' if row.get('sticker') else _KIND_WORD.get(row.get('kind'), _KIND_WORD['file'])
+    if not row.get('sticker') and row.get('kind') == 'file' and row.get('ext'):
         word = row['ext'].upper() + ' file'
     size = fmt_size(row.get('size'))
-    head = '%s %s%s' % (emoji, word, (', ' + size) if size and row.get('kind') != 'audio' else '')
-    tail = {'too_large': ' (too large to relay)', 'unsupported': ' (not relayed \u2014 open Messages to see it)',
-            'unavailable': ' (couldn\u2019t be relayed)', 'off': '', 'digest': ''}.get(reason, '')
-    return head + tail
+    sized = word + ((', ' + size) if size and row.get('kind') != 'audio' else '')
+    if reason == 'too_large':
+        return sized + '. Too large. Open Messages.'
+    if reason == 'unsupported':
+        return word + '. Open Messages to see it.'
+    if reason == 'unavailable':
+        return word + '. Couldn\u2019t relay it.'
+    return word
 
 
 def placeholder(rows):
-    """Summary placeholder (no names) for photos that end up not uploaded: '📷 Photo' / '📷 3 photos'."""
+    """Summary placeholder (no names) for photos that end up not uploaded: 'Photo' / '3 photos'."""
     n = len([r for r in rows if r.get('kind') == 'image'])
     if n <= 0:
         return ''
-    return '\U0001f4f7 Photo' if n == 1 else '\U0001f4f7 %d photos' % n
+    return 'Photo' if n == 1 else '%d photos' % n
 
 
 def _convert(src, dst, runner, max_side):

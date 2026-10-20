@@ -145,8 +145,7 @@ class NewContact(Base):
         r = self.send('Sam: hi')
         self.assertTrue(r.get('needsTarget'), r)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
-        self.assertIn('Sam Lee', ev['detail'])
-        self.assertIn('Sam Ortiz', ev['detail'])
+        self.assertIn('More than one Sam. Start with Sam Lee: your message', ev['detail'])
         self.assertNotIn('555', ev['detail'])
         self.assertEqual(self.osa(), [])
 
@@ -162,7 +161,7 @@ class NewContact(Base):
         r = self.send('Jordan Rivera: hi')
         self.assertTrue(r.get('needsTarget'), r)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
-        self.assertIn('couldn\u2019t check', ev['detail'])
+        self.assertIn('Contacts didn\u2019t answer', ev['detail'])
 
     def test_owner_never_offered(self):
         make_ab(self.tmp, [('Owen', 'Owner', [('mobile', '555-555-0199')])])

@@ -124,27 +124,27 @@ class RoutineDrop(unittest.TestCase):
         r = rp.process(self.dreq(), runner=self.runner)
         self.assertEqual(r['action'], 'send')
         self.assertEqual(self.gets, [], 'the get key never goes to another host')
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
 
     def test_gone_tampered_or_wrong_size(self):
         for wire in (None, self.wire[:-1] + bytes([self.wire[-1] ^ 1]), self.wire + b'x'):
             self.wire, self.gets, self.calls = wire, [], []
             r = rp.process(self.dreq(payload=dict(self.req()['payload'], id='g-%d' % len(str(wire)))), runner=self.runner)
             self.assertEqual(r['action'], 'send')
-            self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+            self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
             self.assertEqual(self.files(), [])
 
     def test_a_prompt_without_the_photo_steps_never_gets_upload(self):
         r = rp.process(self.dreq(media_upload=False), runner=self.runner)
         self.assertEqual(r['action'], 'send', 'the text always posts')
         self.assertEqual(self.gets, [], 'nothing fetched: the drop copy just expires')
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
         self.assertEqual(self.files(), [])
 
     def test_no_drop_configured(self):
         r = rp.process(self.req(drop_config=os.path.join(self.d, 'missing.json')), runner=self.runner)
         self.assertEqual(r['action'], 'send')
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
 
     def test_drop_json_beside_the_dedupe_file(self):
         p = os.path.join(self.d, 'drop.json')
@@ -190,7 +190,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.21')
+        self.assertEqual(m.rc.VERSION, '1.4.22')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

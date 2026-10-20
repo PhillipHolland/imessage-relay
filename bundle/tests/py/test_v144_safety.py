@@ -29,7 +29,7 @@ class Safety(Base):
         self.assertTrue(r.get('needsTarget'), r)
         self.assertEqual(self.osa(), [])
         self.assertFalse(self.kinds('needs_confirm'))
-        self.assertEqual(self.kinds('needs_target')[-1]['detail'], 'Who\'s this for? Start with a name, like "Alex: \u2026"')
+        self.assertEqual(self.kinds('needs_target')[-1]['detail'], 'Who is this for? name: your message, or text name \u2026')
 
     def test_unresolved_quote_still_offers_a_contacts_name(self):
         self.last(RORY, 'Rory')

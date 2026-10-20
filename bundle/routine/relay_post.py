@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.20 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.22 — routine helper (runs on the BOT's computer, not the Mac).
+v1.4.22 changes chat wording only. Routing, notify kinds, and dedupe are unchanged.
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -126,9 +127,23 @@ def _label(p, default='someone'):
     return str(p.get('label') or p.get('contactName') or default).strip() or default
 
 
-UNKNOWN_TAG = '\u26a0\ufe0f Unknown \u00b7 '
-TAGS = {'spam': '\U0001f6ab Spam \u00b7 ', 'promotion': '\U0001f3f7\ufe0f Promo \u00b7 ',   # v1.4.6 follow-messages
-        'transaction': '\U0001f9fe '}
+def _filing(m, gl):
+    """v1.4.22: the name leads. Safety tags keep a leading icon; filing tags are a quiet word.
+    Groups are never tagged. Keep in lockstep with mac-helper/relay_header.py. Returns (prefix, suffix)."""
+    if gl:
+        return '', ''
+    tag = str(m.get('tag') or '')
+    if tag == 'spam':
+        return '\U0001f6ab ', ' \u00b7 spam'
+    if tag == 'promotion':
+        return '', ' \u00b7 promo'
+    if tag == 'transaction':
+        return '', ' \u00b7 receipt'
+    if m.get('unknown'):
+        return '\u26a0\ufe0f ', ' \u00b7 not a contact'
+    return '', ''
+
+
 BATCH_MAX = 20
 DIGEST_MAX_CHARS = 9000
 KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
@@ -141,8 +156,8 @@ HEADER_ICON = '\U0001f4ac'
 HEADER_STATE = 'header_state.json'
 # v1.4.20: shown when a status payload has no ⚠️ detail of its own (an older Mac). Keep in lockstep
 # with mac-helper/imessage_relay_watch.py FDA_DETAIL.
-FDA_LINE = ('\u26a0\ufe0f Texts stopped: Full Disk Access for iMessage Relay Watcher is off. '
-            'Drag that app into System Settings \u2192 Privacy & Security \u2192 Full Disk Access.')
+FDA_LINE = ('\u26a0\ufe0f Texts stopped. Turn on Full Disk Access for iMessage Relay Watcher. '
+            'System Settings \u2192 Privacy & Security \u2192 Full Disk Access.')
 _HEALTH_KINDS = ('status:fda_missing', 'status:recovered', 'status:chrome_away', 'status:chrome_back')
 HEADER_GAP_DEFAULT_MIN = 30
 
@@ -244,24 +259,20 @@ def add_headers(lines, gap_min, state, now=None):
 
 def _message_line(m):
     """`<label>: <text>` or `<group.label> · <label>: <text>`. Carries the (untrusted) body. A tapback
-    line (item 5) joins with a space, not a colon: "Alex \u2764\ufe0f your message"."""
+    line joins with a space, not a colon. A safety tag leads; promo and receipt are quiet words after the name."""
     label = _label(m)
     text = str(m.get('text') or '')
     g = m.get('group') or {}
     gl = str(g.get('label') or g.get('name') or '').strip()
-    head = (gl + GROUP_SEP if gl else '') + label
-    tag = TAGS.get(str(m.get('tag') or '')) if not gl else None
-    if tag:
-        head = tag + head               # v1.4.6: Messages filed it under Spam / Promotions / Transactions
-    elif m.get('unknown') and not gl:
-        head = UNKNOWN_TAG + head       # v1.4.5 spamMode tag: not in Contacts / flagged by Messages
-    if (m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown')
+    prefix, suffix = _filing(m, gl)
+    head = prefix + (gl + GROUP_SEP if gl else '') + label + suffix
+    if (m.get('quiet') and not gl and not m.get('reaction') and not prefix and not suffix
             and not m.get('media') and not _PHOTO_PLACEHOLDER.fullmatch(text.strip())):
         return text                     # v1.4.6 quiet names: same sender as the line just above
         # (v1.4.9: never for a photo line -- an image bubble or a photo notice always says who sent it)
     sep = ' ' if m.get('reaction') else ': '
     if not text.strip() and not m.get('reaction'):
-        return head + ':'               # v1.4.9: a photo with no caption -> "Jordan:" (the image's caption)
+        return head + ':'               # a photo with no caption -> "<label>:" (the image rides along)
     return head + sep + text
 
 
@@ -273,7 +284,8 @@ MEDIA_EXTS = ('jpg', 'jpeg', 'png', 'gif', 'webp')
 MEDIA_MAX_PER_LINE = 10
 _HEX32 = re.compile(r'^[0-9a-f]{32}$')
 _HEX64 = re.compile(r'^[0-9a-f]{64}$')
-_PHOTO_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
+_PHOTO_PLACEHOLDER = re.compile(r'(?:\U0001f4f7 )?(?:Photo|\d+ photos)$')
+_PHOTO_EMOJI_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
 
 
 _B64U_KEY = re.compile(r'^[A-Za-z0-9_-]{43}$')
@@ -589,14 +601,14 @@ def media_log(state_dir, status, photos, nbytes, now=None):
 
 
 def media_failed_text(text, n, bare=False):
-    """The line when its photo(s) could not be relayed: a clear notice instead of a silent drop.
-    v1.4.9: a photo-only line ("Jordan:") gets the notice on the same line: "Jordan: 📷 Photo couldn't …"."""
-    note = '\U0001f4f7 %s couldn\u2019t be relayed \u2014 open Messages to see %s' % (
-        ('Photo', 'it') if n == 1 else ('%d photos' % n, 'them'))
+    """The line when its photo(s) could not be relayed. A photo-only line ("<label>:") gets the notice
+    on the same line. Only an older camera-icon placeholder is replaced; a user's word "Photo" is kept."""
+    note = ('Photo didn\u2019t come through. Open Messages.' if n == 1
+            else '%d photos didn\u2019t come through. Open Messages.' % n)
     if bare:
         return (text.rstrip() + ' ' + note) if text.strip() else note
-    if _PHOTO_PLACEHOLDER.search(text):
-        return _PHOTO_PLACEHOLDER.sub(lambda _m: note, text)
+    if _PHOTO_EMOJI_PLACEHOLDER.search(text):
+        return _PHOTO_EMOJI_PLACEHOLDER.sub(lambda _m: note, text)
     return text + '\n\u2002' + note
 
 
@@ -715,7 +727,7 @@ def format_event(payload):
             gl = str(g.get('label') or g.get('name') or '').strip()
             head = (gl + GROUP_SEP if gl else '') + label
             if m.get('unknown') and not gl:
-                head = UNKNOWN_TAG + head
+                head = '\u26a0\ufe0f ' + head + ' \u00b7 not a contact'
             if head not in index:
                 index[head] = len(groups)
                 groups.append([head, [], []])
@@ -723,16 +735,15 @@ def format_event(payload):
             sep = ' ' if m.get('reaction') else ''
             groups[gi][1].append(sep + str(m.get('text') or '') if sep else str(m.get('text') or ''))
             groups[gi][2].append(mid)
-        n, people = len(msgs), len(groups)
-        header = '\U0001f319 Overnight: %d message%s%s' % (
-            n, '' if n == 1 else 's', (' from %d people' % people) if people > 1 else '')
-        # v1.4.6: ONE tidy post (header, then each person once with their texts under them); the line
-        # ids still carry every message id so a retried webhook dedupes.
+        n = len(msgs)
+        header = 'While you were away \u00b7 %d %s' % (n, 'text' if n == 1 else 'texts')
+        # ONE tidy post (header, then each person once with their texts under them). The • stays so a
+        # held line that starts with "Name:" cannot look like a new sender. ids still dedupe a retry.
         blocks = [head + ':\n' + '\n'.join('\u2002\u2022 ' + x.replace('\n\u2002', '\n\u2002\u2002 ') for x in texts)
                   for head, texts, _ in groups]
         text = header + '\n\n' + '\n\n'.join(blocks)
         if len(text) > DIGEST_MAX_CHARS:
-            text = text[:DIGEST_MAX_CHARS - 40].rstrip() + '\n\u2026 (more in Messages)'
+            text = text[:DIGEST_MAX_CHARS - 24].rstrip() + '\nMore is in Messages.'
         ids = '+'.join(i for _, _, ids_ in groups for i in ids_)
         return {'kind': 'digest', 'lines': [{'id': 'digest:' + (base_id or ids)[:200], 'text': text, 'body': True}]}
     if t == 'sent':
@@ -745,25 +756,22 @@ def format_event(payload):
         elif note:
             line = '\u2192 ' + label + (' \u2713\u2713' if payload.get('delivered') else ' \u2713') + ' (' + note + ')'
         elif payload.get('delivered'):
-            line = '\u2192 ' + label + ' \u2713\u2713 delivered'
+            line = '\u2192 ' + label + ' \u2713\u2713'
         else:
-            line = '\u2192 ' + label + ' \u2713 sent'
+            line = '\u2192 ' + label + ' \u2713'
         return {'kind': 'sent', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'dry_run':
         return {'kind': 'dry_run', 'lines': [{'id': base_id, 'text': '\u2192 ' + _label(payload) + ' (dry run, not sent)', 'body': False}]}
     if t == 'send_failed':
         if str(payload.get('reason') or '') == 'unconfirmed':
-            # W3: no chat.db row ever appeared for this send within ~10 minutes.
-            line = '\u26a0\ufe0f Couldn\u2019t confirm your reply to ' + _label(payload) + ' was delivered.'
+            # No chat.db row ever appeared for this send within ~10 minutes. The raw code stays out of the chat.
+            line = '\u26a0\ufe0f Couldn\u2019t confirm it reached ' + _label(payload) + '.'
             return {'kind': 'send_failed', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
-        err = str(payload.get('error') or '').strip()
-        tail = (' (' + err + ')') if err else ''
         if payload.get('superseded'):
-            # W3 nit: a soft "\u2713 sent" already went out, then the send failed -> say this corrects it.
-            line = ('\u26a0\ufe0f Correction: your reply to ' + _label(payload)
-                    + ' actually failed to deliver \u2014 disregard the earlier \u2713 sent' + tail + '.')
+            # A soft check already went out, then the send failed. Say the earlier check was wrong.
+            line = '\u26a0\ufe0f The earlier \u2713 to ' + _label(payload) + ' was wrong. It did not deliver.'
         else:
-            line = '\u26a0\ufe0f Couldn\u2019t deliver your reply to ' + _label(payload) + ' \u2014 it may not have sent' + tail + '.'
+            line = '\u26a0\ufe0f Didn\u2019t reach ' + _label(payload) + '.'
         return {'kind': 'send_failed', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'needs_confirm':
         # W1/item 3: a label-only confirmation prompt. Never carries the message body. should_notify false.
@@ -772,72 +780,76 @@ def format_event(payload):
         if payload.get('reason') == 'new_contact':
             # v1.4.0: someone found in the Mac's Contacts (host-composed, name + last 4 digits, no body).
             detail = str(payload.get('detail') or '').strip()[:400]
-            text = detail or ('\u2753 Text %s from your Contacts? Reply yes within 2 min.' % label)
+            text = detail or ('Text %s from your Contacts? Reply yes within 2 min.' % label)
             return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': text, 'body': False}]}
         if payload.get('reason') == 'directive':
             core = ('Send to %s instead of %s?' % (label, alt)) if alt else ('Send to %s?' % label)
         else:
             core = 'Reply to %s?' % label
-        detail = str(payload.get('detail') or '').strip()[:400]      # v1.4.1: host-composed, body-free
-        text = detail or ('\u2753 ' + core + ' Reply yes within 2 min.')
+        detail = str(payload.get('detail') or '').strip()[:400]      # host-composed, body-free
+        text = detail or (core + ' Reply yes within 2 min.')
         return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': text, 'body': False}]}
     if t == 'needs_target':
-        detail = str(payload.get('detail') or 'Who\u2019s this for? Start with a name, like "Alex: \u2026" or "text Alex \u2026".').strip()
+        detail = str(payload.get('detail') or 'Who is this for? name: your message, or text name \u2026').strip()
         return {'kind': 'needs_target', 'lines': [{'id': base_id, 'text': detail, 'body': False}]}
     if t == 'blocked':
         label = _label(payload)
         if payload.get('dryRun'):
-            line = '\U0001f6ab (dry run) would mute ' + label + '. Say "/unblock ' + label + '" to undo once live.'
+            line = 'Dry run. Would mute ' + label + '.'
         else:
-            line = '\U0001f6ab Muted ' + label + '. Say "/unblock ' + label + '" to undo.'
+            line = 'Muted ' + label + '. /unblock ' + label
         return {'kind': 'blocked', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'unblocked':
-        return {'kind': 'unblocked', 'lines': [{'id': base_id, 'text': '\u2705 Unmuted ' + _label(payload) + '.', 'body': False}]}
+        return {'kind': 'unblocked', 'lines': [{'id': base_id, 'text': 'Unmuted ' + _label(payload) + '.', 'body': False}]}
     if t in ('status', 'catching_up', 'resynced'):
         status = t if t in ('catching_up', 'resynced') else str(payload.get('status') or '').strip()
         detail = str(payload.get('detail') or '').strip()
         if status == 'catching_up':
-            line = '\u23f3 Catching up \u2014 relaying a burst in batches (nothing dropped).'
+            line = 'Catching up. Nothing is dropped.'
         elif status == 'resynced':
-            line = '\U0001f504 Resynced after a long gap; older messages were skipped.'
+            line = 'Older messages were skipped after a gap.'
         elif status == 'messages_not_running':
-            line = '\u26a0\ufe0f Messages isn\u2019t running on the Mac, so replies can\u2019t be sent right now.'
+            line = '\u26a0\ufe0f Messages isn\u2019t open, so replies can\u2019t send.'
         elif status == 'spam_summary' and detail:
-            line = detail[:300]               # v1.4.6: counts only ("\U0001f6ab 3 texts went to Messages \u203a Spam ...")
+            line = detail[:300]               # counts only; the watcher line keeps 🚫
         elif status == 'fda_missing':
-            # A v1.4.20 Mac sends the sentence in detail (it starts with ⚠️). Older detail is prose, so
+            # A current Mac sends the sentence in detail (it starts with ⚠️). Older detail is prose, so
             # fall back to FDA_LINE. Either way the owner sees the fix, not "can't read Messages yet".
             line = detail[:400] if detail.startswith('\u26a0') else FDA_LINE
         else:
-            line = '\u2139\ufe0f ' + (detail or ('Status: ' + (status or 'unknown')))
+            line = detail or ('Status: ' + (status or 'unknown'))
         return {'kind': 'status:' + (status or 'unknown'), 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'wrong_account':
-        line = '\u26a0\ufe0f The relay tab is signed in to the wrong X account \u2014 replies are paused until you switch back to the owner account.'
+        line = '\u26a0\ufe0f Wrong X account in this tab. Replies are paused.'
         return {'kind': 'wrong_account', 'lines': [{'id': base_id or 'wrong_account', 'text': line, 'body': False}]}
     if t == 'guess_expired':
         label = _label(payload, '')
-        tail = (' to ' + label) if label else ''
-        return {'kind': 'guess_expired', 'lines': [{'id': base_id, 'text': '\u231b Not sent%s.' % tail, 'body': False}]}
+        line = ('Not sent to ' + label + '. The question timed out.') if label else 'Not sent. The question timed out.'
+        return {'kind': 'guess_expired', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'refused':
         reason = str(payload.get('reason') or '').strip()
         label = _label(payload, '')
         if reason == 'echo':
-            line = '\u26a0\ufe0f Didn\u2019t send that to ' + (label or 'them') + ' \u2014 it looked like a relayed message bounced straight back.'
+            if label:
+                line = '\u26a0\ufe0f Not sent to ' + label + '. That looked like a relayed text.'
+            else:
+                line = '\u26a0\ufe0f Not sent. That looked like a relayed text.'
         elif reason == 'not_sent' and str(payload.get('detail') or '').strip():
-            # v1.4.6: the Mac's fixed, body-free reason ("There was nothing after the name to send …")
+            # The Mac's fixed, body-free reason. One warning, then the sentence.
             detail = re.sub(r'\s+', ' ', str(payload.get('detail')))[:200].strip()
-            line = '\u26a0\ufe0f Not sent: ' + detail
+            line = '\u26a0\ufe0f Not sent. ' + detail
         elif reason == 'attachment':
-            # v1.4.6: a photo/file he sent in X Chat couldn't be read or was over the limit (counts only)
+            # A photo or file in X Chat couldn't be read (counts only).
             try:
                 n = max(1, min(10, int(payload.get('count') or 1)))
             except (TypeError, ValueError):
                 n = 1
-            what = 'An attachment' if n == 1 else '%d attachments' % n
-            line = '\u26a0\ufe0f %s couldn\u2019t be sent%s (too large, over 25 MB, or not loaded in X). ' % (
-                what, (' to ' + label) if label else '') + ('The text went through.' if payload.get('sentText') else 'Nothing was sent.')
+            what = 'The attachment' if n == 1 else '%d attachments' % n
+            where = (' to ' + label) if label else ''
+            tail = 'The text went through.' if payload.get('sentText') else 'Nothing went out.'
+            line = '\u26a0\ufe0f %s didn\u2019t send%s. %s' % (what, where, tail)
         else:
-            line = '\u26a0\ufe0f A reply wasn\u2019t sent' + ((' to ' + label) if label else '') + '.'
+            line = '\u26a0\ufe0f Not sent' + ((' to ' + label) if label else '') + '.'
         return {'kind': 'refused', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'relay_test':
         return _relay_test(payload, base_id)

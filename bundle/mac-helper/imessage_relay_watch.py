@@ -111,10 +111,10 @@ LOOP_STEP_S = 0.25           # v1.4.13: idle loop granularity (jobs, chat.db cha
 GROUP_STYLE = 43          # chat.style: 43 = group, 45 = 1:1
 MESSAGES_NOT_RUNNING_DETAIL = ('Messages is not running on the Mac. New iMessages and replies may stall '
                                'until it is opened again.')
-FDA_DETAIL = ("\u26a0\ufe0f Texts stopped: Full Disk Access for iMessage Relay Watcher is off. "
-              "Drag that app into System Settings \u2192 Privacy & Security \u2192 Full Disk Access.")
+FDA_DETAIL = ("\u26a0\ufe0f Texts stopped. Turn on Full Disk Access for iMessage Relay Watcher. "
+              "System Settings \u2192 Privacy & Security \u2192 Full Disk Access.")
 RECOVERED_DETAIL = 'Watching Messages again.'
-CHROME_AWAY = ("Chrome hasn\u2019t checked in, so replies from your phone won\u2019t send. "
+CHROME_AWAY = ("Chrome hasn\u2019t checked in, so replies won\u2019t send. "
                "Open Chrome on the Mac.")
 CHROME_BACK = 'Chrome is open again. Replies will send.'
 RESYNC_DETAIL = ('The watcher was offline for a while or Messages rebuilt its database, so a large backlog was '
@@ -255,7 +255,7 @@ def attachment_placeholder(con, rowid, is_audio):
     """A metadata-only placeholder for an attachment/audio message (item 4): photo / N photos / video /
     sticker / a file's transfer_name / voice message. Reads only names and mime types, never bytes."""
     if is_audio:
-        return '\U0001f3a4 Voice message'
+        return 'Voice message'
     try:
         rows = con.execute('SELECT a.transfer_name, a.mime_type, a.is_sticker FROM attachment a '
                            'JOIN message_attachment_join j ON j.attachment_id = a.ROWID WHERE j.message_id = ?',
@@ -263,9 +263,9 @@ def attachment_placeholder(con, rowid, is_audio):
     except sqlite3.Error:
         rows = []
     if not rows:
-        return '\U0001f4ce Attachment'
+        return 'Attachment'
     if any(r[2] for r in rows):
-        return '\U0001f9f7 Sticker'
+        return 'Sticker'
     kinds = []
     for name, mime, _ in rows:
         m = str(mime or '').lower()
@@ -280,17 +280,17 @@ def attachment_placeholder(con, rowid, is_audio):
     if len(kinds) == 1:
         k, name = kinds[0]
         if k == 'photo':
-            return '\U0001f4f7 Photo'
+            return 'Photo'
         if k == 'video':
-            return '\U0001f3a5 Video'
+            return 'Video'
         if k == 'audio':
-            return '\U0001f3a4 Voice message'
-        return '\U0001f4ce ' + (str(name)[:60] if name else 'File')
+            return 'Voice message'
+        return str(name)[:60] if name else 'File'
     if all(k[0] == 'photo' for k in kinds):
-        return '\U0001f4f7 %d photos' % len(kinds)
+        return '%d photos' % len(kinds)
     if all(k[0] == 'video' for k in kinds):
-        return '\U0001f3a5 %d videos' % len(kinds)
-    return '\U0001f4ce %d attachments' % len(kinds)
+        return '%d videos' % len(kinds)
+    return '%d attachments' % len(kinds)
 
 
 class Watcher:
@@ -570,8 +570,7 @@ class Watcher:
                 media, notes = staged
                 if media or notes:
                     parts = [body] if body else []
-                    if media and not body:
-                        parts.append(relay_media.placeholder(media))   # "📷 Photo" (the image rides along)
+                    # A photo that uploads has no extra "Photo" word. The image is the message.
                     body = '\n'.join(parts + notes)
             elif has_att and not is_audio and not chat['group'] and body:
                 # v1.4.7: a 1:1 photo that isn't uploaded (no drop, attachments off, quiet hours) is still
@@ -579,12 +578,12 @@ class Watcher:
                 ph = relay_media.placeholder(relay_media.attachment_rows(con, rowid))
                 if ph:
                     body = body + '\n' + ph
-            if not body:
-                # item 4: metadata-only placeholders (no bytes) for audio / attachments / unsent notices
+            if not body and not media:
+                # metadata-only placeholders (no bytes) for audio / attachments / unsent notices
                 if is_audio or has_att:
                     body = attachment_placeholder(con, rowid, bool(is_audio))
                 elif date_retracted:
-                    body = '\U0001f6ab Unsent a message'
+                    body = 'Unsent a message'
                 else:
                     first = self._empty_since.setdefault(rowid, ctx['now'])
                     if ctx['now'] - first < EMPTY_GRACE_S:
@@ -594,7 +593,7 @@ class Watcher:
                     self._empty_since.pop(rowid, None)
                     return ('skip', None)
             elif date_edited:
-                body = body + '  \u270f\ufe0f (edited)'   # new text only; the original is never stored
+                body = (body + ' \u00b7 edited') if body else 'edited'   # new text only; the original is never stored
             self._empty_since.pop(rowid, None)
             if cfg['relayAll'] and cfg.get('redactCodes', True):
                 body = redact_codes(body)
@@ -1373,7 +1372,7 @@ class Watcher:
         if t - self._spam_summary_at < SPAM_SUMMARY_EVERY_S or rc.holding_inbound(cfg, t):
             return
         n = self._spam_held
-        detail = ('\U0001f6ab %d text%s went to Messages \u203a Spam in the last hour (not relayed; open Messages to review).'
+        detail = ('\U0001f6ab %d text%s went to spam in Messages. Not relayed.'
                   % (n, '' if n == 1 else 's'))
         if self.post(cfg, {'type': 'status', 'status': 'spam_summary', 'detail': detail, 'count': n, 'at': rc.iso_utc(t)}):
             rc.log_event('spam_summary', count=n)

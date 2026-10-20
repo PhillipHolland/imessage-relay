@@ -114,7 +114,7 @@ class Route(Base):
         r = self.route('ok')
         self.assertTrue(r['needsTarget'])
         self.assertIn('120 minutes', r['reason'])
-        self.assertEqual(r['error'], 'Who\'s this for? Start with a name, like "Alex: \u2026" or "text Alex \u2026".')
+        self.assertEqual(r['error'], 'Who is this for? name: your message, or text name \u2026')
 
     def test_two_contacts_close_together_is_ambiguous(self):
         self.inbound('+15555550123', 40)
@@ -146,6 +146,18 @@ class Route(Base):
         self.assertEqual((r['contact']['label'], r['body']), ('KJ', 'sure'), 'agreeing prefix is stripped')
         self.assertTrue(self.route('Mike: sure', quoted='KJ: dinner?')['needsTarget'], 'conflict')
         self.assertTrue(self.route('Alex: sure', quoted='KJ: dinner?')['needsTarget'], 'ambiguous prefix')
+
+    def test_quote_finds_sender_on_safety_tags_and_old_headers(self):
+        # v1.4.22: a leading safety icon must not hide the name. Quiet filing tags and an old
+        # "Unknown · Name:" line still resolve to that contact.
+        for quoted in ('\u26a0\ufe0f KJ \u00b7 not a contact: hi',
+                       '\U0001f6ab KJ \u00b7 spam: offer',
+                       'KJ \u00b7 promo: sale',
+                       'KJ \u00b7 receipt: lunch',
+                       '\u26a0\ufe0f Unknown \u00b7 KJ: hi'):
+            r = self.route('sure', quoted=quoted)
+            self.assertEqual(r['contact']['label'], 'KJ', quoted)
+            self.assertEqual(r['by'], 'quote', quoted)
 
     def test_quote_with_sender_account_name_and_ambiguous_quote(self):
         r = self.route('yes', quoted='SenderBot Alex R.: you up?', senderXHandle='@SenderBot')

@@ -110,7 +110,7 @@ class Forwarding(Base):
         self.db.add(ALLOWED, text=None, ab=None)                           # nothing readable
         c = self.w.tick()
         self.assertEqual([p['text'] for _, p, _ in self.poster.calls],
-                         ['from the blob 👋', '❤️ a message', '📷 Photo'])
+                         ['from the blob \U0001f44b', '\u2764\ufe0f a message', 'Photo'])
         # a tapback is no longer a skipped "reaction"; the unreadable row is deferred (item 3), not dropped
         self.assertEqual((c['reactionsOrEvents'], c['group'], c['deferredEmpty'], c['empty']), (0, 1, 1, 0))
         # the tapback row never forwards the reacted message's own text

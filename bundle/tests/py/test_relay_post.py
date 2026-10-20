@@ -41,7 +41,7 @@ class Formatting(unittest.TestCase):
         self.assertEqual(ev['kind'], 'digest')
         self.assertEqual(len(ev['lines']), 1)
         self.assertEqual(ev['lines'][0]['text'],
-                         '\U0001f319 Overnight: 3 messages from 2 people\n\n'
+                         'While you were away \u00b7 3 texts\n\n'
                          'Alex:\n\u2002\u2022 one\n\u2002\u2022 three\n\n'
                          'Crew \u00b7 Sam:\n\u2002\u2022 two')
         self.assertEqual(ev['lines'][0]['id'], 'digest:d')
@@ -49,25 +49,25 @@ class Formatting(unittest.TestCase):
 
     def test_digest_single_message_header(self):
         ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [{'label': 'Alex', 'text': 'hi'}]})
-        self.assertTrue(ev['lines'][0]['text'].startswith('\U0001f319 Overnight: 1 message\n\n'))
+        self.assertTrue(ev['lines'][0]['text'].startswith('While you were away \u00b7 1 text\n\n'))
 
     def test_digest_is_capped(self):
         ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [{'label': 'Alex', 'text': 'x' * 3000}] * 5})
         self.assertLessEqual(len(ev['lines'][0]['text']), rp.DIGEST_MAX_CHARS)
-        self.assertTrue(ev['lines'][0]['text'].endswith('(more in Messages)'))
+        self.assertTrue(ev['lines'][0]['text'].endswith('More is in Messages.'))
 
     def test_sent_and_dry_run(self):
-        # item 6: delivered -> double check, otherwise the ~20s "sent" fallback.
-        self.assertEqual(self.one({'type': 'sent', 'label': 'Alex', 'delivered': True})[1]['text'], '\u2192 Alex \u2713\u2713 delivered')
-        self.assertEqual(self.one({'type': 'sent', 'label': 'Alex'})[1]['text'], '\u2192 Alex \u2713 sent')
+        # item 6: delivered -> double check, otherwise one check. The words "sent" and "delivered" stay off the line.
+        self.assertEqual(self.one({'type': 'sent', 'label': 'Alex', 'delivered': True})[1]['text'], '\u2192 Alex \u2713\u2713')
+        self.assertEqual(self.one({'type': 'sent', 'label': 'Alex'})[1]['text'], '\u2192 Alex \u2713')
         self.assertEqual(self.one({'type': 'sent', 'label': 'Alex', 'dryRun': True})[1]['text'], '\u2192 Alex (dry run, not sent)')
         self.assertEqual(self.one({'type': 'dry_run', 'label': 'Alex'})[1]['text'], '\u2192 Alex (dry run, not sent)')
         self.assertFalse(self.one({'type': 'sent', 'label': 'Alex', 'delivered': True})[1]['body'], 'confirmation is silent')
 
     def test_send_failed_needs_target(self):
         _, ln = self.one({'type': 'send_failed', 'label': 'Alex', 'error': '-1712'})
-        self.assertIn('Couldn', ln['text'])
-        self.assertIn('-1712', ln['text'])
+        self.assertEqual(ln['text'], '\u26a0\ufe0f Didn\u2019t reach Alex.')
+        self.assertNotIn('-1712', ln['text'], 'the raw Messages code stays out of the chat line')
         self.assertFalse(ln['body'])
         _, ln = self.one({'type': 'needs_target', 'detail': 'Who\u2019s this for? Start with a name, like Alex: \u2026'})
         self.assertTrue(ln['text'].startswith('Who'))
@@ -75,22 +75,21 @@ class Formatting(unittest.TestCase):
     def test_send_failed_unconfirmed_and_superseded(self):
         # W3: no row ever -> "couldn't confirm"; a late failure after a soft check -> a correction line.
         _, ln = self.one({'type': 'send_failed', 'label': 'Alex', 'reason': 'unconfirmed'})
-        self.assertIn('confirm', ln['text'])
+        self.assertEqual(ln['text'], '\u26a0\ufe0f Couldn\u2019t confirm it reached Alex.')
         self.assertFalse(ln['body'])
         _, ln = self.one({'type': 'send_failed', 'label': 'Alex', 'error': '-1712', 'superseded': True})
-        self.assertIn('Correction', ln['text'])
-        self.assertIn('\u2713 sent', ln['text'])     # names the earlier soft confirmation it supersedes
-        self.assertIn('-1712', ln['text'])
+        self.assertEqual(ln['text'], '\u26a0\ufe0f The earlier \u2713 to Alex was wrong. It did not deliver.')
+        self.assertNotIn('-1712', ln['text'])
         self.assertFalse(ln['body'])
 
     def test_block_unblock(self):
-        self.assertEqual(self.one({'type': 'blocked', 'label': 'Spam'})[1]['text'], '\U0001f6ab Muted Spam. Say "/unblock Spam" to undo.')
-        self.assertEqual(self.one({'type': 'blocked', 'label': 'Spam', 'dryRun': True})[1]['text'], '\U0001f6ab (dry run) would mute Spam. Say "/unblock Spam" to undo once live.')
-        self.assertEqual(self.one({'type': 'unblocked', 'label': 'Spam'})[1]['text'], '\u2705 Unmuted Spam.')
+        self.assertEqual(self.one({'type': 'blocked', 'label': 'Spam'})[1]['text'], 'Muted Spam. /unblock Spam')
+        self.assertEqual(self.one({'type': 'blocked', 'label': 'Spam', 'dryRun': True})[1]['text'], 'Dry run. Would mute Spam.')
+        self.assertEqual(self.one({'type': 'unblocked', 'label': 'Spam'})[1]['text'], 'Unmuted Spam.')
 
     def test_status_variants(self):
         self.assertIn('Catching up', self.one({'type': 'status', 'status': 'catching_up'})[1]['text'])
-        self.assertIn('Resynced', self.one({'type': 'resynced'})[1]['text'])
+        self.assertIn('skipped after a gap', self.one({'type': 'resynced'})[1]['text'])
         self.assertIn('Catching up', self.one({'type': 'catching_up'})[1]['text'])
         self.assertIn('Full Disk Access', self.one({'type': 'status', 'status': 'fda_missing'})[1]['text'])
 
@@ -291,7 +290,7 @@ class SpeedV145(unittest.TestCase):
                         'xchat': dict(self.FULL), 'dedupe_path': self.dedupe, 'defer_commit': True}, runner=self.runner())
         self.assertEqual(r['action'], 'send')
         self.assertEqual([c['text'] for c in self.calls],
-                         ['Alex: one', 'Family \u00b7 Sam: two', '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: three'])
+                         ['Alex: one', 'Family \u00b7 Sam: two', '\u26a0\ufe0f (555) 555-0166 \u00b7 not a contact: three'])
         self.assertTrue(all(s['should_notify'] for s in r['sends']))
         self.assertEqual(r['ack_ids'], ['m1', 'm2', 'm3'])
         rp.ack({'dedupe_path': self.dedupe, 'ids': ['m1']})

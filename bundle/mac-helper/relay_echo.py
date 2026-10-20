@@ -62,33 +62,67 @@ def record_relayed_text(text, at=None, path=None, handle=''):
 BOT_LINE_SIGILS = (
     '\u2192',        # →  sent / dry-run
     '\u26a0',        # ⚠  warnings: send_failed, wrong_account, refused, messages_not_running, fda_missing
-    '\u23f3',        # ⏳  catching up
-    '\U0001f504',    # 🔄  resynced
-    '\u2139',        # ℹ  generic status
-    '\U0001f6ab',    # 🚫  muted
-    '\u2705',        # ✅  unmuted
-    '\u231b',        # ⌛  not sent (guess expired)
-    '\U0001f4ec',    # 📬  quiet-hours digest header
-    '\u2753',        # ❓  needs_confirm (directive / guessed reply) prompt
-    '\U0001f9ea',    # 🧪  v1.3.8 /test report ("🧪 relay test #tag …")
+    '\u23f3',        # ⏳  older catching-up lines
+    '\U0001f504',    # 🔄  older resynced lines
+    '\u2139',        # ℹ  older status lines
+    '\U0001f6ab',    # 🚫  spam tag, spam count, older mute lines
+    '\u2705',        # ✅  /test pass rows, older unmute lines
+    '\u231b',        # ⌛  older guess-expired lines
+    '\U0001f319',    # 🌙  older digest headers
+    '\U0001f4ec',    # 📬  older digest headers
+    '\u2753',        # ❓  older confirm prompts
+    '\U0001f9ea',    # 🧪  /test report ("🧪 relay test #tag …")
 )
 BOT_LINE_PHRASES = (
-    "Who's this for?", "Who\u2019s this for?",   # needs_target (straight and curly apostrophe)
-    'What should I send to',                      # needs_target (directive named a contact but no body)
-    'Who do you want to',                        # needs_target (block/unblock)
-    'To stop relaying',                          # block confirmation prompt
-    'Nothing to confirm',                        # stale confirmation
+    "Who's this for?", "Who\u2019s this for?", 'Who is this for?',
+    'What should I send to',
+    'Who do you want to',
+    'To stop relaying', 'Stop relaying',
+    'Nothing to confirm', 'Nothing is waiting',
+    'Catching up. Nothing is dropped.',
+    'Older messages were skipped after a gap.',
+    'Watching Messages again.',
+    'Chrome hasn\u2019t checked in', "Chrome hasn't checked in",
+    'Chrome is open again.',
+    'Relaying is back on.',
+    'Snoozing until ',
+    'Say /snooze',
+    'Replies go to ',
+    'Replies are unclear.',
+    'No one to reply to yet.',
+    'Muted ', 'Unmuted ', 'Dry run.', 'Added ',
+    'Cancelled.',
+    'That isn\u2019t a choice', "That isn't a choice",
+    'That choice expired',
+    'More than one ',
+    'No recent unknown number',
+    'Couldn\u2019t tell whose', "Couldn't tell whose",
+    'That doesn\u2019t look like a phone', "That doesn't look like a phone",
+    'That\u2019s your own number', "That's your own number",
+    'That doesn\u2019t match the', "That doesn't match the",
+    'Paused. Texts that arrive while paused are not kept.',
+    'Not sent. The question timed out.',
+    '/status \u00b7 /who',
+    'On \u00b7 v', 'Paused \u00b7 v',
 )
 BOT_FORMAT_RE = re.compile(
     r'^\s*(?:' + '|'.join(list(BOT_LINE_SIGILS) + [re.escape(p) for p in BOT_LINE_PHRASES]) + r')', re.I)
-# Item 13: the host's routing replies ("Can't send to <who>: they ...", "Group replies aren't
-# supported ...") and the bare-command hint ("Did you mean /block ...") are structured, not fixed
-# prefixes, so they get their own matcher. Derived from the exact wording route_reply() / the host
-# post with, so the watcher never relays one of these back out as an iMessage.
+# Routing replies and confirm prompts are structured, not one fixed prefix. Old colon wording stays
+# matched so a quoted line from before v1.4.22 is still not texted out.
 BOT_STRUCTURED_RE = re.compile(
-    r"^\s*(?:can[\u2019']t send to\b.*:\s*(?:they|you)\b"
+    r"^\s*(?:can[\u2019']t send to\b(?:"
+    r".*:\s*(?:they|you)\b"
+    r"|.*\.\s+(?:They|No text|They[\u2019']ve|Group)"
+    r")"
+    r"|can[\u2019']t reach the\b"
     r"|group replies aren[\u2019']t supported"
-    r"|did you mean\s*/)", re.I)
+    r"|did you mean\s*/"
+    r"|(?:reply to|send to|text|did you mean|add|stop relaying)\s+.+\?\s*reply yes within 2 min"
+    r"|text\s+.+\bat which\?"
+    r"|reply\s+1[\u2013-]\d+,\s*or no"
+    r"|not sent to\s+\S.*\bthe question timed out"
+    r"|while you were away\s+\u00b7\s+\d+\s+texts?"
+    r")", re.I)
 
 
 def looks_like_bot_output(text):

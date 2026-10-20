@@ -206,7 +206,7 @@ class BotFormat(unittest.TestCase):
                         {'type': 'status', 'status': 'resynced'},
                         {'type': 'status', 'status': 'messages_not_running'},
                         {'type': 'status', 'status': 'fda_missing'},
-                        {'type': 'status', 'status': 'whatever', 'detail': 'hi'},
+                        {'type': 'status', 'status': 'whatever', 'detail': 'Relaying is back on.'},
                         {'type': 'wrong_account'},
                         {'type': 'refused', 'reason': 'echo', 'label': 'Alex'}):
             shapes.append(rp.format_event(payload)['lines'][0]['text'])

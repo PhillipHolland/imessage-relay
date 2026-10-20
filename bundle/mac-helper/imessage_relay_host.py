@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.21.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.22.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -373,15 +373,15 @@ def handle_command(cmd, quoted, cfg, now, poster):
         if cmd['confirm']:
             pend = _take_pending_block(now())
             if not pend:
-                detail = 'Nothing to confirm \u2014 send "/block <name>" first (confirmations expire after 2 minutes).'
+                detail = 'Nothing is waiting to confirm. /block name. It expires after 2 minutes.'
                 return dict(base, ok=False, error=detail)
             if cmd['target']:
                 # "/block Bob yes" must confirm only the staged target, never a different one (item N2).
                 tgt = resolve_mute_target(cmd['target'], '', cfg, now())
                 if tgt.get('handle') and tgt['handle'] != pend['handle']:
                     _store_pending_block(pend['handle'], pend['label'], pend['at'])   # keep the staged one
-                    detail = ('That name doesn\u2019t match the block waiting on %s. Reply yes to '
-                              'mute %s, or "/block %s" to start over.' % (pend['label'], pend['label'], tgt['label']))
+                    detail = ('That doesn\u2019t match the block for %s. Reply yes to '
+                              'mute %s, or /block %s to start over.' % (pend['label'], pend['label'], tgt['label']))
                     return dict(base, ok=False, needsConfirm=True, label=pend['label'], error=detail)
             if not cfg['dryRun']:
                 toggle_mute(pend['handle'], True)      # dry run previews only; never mutates config
@@ -392,19 +392,19 @@ def handle_command(cmd, quoted, cfg, now, poster):
             return dict(base, ok=True, muted=True, label=pend['label'], action='blocked')
         tgt = resolve_mute_target(cmd['target'], quoted, cfg, now())
         if tgt.get('needsTarget'):
-            detail = 'Who do you want to block? Reply to their message, or say "/block <name>".'
+            detail = 'Who do you want to block? Reply to their message, or /block name.'
             rc.log_event('needs_target', reason=tgt['reason'], action='block')
             notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': tgt['reason'], 'at': rc.iso_utc(now())})
             return dict(base, ok=False, needsTarget=True, error=detail, reason=tgt['reason'])
         _store_pending_block(tgt['handle'], tgt['label'], now())
         _note_prompt(now())
-        detail = 'To stop relaying %s, reply yes within 2 min (no to cancel).' % tgt['label']
+        detail = 'Stop relaying %s? Reply yes within 2 min.' % tgt['label']
         notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'confirm-block', 'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=tgt['label'], error=detail)
     # unblock: safe, no confirmation
     tgt = resolve_mute_target(cmd['target'], quoted, cfg, now())
     if tgt.get('needsTarget'):
-        detail = 'Who do you want to unblock? Say "/unblock <name>".'
+        detail = 'Who do you want to unblock? /unblock name.'
         rc.log_event('needs_target', reason=tgt['reason'], action='unblock')
         notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': tgt['reason'], 'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsTarget=True, error=detail, reason=tgt['reason'])
@@ -421,12 +421,12 @@ def handle_command(cmd, quoted, cfg, now, poster):
 # can /resume. None of them ever sends an iMessage, so they are safe while paused.
 HELP_TEXT = ('/status \u00b7 /who\n'
              '/pause \u00b7 /resume \u00b7 /snooze\n'
-             '/block Name \u00b7 /unblock Name\n'
-             '/add Name\n'
-             'Sam: your message\n'
+             '/block name \u00b7 /unblock name\n'
+             '/add name\n'
+             'name: your message\n'
              '/test \u00b7 /help')
 PAUSE_DETAIL = ('Paused. Texts that arrive while paused are not kept. '
-                '/resume turns relaying back on, or /snooze to hold them for a digest.')
+                '/resume, or /snooze to hold them.')
 _OWNER_CMD_RE = re.compile(r'^/(who|pause|resume|help|add|test|status|snooze)\b\s*(.*)$', re.I | re.S)
 ADD_WINDOW_S = 120.0
 
@@ -483,16 +483,15 @@ def who_summary(cfg, now_t):
     live = sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] == 'contact'
                    and e['handle'] not in muted and 0 <= now_t - e['lastInboundAt'] <= window],
                   key=lambda e: -e['lastInboundAt'])
-    if not live:
-        target = 'no one yet \u2014 start a reply with a name, like "Sam: \u2026"'
-    elif len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
-        target = 'unclear (two people wrote close together) \u2014 start with a name'
-    else:
-        target = live[0]['label'] + ' (' + rc.ago(now_t - live[0]['lastInboundAt']) + ')'
     recents = sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] in ('contact', 'roster')],
                      key=lambda e: -e['lastInboundAt'])[:5]
-    recent = ', '.join('%s %s' % (e['label'], rc.ago(now_t - e['lastInboundAt'])) for e in recents) or 'none'
-    return 'A bare reply goes to: %s. Recent texters: %s.' % (target, recent)
+    recent = ', '.join('%s %s' % (e['label'], rc.ago(now_t - e['lastInboundAt'])) for e in recents)
+    recent_bit = (' Recent: %s.' % recent) if recent else ''
+    if not live:
+        return 'No one to reply to yet. Start with name: your message' + recent_bit
+    if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
+        return 'Replies are unclear. Two people wrote close together. Start with a name.' + recent_bit
+    return 'Replies go to %s, %s.%s' % (live[0]['label'], rc.ago(now_t - live[0]['lastInboundAt']), recent_bit)
 
 
 def _parse_iso(s):
@@ -530,7 +529,7 @@ def bare_reply_name(cfg, now_t):
 
 
 def status_line(cfg, now_t):
-    """One body-free line for /status. Ages and names only; the routine adds the ℹ️ prefix."""
+    """One body-free line for /status. Ages and names only. The routine posts this text as-is."""
     st = rc.read_json(os.path.join(rc.APP_DIR, 'status.json'), {}) or {}
     if cfg['paused']:
         state = 'Paused'
@@ -539,14 +538,14 @@ def status_line(cfg, now_t):
     else:
         state = 'On'
     if st.get('chatDb') == 'unavailable':
-        watcher = 'watcher blind'
+        watcher = 'watcher can\u2019t read'
     else:
         at = _parse_iso(st.get('lastTickAt'))
         if at is None:
-            watcher = 'watcher unseen'
+            watcher = 'watcher not seen'
         else:
             n, u = _age_unit(now_t - at)
-            watcher = 'watcher %d%s ago' % (n, u)
+            watcher = 'watcher %d%s' % (n, u)
     mr = st.get('messagesRunning')
     messages = 'Messages open' if mr is True else 'Messages closed' if mr is False else 'Messages not checked'
     fwd = _parse_iso(st.get('lastForwardAt'))
@@ -557,8 +556,15 @@ def status_line(cfg, now_t):
     else:
         n, u = _age_unit(now_t - fwd)
         last = 'last text %d%s' % (n, u)
-    return '%s \u00b7 v%s \u00b7 %s \u00b7 %s \u00b7 %s \u00b7 bare reply \u2192 %s' % (
-        state, rc.VERSION, watcher, messages, last, bare_reply_name(cfg, now_t))
+    who = bare_reply_name(cfg, now_t)
+    if who == 'unclear':
+        reply = 'replies unclear'
+    elif who == 'name someone':
+        reply = 'name someone'
+    else:
+        reply = 'replies to ' + who
+    return '%s \u00b7 v%s \u00b7 %s \u00b7 %s \u00b7 %s \u00b7 %s' % (
+        state, rc.VERSION, watcher, messages, last, reply)
 
 
 def last_unknown_texter(cfg):
@@ -614,27 +620,27 @@ def handle_add(oc, cfg, now, poster):
         h = rc.normalize_handle(oc['handle'], cfg['defaultCountryCode'])
         detail = None
         if not name:
-            detail = 'Say "/add <Name> <number>".'
+            detail = '/add name and the number.'
         elif not rc.valid_handle(h):
-            detail = 'That doesn\u2019t look like a phone number or email. Say "/add %s +1 555 555 0123".' % name
+            detail = 'That doesn\u2019t look like a phone number or email. /add %s and the number.' % name
         elif h in rc.owner_handle_set(cfg):
-            detail = 'That\u2019s your own number; it can\u2019t be a relay contact.'
+            detail = 'That\u2019s your own number. It can\u2019t be a contact.'
         if detail:
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, command='add', error=detail)
         if cfg['dryRun']:
-            detail = '(dry run) would add %s as %s. Nothing changed.' % (rc.mask_handle(h), name)
+            detail = 'Dry run. Would add %s (%s).' % (name, rc.mask_handle(h))
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=True, command='add', dryRun=True, added=name)
         add_contact(h, name)
         rc.log_event('contact_added', via='command-handle')
-        detail = 'Added %s (%s). Start a reply with "%s: \u2026" to text them.' % (name, rc.mask_handle(h), name)
+        detail = 'Added %s (%s).' % (name, rc.mask_handle(h))
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='add', added=name)
     if oc.get('confirm'):
         pend = _take_pending_add(now())
         if not pend:
-            detail = 'Nothing to add \u2014 say "/add <Name>" first (the offer expires after 2 minutes).'
+            detail = 'Nothing is waiting to add. /add name. It expires after 2 minutes.'
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, command='add', error=detail)
         # Nit: "/add <Name> yes" must name the SAME person that was staged; a mismatch is refused (and the
@@ -642,32 +648,32 @@ def handle_add(oc, cfg, now, poster):
         cname = (oc.get('name') or '').strip()
         if cname and cname.lower() != str(pend['name']).lower():
             _store_pending_add(pend['handle'], pend['name'], float(pend.get('at') or now()))
-            detail = 'That name doesn\u2019t match the pending add (%s). Say "/add yes" or "/add %s yes".' % (pend['name'], pend['name'])
+            detail = 'That doesn\u2019t match the add for %s. /add yes' % pend['name']
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, command='add', error=detail)
         if cfg['dryRun']:
             # Nit: dry run never writes config.
-            detail = '(dry run) would add %s as %s. Nothing changed.' % (rc.mask_handle(pend['handle']), pend['name'])
+            detail = 'Dry run. Would add %s (%s).' % (pend['name'], rc.mask_handle(pend['handle']))
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=True, command='add', dryRun=True, added=pend['name'])
         add_contact(pend['handle'], pend['name'])
         rc.log_event('contact_added', via='command')
-        detail = 'Added %s. Their texts now relay, and you can reply by name.' % pend['name']
+        detail = 'Added %s.' % pend['name']
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='add', added=pend['name'])
     name = oc.get('name') or ''
     if not name:
-        detail = 'Who do you want to add? Say "/add <Name>".'
+        detail = 'Who do you want to add? /add name'
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=False, command='add', needsTarget=True, error=detail)
     who = last_unknown_texter(cfg)
     if not who:
-        detail = 'No recent unknown number to add. (/add saves the last person who texted you who isn\u2019t a contact yet.)'
+        detail = 'No recent unknown number to add.'
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=False, command='add', needsTarget=True, error=detail)
     _store_pending_add(who['handle'], name, now())
     _note_prompt(now())
-    detail = 'Add %s as %s? Reply yes within 2 min.' % (rc.mask_handle(who['handle']), name)
+    detail = 'Add %s (%s)? Reply yes within 2 min.' % (name, rc.mask_handle(who['handle']))
     notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
     return dict(base, ok=False, command='add', needsConfirm=True, label=name)
 
@@ -686,7 +692,7 @@ def handle_owner_command(oc, quoted, cfg, now, poster):
             set_run_state(False, None)
         rc.log_event('resumed', via='command')
         notify(cfg, poster, {'type': 'status', 'status': 'resumed',
-                             'detail': 'Resumed. Relaying is back on.', 'at': rc.iso_utc(now())})
+                             'detail': 'Relaying is back on.', 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='resume', paused=False)
     if c == 'snooze':
         until, err = rc.parse_snooze(oc.get('rest') or '', now())
@@ -696,7 +702,7 @@ def handle_owner_command(oc, quoted, cfg, now, poster):
         until = int(round(float(until)))
         set_run_state(False, until)        # hold like quiet hours; do not use the pause cursor
         rc.log_event('snoozed', seconds=max(0, int(until - now())))
-        detail = 'Snoozing until %s. Tonight\u2019s texts arrive as one digest. /resume' % rc.format_clock(until)
+        detail = 'Snoozing until %s. Texts arrive as one digest. /resume' % rc.format_clock(until)
         notify(cfg, poster, {'type': 'status', 'status': 'snoozing', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='snooze', snoozeUntil=int(until))
     if c == 'help':
@@ -956,7 +962,7 @@ def handle_pending_pick(text, cfg, now, poster, quoted=''):
     if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
         # v1.4.14/15: a short answer-like reply right after ANY prompt is an answer, never a text
         if short_answer(text) and now() - float(state.get('lastPromptAt') or 0) <= PICK_WINDOW_S:
-            detail = 'That isn\u2019t one of the choices, so nothing was sent. Start with a name to text someone.'
+            detail = 'That isn\u2019t a choice. Nothing was sent.'
             rc.log_event('pick_unresolved', resolved=False, pending=False)
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
@@ -964,12 +970,11 @@ def handle_pending_pick(text, cfg, now, poster, quoted=''):
     like, h = pick_answer(text, p['options'])
     if not like and not short_answer(text):
         return None
-    name = rc.clean_label(p.get('name') or '') or 'them'
+    name = rc.clean_label(p.get('name') or '') or 'name'
     if h:
-        detail = ('That pick came in, but the message waiting for it is gone (the extension restarted?), so '
-                  'nothing was sent. Send it again starting with %s:' % name)
+        detail = 'That choice expired. Send it again, starting with %s:' % name
     else:
-        detail = 'That isn\u2019t one of the choices. Reply 1\u2013%d, or no. Nothing was sent.' % len(p['options'])
+        detail = 'Reply 1\u2013%d, or no. Nothing was sent.' % len(p['options'])
     rc.log_event('pick_unresolved', resolved=bool(h))
     notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
     return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
@@ -1025,7 +1030,7 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
         df = route['dirFuzzy']
         _store_pending_new(df['handle'], df['label'], now(), prefix=df['name'], existing=True)
         _note_prompt(now())
-        detail = '\u2753 Did you mean %s? Reply yes within 2 min to send it to %s (no to cancel).' % (df['label'], df['label'])
+        detail = 'Did you mean %s? Reply yes within 2 min.' % df['label']
         notify(cfg, poster, {'type': 'needs_confirm', 'label': df['label'], 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=df['label'], handle=df['handle'], reason='new_contact',
@@ -1034,8 +1039,7 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
         m = fuzzy[0]
         _store_pending_new(m['handle'], m['name'], now(), prefix=name)
         _note_prompt(now())
-        detail = ('\u2753 Did you mean %s? Reply yes within 2 min to text the %s in your Contacts (%s), or no to '
-                  'cancel.' % (m['name'], m['name'], rc.mask_handle(m['handle'])))
+        detail = 'Text %s (%s)? Reply yes within 2 min.' % (m['name'], rc.mask_handle(m['handle']))
         notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
@@ -1063,11 +1067,10 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
             # v1.4.12: one choice per line; he may answer the index, a phone's last 4 digits or an email's start
             def opt(i, x):
                 return '%d \u00b7 %s%s' % (i + 1, _short_mask(x['handle']), (' ' + x['label']) if x.get('label') else '')
-            detail = '\u2753 Text %s at which?\n%s\nReply 1\u2013%d, or no.' % (
+            detail = 'Text %s at which?\n%s\nReply 1\u2013%d, or no.' % (
                 m['name'], '\n'.join(opt(i, x) for i, x in enumerate(hs)), len(hs))
         else:
-            detail = ('\u2753 %s isn\u2019t on your relay list yet. Reply yes within 2 min to text the %s in your '
-                      'Contacts (%s), or /add %s <number>.' % (first, m['name'], rc.mask_handle(m['handle']), first))
+            detail = 'Text %s (%s)? Reply yes within 2 min.' % (m['name'], rc.mask_handle(m['handle']))
         notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
         r = dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
@@ -1078,18 +1081,16 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
     if matches and ' ' in name.strip():
         # v1.4.11: he already typed a full name; never tell him to "start with the full name"
         names = ', '.join(x['name'] for x in matches[:3]) + (', \u2026' if len(matches) > 3 else '')
-        detail = ('%s isn\u2019t on your relay list yet, and several Contacts match: %s. Reply /add %s <number>.'
+        detail = ('%s isn\u2019t on your list. Matches: %s. /add %s and the number.'
                   % (name, names, first))
     elif matches:
-        names = ', '.join(x['name'] for x in matches[:3]) + (', \u2026' if len(matches) > 3 else '')
-        detail = ('%s isn\u2019t on your relay list yet, and your Contacts have more than one: %s. Start with the full '
-                  'name ("%s: \u2026"), or /add %s <number>.' % (first, names, matches[0]['name'], first))
+        detail = 'More than one %s. Start with %s: your message' % (first, matches[0]['name'])
     elif res is None:
-        detail = ('%s isn\u2019t on your relay list yet (I couldn\u2019t check your Contacts just now). Reply /add %s '
-                  '<number>.' % (first, first))
+        detail = ('%s isn\u2019t on your list, and Contacts didn\u2019t answer. /add %s and the number.'
+                  % (first, first))
     else:
-        detail = ('%s isn\u2019t on your relay list yet, and I didn\u2019t find "%s" in your Contacts. Reply /add %s '
-                  '<number>.' % (first, name, first))
+        detail = ('%s isn\u2019t on your list, and isn\u2019t in Contacts. /add %s and the number.'
+                  % (first, first))
     notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'unknown-name', 'at': rc.iso_utc(now())})
     return dict(base, ok=False, needsTarget=True, error=detail, reason='unknown-name')
 
@@ -1142,7 +1143,7 @@ def handle_bare_confirm(word, quoted, cfg, now, poster):
             return handle_add({'cmd': 'add', 'name': '', 'confirm': True}, cfg, now, poster)
         if not recent:
             return None
-        detail = 'Nothing is waiting for a yes (confirmations expire after 2 minutes), so nothing was sent. Send your message again.'
+        detail = 'Nothing is waiting for yes. Send it again.'
     else:
         if not (block or add or recent):
             return None
@@ -1153,7 +1154,7 @@ def handle_bare_confirm(word, quoted, cfg, now, poster):
                 st.pop(k, None)
             rc.write_json_atomic(STATE_PATH, st)
         _with_host_lock(fn)
-        detail = 'Cancelled. Nothing was sent or changed.'
+        detail = 'Cancelled.'
     rc.log_event('bare_confirm', word=word, pending=bool(block or add))
     notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(t)})
     return dict(base, ok=True, skipped=detail)
@@ -1179,15 +1180,14 @@ def handle_trash_reaction(msg, cfg, now, poster):
     if st == 'match':
         tgt = by.get(h)
     if not tgt:
-        detail = "Couldn\u2019t tell whose message that was. To block someone, say \"/block <name>\"."
+        detail = 'Couldn\u2019t tell whose message that was. /block name.'
         rc.log_event('needs_target', reason='trash-unresolved', action='block')
         notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'trash-unresolved', 'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsTarget=True, error=detail)
     shown = rc.guess_label(tgt)
     _store_pending_block(tgt['handle'], tgt['label'], now())
     _note_prompt(now())
-    detail = ('\U0001f5d1\ufe0f Block %s? Their texts stop relaying here (Messages is not changed). '
-              'Reply yes within 2 min (no to cancel).' % shown)
+    detail = 'Stop relaying %s here? Messages stays as it is. Reply yes within 2 min.' % shown
     rc.log_event('needs_confirm', reason='trash-block')
     notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'confirm-block', 'at': rc.iso_utc(now())})
     return dict(base, ok=False, needsConfirm=True, label=tgt['label'])
@@ -1221,7 +1221,8 @@ def _short_mask(handle):
     return m.split(' ', 1)[1] if m.startswith('+') and ' ' in m else m
 
 
-_UI_PROMPT_RE = re.compile(r'reply yes within 2 min|^\s*who\u2019?\'?s this for\?', re.I)
+_UI_PROMPT_RE = re.compile(
+    r"reply yes within 2 min|^\s*who(?:\u2019s|'s| is) this for\?", re.I)
 
 
 def is_relay_ui_text(text):
@@ -1287,8 +1288,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if '\u2022\u2022\u2022' in text or re.search(r'Reply 1\u2013\d, or no|Reply yes within 2 min', text) or rc.HEADER_LINE_RE.match(text):
         # v1.4.15: text that came from a prompt or a masked preview row is never his reply
         rc.log_event('refused_prompt_text', textLength=len(text))
-        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That text looks like a relay prompt, not your reply, '
-                             'so nothing was sent.', 'at': rc.iso_utc(now())})
+        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That looked like a prompt, so nothing was sent.',
+                             'at': rc.iso_utc(now())})
         return refuse('text from a prompt row', textLength=len(text))
     if not msg.get('confirmed'):
         r = handle_pending_pick(text, cfg, now, poster, quoted)
@@ -1299,7 +1300,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         return handle_command(cmd, quoted, cfg, now, poster)
     hint = bare_command_hint(text, cfg)
     if hint:                                  # bare "block"/"unblock [known name]" -> nudge, send nothing (item N1)
-        detail = 'Did you mean /%s \u2026? Nothing was sent.' % hint
+        detail = 'Did you mean /%s? Nothing was sent.' % hint
         rc.log_event('bare_command_hint', verb=hint)
         notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'bare-command', 'at': rc.iso_utc(now())})
         return dict(base, ok=True, skipped='bare "%s" is not a command (use /%s)' % (hint, hint))
@@ -1407,12 +1408,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             # v1.4.5: a reply to a group (exact name or a quote of its message) is ALWAYS confirmed first.
             guid = group_guid_lookup(handle, sleeper, now)
             if not guid:
-                detail = "Can't reach the %s group right now (the Mac helper didn't answer). Nothing was sent." % contact['label']
+                detail = 'Can\u2019t reach the %s group right now. Nothing was sent.' % contact['label']
                 rc.log_event('group_unavailable', routedBy=by, textLength=len(body))
                 notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'group-unavailable', 'at': rc.iso_utc(now())})
                 return dict(base, ok=False, needsTarget=True, error=detail, reason='group-unavailable')
             _store_pending_group(handle, guid, contact['label'], now())
-            detail = '\u2753 Reply to the %s group? Reply yes within 2 min.' % contact['label']
+            detail = 'Reply to the %s group? Reply yes within 2 min.' % contact['label']
             rc.log_event('needs_confirm', routedBy=by, reason='group', textLength=len(body))
             _note_prompt(now())
             notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'reason': 'group',
@@ -1425,7 +1426,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             c = route['confirm']
             alt = c.get('altLabel')
             detail = ('Send to %s instead of %s?' % (contact['label'], alt)) if alt else ('Send to %s?' % contact['label'])
-            detail = '❓ ' + detail + ' Reply yes within 2 min.'
+            detail = detail + ' Reply yes within 2 min.'
             rc.log_event('needs_confirm', routedBy=by, reason='directive', textLength=len(body))
             _note_prompt(now())
             notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'alt': alt or '',
@@ -1441,7 +1442,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if must_ask or (by == 'recent' and cfg['confirmGuessed'] != 'off'
                         and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
             shown = rc.guess_label(contact)          # v1.4.3: Contacts name, else masked handle + warning
-            detail = '❓ Reply to %s? Reply yes within 2 min.' % shown
+            detail = 'Reply to %s? Reply yes within 2 min.' % shown
             rc.log_event('needs_confirm', routedBy=by, reason='guessed', textLength=len(body),
                          inContacts=shown == contact['label'])
             _note_prompt(now())
@@ -1577,18 +1578,18 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
 _REFUSAL_SILENT = {'relayConversationId not set in config', 'not the relay conversation', 'attachments could not be read',
                    'refusing to echo a relayed message back to its sender', 'refusing to send one of my own relay messages'}
 _REFUSAL_TEXT = {
-    'empty text': 'That message had nothing I could send as an iMessage.',
-    'empty text after the name prefix': 'There was nothing after the name to send. Type the message after "{label}:".',
-    'text too long': 'It is too long to relay (limit %d characters).' % MAX_TEXT,
-    'paused': 'The relay is paused, so nothing was sent. /resume turns it back on.',
-    'no contacts in config': 'No contacts are set up yet, so nothing was sent (/add Name +1 \u2026).',
-    'confirmed reply without a target handle': 'That yes no longer matched a waiting reply. Send the reply again.',
-    'confirmed group send without a pending group prompt': 'That yes no longer matched a waiting group reply. Send it again.',
-    'confirmed handle is not a current recipient': 'That yes no longer matched a waiting reply. Send the reply again.',
-    'confirmed group send no longer names that group': 'That reply no longer names the group. Send it again.',
-    'the routed recipient does not match the handle the extension reported': 'The recipient changed while sending. Send it again.',
-    'refusing to relay to the owner handle': 'That would text your own number. Use /test send for a self-test.',
-    'bad attachment': 'An attachment was damaged on the way to the Mac. Attach it again.',
+    'empty text': 'There was nothing to send.',
+    'empty text after the name prefix': 'Nothing came after \u201c{label}:\u201d.',
+    'text too long': 'Over %d characters.' % MAX_TEXT,
+    'paused': 'The relay is paused. /resume',
+    'no contacts in config': 'No contacts are set up yet. /add name and the number.',
+    'confirmed reply without a target handle': 'That yes expired. Send it again.',
+    'confirmed group send without a pending group prompt': 'That yes expired. Send it again.',
+    'confirmed handle is not a current recipient': 'That yes expired. Send it again.',
+    'confirmed group send no longer names that group': 'That no longer names the group. Send it again.',
+    'the routed recipient does not match the handle the extension reported': 'The recipient changed. Send it again.',
+    'refusing to relay to the owner handle': 'That would text your own number. /test send',
+    'bad attachment': 'The attachment was damaged. Attach it again.',
 }
 
 
@@ -1597,9 +1598,13 @@ def _tell_refusal(reason, label, cfg, poster, now):
         return
     detail = _REFUSAL_TEXT.get(reason)
     if detail is None:
-        detail = ('An attachment is over the limit. ' if reason.startswith(('too many attachments', 'attachment too large')) else '') + \
-                 'It was not sent (%s).' % reason[:80]
-    detail = detail.replace('{label}', rc.clean_label(label) or 'Name')
+        if reason.startswith('attachment too large'):
+            detail = 'The attachment is over 25 MB.'
+        elif reason.startswith('too many attachments'):
+            detail = 'Too many attachments.'
+        else:
+            detail = 'That reply was not sent.'
+    detail = detail.replace('{label}', rc.clean_label(label) or 'name')
     if _UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True):
         _UI['react'].append({'emoji': '\u26a0\ufe0f', 'uuid': _UI['uuid']})    # instant, on his own message
     try:
@@ -1713,10 +1718,10 @@ def handle_test(msg, cfg, runner, sleeper, now, poster):
 
 # v1.4.21: the extension saw a reply and will not send it. Fixed sentences, never the message.
 _SKIP_REASON = {
-    'empty': 'That message had nothing I could send as an iMessage.',
-    'paused': 'The relay is paused, so nothing was sent. /resume turns it back on.',
-    'no_contacts': 'No contacts are set up yet, so nothing was sent (/add Name +1 \u2026).',
-    'host_down': 'The Mac helper isn\u2019t connected, so nothing was sent.',
+    'empty': 'There was nothing to send.',
+    'paused': 'The relay is paused. /resume',
+    'no_contacts': 'No contacts are set up yet. /add name and the number.',
+    'host_down': 'The Mac helper isn\u2019t connected.',
     'other': 'That reply was not sent.',
 }
 
@@ -1747,7 +1752,7 @@ def handle_signal(msg, cfg, now, poster):
         # v1.4.1: the owner answered a reply prompt with "no" / "cancel" (the extension dropped the text)
         label = str(msg.get('label') or '').strip()
         rc.log_event('signal', status='guess_cancelled')
-        detail = ('Cancelled. Nothing was sent to %s.' % label) if label else 'Cancelled. Nothing was sent.'
+        detail = ('Cancelled. Nothing sent to %s.' % label) if label else 'Cancelled.'
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return {'ok': True}
     if status == 'guess_expired':
@@ -1759,8 +1764,8 @@ def handle_signal(msg, cfg, now, poster):
     if status == 'typed_mismatch':
         # v1.4.14: the extension read his bubble back differently from what he typed and sent nothing
         rc.log_event('signal', status='typed_mismatch')
-        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That message read back differently from what you '
-                             'typed, so nothing was sent. Please send it again.', 'at': rc.iso_utc(now())})
+        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That didn\u2019t match what you typed. Send it again.',
+                             'at': rc.iso_utc(now())})
         return {'ok': True}
     if status in ('test_seen', 'test_unseen'):
         # v1.3.8 /test: the extension saw (or gave up waiting for) the routine's report. Local only.

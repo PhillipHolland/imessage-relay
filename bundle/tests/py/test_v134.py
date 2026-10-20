@@ -495,24 +495,26 @@ class Placeholders(_WatchBase):
         self.db.add(self.ALLOWED, text=None, attach=[{'mime': 'image/jpeg'}, {'mime': 'image/png'}])
         self.w.tick()
         t = self.texts()
-        self.assertIn('📷 Photo', t)
-        self.assertIn('🎥 Video', t)
-        self.assertIn('📎 budget.pdf', t)
-        self.assertIn('🧷 Sticker', t)
-        self.assertIn('🎤 Voice message', t)
-        self.assertIn('📷 2 photos', t)
+        self.assertIn('Photo', t)
+        self.assertIn('Video', t)
+        self.assertIn('budget.pdf', t)
+        self.assertIn('Sticker', t)
+        self.assertIn('Voice message', t)
+        self.assertIn('2 photos', t)
+        self.assertFalse(any(x in ''.join(t) for x in ('\U0001f4f7', '\U0001f3a5', '\U0001f4ce', '\U0001f9f7', '\U0001f3a4')))
 
     def test_unsent_notice_no_old_text(self):
         self.w.tick()
         self.db.add(self.ALLOWED, text=None, date_retracted=123)
         self.w.tick()
-        self.assertIn('🚫 Unsent a message', self.texts())
+        self.assertIn('Unsent a message', self.texts())
+        self.assertNotIn('\U0001f6ab', ''.join(self.texts()))
 
     def test_edited_marks_without_old_text(self):
         self.w.tick()
         self.db.add(self.ALLOWED, text='new wording', date_edited=123)
         self.w.tick()
-        self.assertIn('new wording  ✏️ (edited)', self.texts())
+        self.assertIn('new wording · edited', self.texts())
 
 
 # ---------- item 7: first bare reply after a quiet-hours digest must name a person ----------

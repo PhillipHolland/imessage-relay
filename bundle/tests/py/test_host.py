@@ -230,7 +230,7 @@ class RoutingAndWebhooks(Base):
         self.clock.t += 3 * 3600                     # nobody wrote within replyWindowMinutes (120)
         resp = self.req(text='sounds good', runner=r, dryRun=False)
         self.assertEqual((resp['ok'], resp['needsTarget']), (False, True))
-        self.assertTrue(resp['error'].startswith("Who's this for? Start with a name, like "))
+        self.assertTrue(resp['error'].startswith('Who is this for? name: your message'))
         self.assertEqual(r.calls, [])
         self.assertEqual(self.posts[-1]['type'], 'needs_target')
         self.assertNotIn('sounds good', json.dumps(self.posts))

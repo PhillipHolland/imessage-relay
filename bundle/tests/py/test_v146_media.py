@@ -152,7 +152,7 @@ class Outbound(HostBase):
         self.assertEqual([(p['type'], p['reason'], p['count'], p['sentText']) for p in self.posts],
                          [('refused', 'attachment', 2, False)])
         line = rp.format_event(self.posts[0])['lines'][0]['text']
-        self.assertIn('2 attachments couldn\u2019t be sent', line)
+        self.assertIn('2 attachments didn\u2019t send', line)
         self.posts.clear()
         r = self.req({'type': 'send', 'text': 'Jordan: hi', 'attachmentsSkipped': 1}, runner=FakeRunner([OK]))
         self.assertTrue(r['sent'])
@@ -230,7 +230,8 @@ class WatchMedia(test_watch.Base):
         self.w.tick()
         [m] = self.msgs()
         self.assertNotIn('media', m)
-        self.assertIn('\U0001f4f7 Photo', m['text'])
+        self.assertIn('\n\u2002Photo', m['text'])
+        self.assertNotIn('\U0001f4f7', m['text'])
         self.assertEqual(self.puts, [])
 
     def test_a_failed_upload_gets_a_notice_and_leaves_nothing(self):
@@ -239,7 +240,7 @@ class WatchMedia(test_watch.Base):
         self.w.tick()
         [m] = self.msgs()
         self.assertNotIn('media', m)
-        self.assertIn('couldn\u2019t be relayed', m['text'])
+        self.assertIn('Couldn\u2019t relay it', m['text'])
         self.assertEqual([f for _, _, fs in os.walk(self.m.media.OUTBOX_DIR) for f in fs], [])
 
     def test_two_photos_get_different_keys(self):
@@ -254,7 +255,8 @@ class WatchMedia(test_watch.Base):
     def test_photo_without_text_says_photo(self):
         self.photo()
         self.w.tick()
-        self.assertEqual(self.msgs()[0]['text'], '\U0001f4f7 Photo')
+        self.assertEqual(self.msgs()[0]['text'], '')
+        self.assertIn('media', self.msgs()[0])
 
     def test_non_image_gets_a_notice_and_no_bytes(self):
         self.photo(data=b'%PDF-1.4 fake', name='Lease.pdf', mime='application/pdf', text='see attached')
@@ -262,7 +264,7 @@ class WatchMedia(test_watch.Base):
         [m] = self.msgs()
         self.assertNotIn('media', m)
         self.assertIn('PDF file', m['text'])
-        self.assertIn('open Messages', m['text'])
+        self.assertIn('Open Messages', m['text'])
         self.assertNotIn('Lease', m['text'])
 
     def test_still_downloading_is_retried_then_noticed(self):
@@ -273,7 +275,7 @@ class WatchMedia(test_watch.Base):
         self.w.tick()
         [m] = self.msgs()
         self.assertNotIn('media', m)
-        self.assertIn('couldn\u2019t be relayed', m['text'])
+        self.assertIn('Couldn\u2019t relay it', m['text'])
 
     def test_groups_and_quiet_hours_are_not_staged(self):
         self.cfg['relayAll'] = True
@@ -403,7 +405,7 @@ class RoutineMedia(unittest.TestCase):
         r = rp.process(self.req(), runner=self.runner)
         self.assertEqual(r['action'], 'send', 'nothing uploadable: post the text')
         text = self.calls[-1][1]['text']
-        self.assertIn('Photo couldn\u2019t be relayed', text)
+        self.assertIn('didn\u2019t come through', text)
         self.assertNotIn('media', self.calls[-1][1])
         self.assertEqual(self.files(), [])
 
@@ -411,20 +413,20 @@ class RoutineMedia(unittest.TestCase):
         os.remove(os.path.join(self.media_dir, 'e' * 32 + '.png'))
         r = rp.process(self.req(), runner=self.runner)
         self.assertEqual(r['action'], 'send')
-        self.assertIn('open Messages', self.calls[-1][1]['text'])
+        self.assertIn('Open Messages', self.calls[-1][1]['text'])
 
     def test_media_off_after_a_failed_upload(self):
         rp.process(self.req(), runner=self.runner)
         r = rp.process(self.req(media_off=True), runner=self.runner)
         self.assertEqual(r['action'], 'send')
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
         self.assertEqual(self.files(), [])
 
     def test_text_with_photo_gets_an_appended_notice(self):
         self.assertEqual(rp.media_failed_text('Jordan: beach', 1),
-                         'Jordan: beach\n\u2002\U0001f4f7 Photo couldn\u2019t be relayed \u2014 open Messages to see it')
+                         'Jordan: beach\n\u2002Photo didn\u2019t come through. Open Messages.')
         self.assertEqual(rp.media_failed_text('Jordan: \U0001f4f7 3 photos', 3),
-                         'Jordan: \U0001f4f7 3 photos couldn\u2019t be relayed \u2014 open Messages to see them')
+                         'Jordan: 3 photos didn\u2019t come through. Open Messages.')
 
     def test_invalid_media_meta_is_ignored(self):
         bad = [{'token': '../x', 'ext': 'png', 'size': 1, 'sha256': 'a' * 64}, {'token': 'f' * 32, 'ext': 'exe', 'size': 1, 'sha256': 'a' * 64},

@@ -40,7 +40,7 @@ class Quote(Base):
         self.assertEqual(r['handle'], RORY)
         self.assertEqual(self.osa(), [])
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]
-        self.assertEqual(ev['detail'], '\u2753 Reply to Rory? Reply yes within 2 min.')
+        self.assertEqual(ev['detail'], 'Reply to Rory? Reply yes within 2 min.')
         self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_target'])
 
     def test_bare_reply_to_roster_last_texter_asks_not_whos_this_for(self):
@@ -66,7 +66,8 @@ class GenericExample(Base):
         r = self.send('hello there')
         self.assertTrue(r.get('needsTarget'), r)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
-        self.assertIn('"Alex: \u2026"', ev['detail'])
+        self.assertIn('name: your message', ev['detail'])
+        self.assertNotIn('Alex', ev['detail'])
         self.assertNotIn('Test Contact', ev['detail'])
         self.assertNotIn('Test', ev['detail'])
 

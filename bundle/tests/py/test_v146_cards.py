@@ -29,13 +29,13 @@ class Cards(HostBase):
         [p] = self.posts
         self.assertEqual((p['type'], p['reason']), ('refused', 'not_sent'))
         line = rp.format_event(p)['lines'][0]['text']
-        self.assertEqual(line, WARN + ' Not sent: There was nothing after the name to send. Type the message after "Jordan:".')
+        self.assertEqual(line, WARN + ' Not sent. Nothing came after \u201cJordan:\u201d.')
 
     def test_paused_and_other_refusals_also_say_why(self):
         self.req({'type': 'send', 'text': 'Jordan: hi'}, paused=True)
         self.assertIn('paused', self.posts[-1]['detail'])
         self.req({'type': 'send', 'text': 'x' * 4001})
-        self.assertIn('too long', self.posts[-1]['detail'])
+        self.assertEqual(self.posts[-1]['detail'], 'Over 4000 characters.')
 
     def test_not_his_relay_chat_stays_silent(self):
         self.h.handle_request({'type': 'send', 'text': 'Jordan: hi', 'conversationId': '9999-8888'}, cfg=self.cfg(),

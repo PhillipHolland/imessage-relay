@@ -10,7 +10,7 @@ import test_v148_wrap as v148
 import relay_drop  # noqa: E402
 rp = v148.rp
 
-NOTE = '\U0001f4f7 Photo couldn\u2019t be relayed \u2014 open Messages to see it'
+NOTE = 'Photo didn\u2019t come through. Open Messages.'
 
 
 class Labels(unittest.TestCase):

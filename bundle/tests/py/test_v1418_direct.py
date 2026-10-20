@@ -106,7 +106,7 @@ class HeaderParity(unittest.TestCase):
         self.assertEqual(rh._message_line(msgs[2]), 'on my way')
         self.assertNotIn(': ', rh._message_line(msgs[3]))
         self.assertEqual(rh._message_line(msgs[4]), rp._message_line(msgs[4]))
-        self.assertTrue(rh._message_line(msgs[5]).startswith('\u26a0\ufe0f Unknown'))
+        self.assertEqual(rh._message_line(msgs[5]), '\u26a0\ufe0f Sam \u00b7 not a contact: hi')
         self.assertTrue(rh._message_line(msgs[6]).startswith('\U0001f6ab'))
         now = 1_800_000_000
         a_lines, a_st = rh.add_headers(_lines(rh, msgs), 30, {}, now=now)

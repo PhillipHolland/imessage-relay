@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.21)
+# iMessage Relay: operator reference (v1.4.22)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -338,8 +338,10 @@ back to a plain line otherwise). (A `wrong_account` event carries a per-episode 
 episode timestamp — so repeats inside one episode collapse but a later episode still posts.)
 
 **Non-text messages** are relayed as a short metadata placeholder built from chat.db columns only —
-never the bytes: `📷 Photo` / `📷 N photos`, `🎥 Video`, `🧷 Sticker`, `🎤 Voice message`, or `📎 <file name>`
-for other attachments, plus `🚫 Unsent a message` and an `✏️ (edited)` mark (never the old text).
+never the bytes: `Photo` / `N photos`, `Video`, `Sticker`, `Voice message`, or `<file name>`
+for other attachments, plus `Unsent a message` and a `· edited` mark (never the old text). A photo that
+uploads has no extra word: the line is `<label>:` and the image. A photo that does not:
+`<label>: Photo didn’t come through. Open Messages.`
 **Incoming tapbacks** are relayed as a line like `Alex ❤️ your message` / `Alex ❤️ their message`
 (a removed one reads `Alex removed ❤️ …`); the reacted message's own text is never re-sent. A tapback
 **does not update the last-sender**, so a lone ❤️ can't change who a bare (unprefixed) reply routes to.
@@ -347,54 +349,57 @@ for other attachments, plus `🚫 Unsent a message` and an `✏️ (edited)` mar
 relay_post.py turns each Mac event into one relay line in these formats (for reference — the routine
 never builds them itself; it only hands the payload to relay_post.py):
 - `{"type":"message","id","label","handle","text","receivedAt","untrusted":true}` → `<label>: <text>`
-  (label first, so replies route by that prefix).
+  (label first, so replies route by that prefix). The conversation header above it stays `💬 <label> · <time>`.
 - the same with `"group":{"label","name"}` (relay-all only) → `<group.label> · <label>: <text>`.
-- the same with `"unknown":true` (v1.4.5 spamMode tag: sender not in Contacts, or Messages flagged the
-  chat or message) → `⚠️ Unknown · <label>: <text>`. Never hidden; 1:1 texts only (groups unchanged).
+- the same with `"unknown":true` (sender not in Contacts, or Messages flagged the chat or message) →
+  `⚠️ <label> · not a contact: <text>`. Spam is `🚫 <label> · spam: <text>`. A promotion is
+  `<label> · promo: <text>` and a receipt is `<label> · receipt: <text>` (no icon). Never hidden; 1:1 texts
+  only (groups unchanged). An older `⚠️ Unknown · <label>:` line still quote-replies to that person.
 - `{"type":"batch","count","messages":[…],"untrusted":true}` (v1.4.5): texts the watcher found together,
   one webhook / one routine run; still **one X message per text**, each deduped on its own id.
-- `{"type":"digest","count","messages":[…],"untrusted":true}` → a header line (`📬 N messages while you
-  were away[ from M people]`) followed by **one X message per person**, their texts grouped under one label.
-- `{"type":"sent","label","dryRun","delivered",…}` → the send confirmation: `→ <label> ✓✓ delivered`
-  when the **watcher** has seen the delivered row in chat.db, `→ <label> ✓ sent` as a ~20s soft confirmation
+- `{"type":"digest","count","messages":[…],"untrusted":true}` → one post: `While you were away · N text`
+  (or `texts`), then each person once, their lines under the name as `•` bullets. A cutoff ends
+  `More is in Messages.`
+- `{"type":"sent","label","dryRun","delivered",…}` → the send confirmation: `→ <label> ✓✓`
+  when the **watcher** has seen the delivered row in chat.db, `→ <label> ✓` as a ~20s soft confirmation
   **only once a matching outgoing row exists** (if no row has appeared yet the watcher stays silent and keeps
   waiting), or `→ <label> (dry run, not sent)` for a dry run (no body). With delivery checking on the watcher
   posts this one line; the host only posts it for dry runs or when `deliveryCheck` is off.
-- `{"type":"send_failed","label","error",…}` → `⚠️ Couldn't deliver your reply to <label> …` (no body).
-  A `reason:"unconfirmed"` one (no outgoing row ever appeared within ~10 minutes) reads `⚠️ Couldn't confirm
-  your reply to <label> was delivered.` — the watcher keeps the pending record until that timeout. A failure
-  that arrives **after** an earlier soft `✓ sent` carries `superseded:true` and reads `⚠️ Correction: your
-  reply to <label> actually failed to deliver — disregard the earlier ✓ sent …`, so the owner knows the
-  earlier confirmation was wrong.
-- `{"type":"needs_target","detail",…}` → `detail` verbatim ("Who's this for? Start with a name, like
-  \"Sam: …\" or \"text Sam …\""); no body. A `reason:"post-digest"` one asks the owner to name a person
+- `{"type":"send_failed","label","error",…}` → `⚠️ Didn’t reach <label>.` (no body, and no raw Messages code).
+  A `reason:"unconfirmed"` one (no outgoing row ever appeared within ~10 minutes) reads `⚠️ Couldn’t confirm
+  it reached <label>.` — the watcher keeps the pending record until that timeout. A failure
+  that arrives **after** an earlier soft `✓` carries `superseded:true` and reads `⚠️ The earlier ✓ to <label>
+  was wrong. It did not deliver.`
+- `{"type":"needs_target","detail",…}` → `detail` verbatim (`Who is this for? name: your message, or text name …`);
+  no body. The word is `name` when no real contact is known. A `reason:"post-digest"` one asks the owner to name a person
   for the first reply after a quiet-hours digest (several people may have texted). A `reason:"unknown-name"`
-  one (v1.4.0) means the reply started with a name nobody on the relay list has and the Mac's Contacts had
+  one means the reply started with a name nobody on the relay list has and the Mac's Contacts had
   no single match (it lists up to 3 matching **names**, never numbers, or says it found none).
-- `{"type":"needs_confirm","reason":"new_contact","label","detail"}` (v1.4.0) → `detail` verbatim, e.g.
-  `❓ Jordan isn't on your relay list yet. Reply yes within 2 min to text the Jordan Rivera in your
-  Contacts (•••0188), or /add Jordan <number>.` (name + last four digits only; no body). A card with several
-  numbers lists them masked. On a plain `yes` (or `/yes`) the reply is sent without its name prefix and the
-  person becomes a contact. **Since v1.4.1 every `needs_confirm` carries `detail`; render it verbatim** (all
-  prompts now say "Reply yes within 2 min."). Without `detail`, render `❓ <core> Reply yes within 2 min.`
-  Only **one** notice is posted per message: a Contacts prompt is never accompanied by "Who's this for?".
-- `{"type":"sent","label","note"}` (v1.4.1, optional `note`) → `→ <label> ✓ (<note>)` / `→ <label> ✓✓ (<note>)`,
+- `{"type":"needs_confirm","reason":"new_contact","label","detail"}` → `detail` verbatim, e.g.
+  `Text <full name> (•••0188)? Reply yes within 2 min.` (name + last four digits only; no body). A card with several
+  numbers lists them masked (`Text <name> at which?` then `Reply 1–N, or no.`). On a plain `yes` (or `/yes`) the reply is sent without its name prefix and the
+  person becomes a contact. **Every `needs_confirm` carries `detail`; render it verbatim** (a prompt you can accept
+  still says "Reply yes within 2 min."). Without `detail`, render `<core> Reply yes within 2 min.`
+  Only **one** notice is posted per message: a Contacts prompt is never accompanied by "Who is this for?".
+- `{"type":"sent","label","note"}` (optional `note`) → `→ <label> ✓ (<note>)` / `→ <label> ✓✓ (<note>)`,
   e.g. `→ Jordan Rivera ✓ (new contact, •••0188)` when an exact full-name Contacts match was sent without
   asking (`confirmNewContacts exact-skip`, the default).
 - Host notifications that fail or time out (webhook slower than 12 s) are queued body-free on the Mac and
   re-posted by the watcher with the **same `id`** for up to 10 minutes, so dedupe on `id` as always.
-- `{"type":"guess_expired","label",…}` → `⌛ Not sent to <label>.` (no body) — a confirm-when-guessed
+- `{"type":"guess_expired","label",…}` → `Not sent to <label>. The question timed out.` (no body) — a confirm-when-guessed
   prompt the owner did not confirm with `yes` within 2 minutes. A plain `no` / `cancel` answer posts a
-  `status` line instead: `Cancelled. Nothing was sent to <label>.`
-- `{"type":"blocked","label"}` → `🚫 Muted <label>. Say "/unblock <label>" to undo.`
-- `{"type":"unblocked","label"}` → `✅ Unmuted <label>.`
-- `{"type":"status","status":"messages_not_running"|"fda_missing"|"catching_up"|"resynced"|"recovered"|"chrome_away"|"chrome_back",…}` → a short
-  plain line (`ℹ️ ` plus `detail`, except `fda_missing`, which is the ⚠️ Full Disk Access sentence). `catching_up` = a burst relayed in batches (nothing dropped), `resynced` = a long gap
-  skipped. v1.4.20: `fda_missing` is posted again after 30 minutes and then hourly until chat.db opens, then one `recovered` line; `chrome_away` / `chrome_back` when Chrome has not checked in. Those four lines set `should_notify` true. `/status`, `/pause`, `/snooze` and `/help` stay silent. No body.
-- `{"type":"wrong_account"}` → `⚠️ The relay tab is signed in to the wrong X account …` (no body). Sent
+  `status` line instead: `Cancelled. Nothing sent to <label>.` (or `Cancelled.` when there is no name).
+- `{"type":"blocked","label"}` → `Muted <label>. /unblock <label>` (a dry run: `Dry run. Would mute <label>.`)
+- `{"type":"unblocked","label"}` → `Unmuted <label>.`
+- `{"type":"status","status":"messages_not_running"|"fda_missing"|"catching_up"|"resynced"|"recovered"|"chrome_away"|"chrome_back",…}` → `detail`
+  as posted (no info icon). Fixed lines: `catching_up` = `Catching up. Nothing is dropped.`, `resynced` = `Older messages were skipped after a gap.`,
+  `messages_not_running` = `⚠️ Messages isn’t open, so replies can’t send.`, `fda_missing` = `⚠️ Texts stopped. Turn on Full Disk Access for iMessage Relay Watcher. System Settings → Privacy & Security → Full Disk Access.`
+  v1.4.20: `fda_missing` is posted again after 30 minutes and then hourly until chat.db opens, then one `recovered` line (`Watching Messages again.`); `chrome_away` / `chrome_back` when Chrome has not checked in. Those four lines set `should_notify` true. `/status`, `/pause`, `/snooze` and `/help` stay silent. No body.
+  A spam count stays `🚫 N text(s) went to spam in Messages. Not relayed.`
+- `{"type":"wrong_account"}` → `⚠️ Wrong X account in this tab. Replies are paused.` (no body). Sent
   once when the extension's owner gate fails; cleared when the owner account is detected again.
-- `{"type":"refused","reason":"echo","label"}` → `⚠️ Didn't send that to <label> …` (no body). A reply
-  that looked like a relayed message bounced straight back was not re-sent.
+- `{"type":"refused","reason":"echo","label"}` → `⚠️ Not sent to <label>. That looked like a relayed text.` (no body). A reply
+  that looked like a relayed message bounced straight back was not re-sent. Other refusals are `⚠️ Not sent. <reason>`.
 - `{"type":"relay_test","id","tag","steps":[{"name","ok","detail"}]}` (v1.3.8, from `/test`) → **one**
   silent message: `🧪 relay test #<tag> — all checks passed` (or `— N failed`), then one ✅/❌/➖ line per
   step, ending with `webhook POST accepted` and `routine posted this report` (those two prove themselves
@@ -480,26 +485,26 @@ A reply in the relay chat goes to:
    texted in is refused ("that number or email has never texted in") and never falls back to the last sender.
    - **Directive confirmation.** A directive aimed at **someone other than** the person a bare reply would
      go to (that person wrote within `replyWindowMinutes`) is held for a one-word confirmation: you get a
-     label-only "❓ Send to Alex instead of Robin? Reply yes within 2 min." (the message text is never shown),
+     label-only "Send to Alex instead of Robin? Reply yes within 2 min." (the message text is never shown),
      and reply **`yes`** (or `/yes`) to send. The verb-less `Name,` / `Name -` forms also hold when the name is a common
      dictionary word (Will, May, Mark, Bill, Grace, Hope, …) so "Will, be there at 5" asks first. The
      explicit colon form (`Name:`) is taken as deliberate and sends without asking.
 3. **Otherwise, whoever wrote last**, if that was within `replyWindowMinutes` (120 by default).
    v1.4.2: with relay-all this includes roster people (not only contacts); a bare reply to a roster-only
-   last texter is **always** confirmed first ("❓ Reply to <label>? Reply yes within 2 min.").
+   last texter is **always** confirmed first ("Reply to <label>? Reply yes within 2 min.").
    v1.4.3: the last texter must be a **person**: a normal phone number (a +1 number has exactly 10
    digits) or an email. An Apple Business Chat sender (urn:biz:…, or an over-long "+1577…" id), a 5–6
-   digit short code, or any other odd handle is **never** guessed: a bare reply gets "Who's this for?
-   Start with a name, like "Alex: …"" (even if a person wrote earlier). Quote or name a business to
+   digit short code, or any other odd handle is **never** guessed: a bare reply gets "Who is this for?
+   name: your message, or text name …" (even if a person wrote earlier). Quote or name a business to
    reply to it. Every "Reply to …?" prompt shows the **Contacts name** when known, otherwise the masked
-   handle plus a warning: "❓ Reply to +1 •••0144 (⚠️ not in Contacts)? Reply yes within 2 min."
+   handle plus a warning: "Reply to +1 •••0144 (⚠️ not in Contacts)? Reply yes within 2 min."
 With relay-all, "anyone" means contacts plus roster people who texted within `rosterDays`.
 
 **X Chat's native Reply (v1.4.2).** X now shows a reply as "Replied to <bot name>" with a preview of the
 quoted message. The extension reads that preview (or the replied-to message's id, when X exposes it) and
 the Mac routes to the label at its start ("<label>: …"). A quote that still can't be placed falls back to
-whoever wrote last and is **always** confirmed first; it never gets "Who's this for?" when one person
-clearly wrote last. The "Who's this for?" example is always the generic "Alex", never a real label.
+whoever wrote last and is **always** confirmed first; it never gets "Who is this for?" when one person
+clearly wrote last. When the prompt needs a stand-in, the word is "name", never a real label and never a sample name.
 **Native Reply markup (v1.4.4).** X's current reply row has no "Replied to" text, testid or message id:
 the preview (a reply icon, the quoted sender and the quoted text) is a plain block placed before the
 message's `role="article"`. The extension reads the visible text of the blocks before the article (hidden
@@ -510,15 +515,14 @@ for?" instead of guessing an older 1:1 sender.
 
 **Group replies (v1.4.5, relay-all only).** A reply goes to a group only when it starts with the group's
 **exact** name (any case: `family: cute pup`) or natively quotes a relayed group line (`Family · Sam: …`).
-Either way the Mac first posts "❓ Reply to the Family group? Reply yes within 2 min." and sends only on
+Either way the Mac first posts "Reply to the Family group? Reply yes within 2 min." and sends only on
 `yes` / 👍 for that same group (the prompt is used once). A bare reply never goes to a group; a name that
 could be a person or a group asks "Who's this for?". The Messages chat id comes from the watcher (it reads
 chat.db); if it can't answer, nothing is sent ("Can't reach the … group right now"). The send goes to the
 group chat (`send … to chat id`), and delivery is proven from that chat's row in chat.db, as for 1:1.
 
 **🗑️ to block (v1.4.5).** A wastebasket reaction on a relayed text makes the Mac ask
-"🗑️ Block Sam? Their texts stop relaying here (Messages is not changed). Reply yes within 2 min (no to
-cancel)." `yes` / `ok`, `/block yes` or 👍 on that prompt mutes the sender (`RC unmute` undoes it); `no` /
+"Stop relaying Sam here? Messages stays as it is. Reply yes within 2 min." `yes` / `ok`, `/block yes` or 👍 on that prompt mutes the sender (`RC unmute` undoes it); `no` /
 👎 or 2 minutes cancels. On a group line it is the sender, never the group. It mutes relaying only;
 nothing changes in Messages.
 
@@ -533,7 +537,7 @@ with `quoteSeen`, `quoteResolved`, `routedBy`, `needsTarget`, `confirmed` and `f
 Read the newest: `grep quote_probe ~/Library/Logs/imessage-relay.log | tail -1`. The extension popup's
 **Copy page structure** button copies the same outline for the last 6 messages of the open chat (JSON,
 no text) to paste into a bug report.
-The relay **sends nothing** and you post "Who's this for? Start with a name, like \"Alex: …\" or \"text Alex …\""
+The relay **sends nothing** and you post "Who is this for? name: your message, or text name …"
 when:
 - nobody wrote within the window, or the last texter is a business / short code (v1.4.3);
 - two contacts wrote within `ambiguousSeconds` (60) of each other;
@@ -544,7 +548,7 @@ when:
 - the name is a roster person who has not texted within `rosterDays`, or relay-all is off;
 - the reply starts with a number or email that has **never texted in** (add it as a contact first).
 Text that only looks like a prefix ("Note: …", "5:30 works") is sent as is. Every send is
-confirmed with "→ <label> ✓✓ delivered" (or "→ <label> ✓ sent" if delivery can't be confirmed) when
+confirmed with "→ <label> ✓✓" (or "→ <label> ✓" if delivery can't be confirmed) when
 `confirmSends` is on.
 
 **Confirm when guessed (`confirmGuessed`, default `risky`).** When a reply has no name and is routed to
@@ -552,15 +556,14 @@ confirmed with "→ <label> ✓✓ delivered" (or "→ <label> ✓ sent" if deli
 asks only when the guess is shaky — the last texter was over 10 minutes ago, another contact texted
 within 15 minutes, or the target is a roster-only person under relay-all; `always` asks on every
 guessed reply; `off` never asks. When it asks, nothing is sent yet: reply **`yes`** (or `/yes`, `/yes <Name>`)
-within 2 minutes to send it, or `no` to drop it; otherwise you get "⌛ Not sent to <Name>" and nothing goes out.
+within 2 minutes to send it, or `no` to drop it; otherwise you get "Not sent to <Name>. The question timed out." and nothing goes out.
 A confirmation carries the exact handle that was confirmed, so it always sends to that person even if
 someone else has texted in the meantime. Set it with `RC set confirmGuessed risky|always|off`.
 
 **Plain yes / no (v1.4.1).** While any confirmation is pending (a reply prompt, `/block`, `/add`), a reply
 that is only `yes`, `y`, `yep`, `yeah`, `ok`, `okay`, `send`, `send it` or `do it` (any case, punctuation or
-emoji around it) confirms it, and `no`, `nope` or `cancel` cancels it ("Cancelled. Nothing was sent or
-changed."). These words are **never texted** while a prompt is pending; for 10 minutes after any prompt a
-late `yes` is answered "Nothing is waiting for a yes … nothing was sent" instead of being sent. With no
+emoji around it) confirms it, and `no`, `nope` or `cancel` cancels it ("Cancelled."). These words are **never texted** while a prompt is pending; for 10 minutes after any prompt a
+late `yes` is answered "Nothing is waiting for yes. Send it again." instead of being sent. With no
 prompt in the last 10 minutes, "ok" or "yes" is an ordinary reply.
 
 **New people from Contacts (`confirmNewContacts`, v1.4.1, default `exact-skip`).** A reply that starts with
@@ -574,8 +577,8 @@ a **name only if** the relay list or the Mac's Contacts know it:
 - a relay-list label or name (any case) routes as before;
 - an exact full name on one Contacts card with one number/email follows `confirmNewContacts` (above);
 - a first name or a Contacts **nickname** that fits one card asks first;
-- a **close typo** ("jordn rivera:", "samanta:" for Samantha) asks "❓ Did you mean …? Reply yes within
-  2 min …" and is **never** sent unasked, whatever `confirmNewContacts` says;
+- a **close typo** ("jordn rivera:", "samanta:" for Samantha) asks "Did you mean …? Reply yes within
+  2 min." and is **never** sent unasked, whatever `confirmNewContacts` says;
 - several fits list the names (never numbers) and send nothing.
 Anything else ("Breakfast plan: eggs", "sounds good, see you", "text me later", an unknown "Zed Quark: hi")
 is **ordinary text** and routes like any reply without a name (quote, then whoever wrote last). If the
@@ -589,7 +592,7 @@ one after the window does nothing. The extension recognises the reaction from X 
 on the prompt bubble outside its text); if X changes that markup, type `yes` / `no` instead.
 
 **After a quiet-hours digest.** The first reply once a digest has been delivered must name a person
-(several people may have texted while the owner was away); a bare reply gets "Who's this for?" and the
+(several people may have texted while the owner was away); a bare reply gets "Who is this for?" and the
 next reply routes normally.
 
 **Muting from the relay chat (block).** Muting takes an **explicit command** so an ordinary sentence
@@ -603,9 +606,8 @@ TV", "Block party?" and a bare "block" all send as messages.
 
 **Other commands from the relay chat (owner only, `/`-prefixed, never texted to anyone).** These are
 handled by the Mac before the paused check, so they work even while paused:
-- `/status` — one line: on, paused, or snoozing; version; watcher age; whether Messages is open; how long since a text; who a bare reply would reach. No message text.
-- `/who` — shows who an un-prefixed reply would go to right now, plus the recent senders with their
-  labels and times (no message text).
+- `/status` — one line: on, paused, or snoozing; version; watcher age (`watcher 4s`, `watcher can't read`, or `watcher not seen`); whether Messages is open; how long since a text; `replies to <name>`, `replies unclear`, or `name someone`. No message text.
+- `/who` — `Replies go to <name>, 2m ago. Recent: …` (or `Replies are unclear. …` / `No one to reply to yet. Start with name: your message`). No message text, and never `Recent: none`.
 - `/pause` and `/resume` — stop or restart relaying in both directions. Pause does not keep texts that arrive while it is on (the reply says so and points at `/snooze`). `/resume` also ends a snooze.
 - `/snooze` — hold inbound texts until the next 7:00 AM local, or `/snooze 8h`, or `/snooze until 7:00`. They arrive as one digest. Replies still send. `/resume` ends it.
 - `/help` — a few short lines listing the commands.
@@ -614,7 +616,7 @@ handled by the Mac before the paused check, so they work even while paused:
   so a missing piece shows as ❌ instead of hanging. `/test send` also texts "🧪 relay test" to the
   owner's **own** number (only in live mode; never a contact). See onboarding Step 7 for fixes.
 - `/add <Name>` — names the last unknown person who texted in, e.g. the relay says
-  "Add +1 •••<last four> as Kent? Reply yes within 2 min." and you reply `yes` (or `/add yes`) to save it.
+  "Add Kent (+1 •••<last four>)? Reply yes within 2 min." and you reply `yes` (or `/add yes`) to save it.
 - `/add <Name> <number or email>` (v1.4.0) — adds that person as a contact right away (nothing is sent).
 - `/yes` (or `/yes <Name>`) — confirms a guessed reply (see confirm-when-guessed above), or (v1.4.0) texting
   someone new that the relay found in the Mac's Contacts.
@@ -628,7 +630,7 @@ The routine **never touches the Mac** for photos. They travel through a small **
 owner owns (`bundle/drop/`, deployed once on the owner's Vercel; Cloudflare is community-only):
 1. **Mac.** For each 1:1 photo the watcher makes a private copy (converted to JPEG and downsized to fit
    4 MB with `sips` when needed; GIFs over 4 MB, videos, voice notes and files are not sent, they arrive as
-   a notice like "📎 PDF file, 1.2 MB (not relayed — open Messages to see it)"), reads it into memory and
+   a notice like "PDF file. Couldn’t relay it."), reads it into memory and
    **deletes the copy right away**, encrypts it with a **fresh random AES-256-GCM key** (macOS
    CommonCrypto; associated data `imr-drop-v1:<token>`; wire = nonce ‖ ciphertext ‖ tag) and PUTs only the
    ciphertext to `<dropUrl>/d/<token>` with the drop's **put key**. **v1.4.8 (with `dropWrapKey` set):** the
@@ -637,9 +639,9 @@ owner owns (`bundle/drop/`, deployed once on the owner's Vercel; Cloudflare is c
    nonce ‖ ciphertext ‖ tag, data associated data `imr-drop-v2:<token>`), and the webhook line carries only
    `media:[{token,kind,mime,ext,size,sha256,v:2}]`: no key and no URL, so nothing secret or fragile passes
    through the routine. Without a wrap key (v1.4.7 format) it carries `media:[{token,kind,mime,ext,size,sha256,url,key}]`.
-   No filename, no path either way. Group photos stay "📷 Photo".
-   A failed upload becomes "📷 Photo (couldn't be relayed)". Without a drop (`dropUrl`/`dropKey` unset) a
-   1:1 photo arrives as "📷 Photo".
+   No filename, no path either way. Group photos stay "Photo".
+   A failed upload becomes "<label>: Photo didn’t come through. Open Messages." Without a drop (`dropUrl`/`dropKey` unset) a
+   1:1 photo arrives as "Photo".
 2. **Drop.** Holds ciphertext only (no plaintext, no names, no metadata beyond size and expiry; the
    stored name is a hash of the token), serves each file **once** (deleted before the GET returns), and
    deletes anything unfetched after **10 minutes** (Vercel: private Blob + a per-minute cron sweep, so at
@@ -870,6 +872,7 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.22**: presentation only (Mac helper + routine relay_post.py; the extension stays 1.4.21, so no reload). Chat lines are shorter. A lone emoji reply is unchanged. The conversation header stays `💬 name · time`. A person who is not a contact reads `⚠️ name · not a contact:`. Spam reads `🚫 name · spam:`. Promo and receipt have no icon. Confirmations are `→ name ✓` and `→ name ✓✓`. A held digest is `While you were away · N texts` and still uses • under each name. `/status` says `replies to name`. Health lines are one sentence; the spam count still starts with 🚫. `/test` still starts with `🧪 relay test #` and still uses ✅ and ❌. `⚠️ relay helper error` is unchanged. **Update relay_post.py on the bot**, then re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off. The routine prompt in this document is unchanged.
 **v1.4.21**: a lone emoji sent with X Chat's native Reply on a contact's text reaches that contact (Chrome extension + Mac helper). X draws that emoji as a large glyph outside the message text, so it was ignored and no warning was posted. It now sends, still with the 5 second undo. A reply the relay sees and will not send posts a ⚠️ reason in the chat (history and a low direction score stay quiet). A short word, digits, or an email start within 10 minutes of a prompt is still only a prompt answer. **Reload the extension and press Cmd+R on the x.com chat tab.** Then re-run `./install.sh` (the watcher app is not rebuilt). `relay_post.py` does not change.
 **v1.4.20**: commands in the relay chat (Mac helper + routine relay_post.py; the extension stays 1.4.16, so no reload). `/status` is one short line (on, paused, or snoozing; version; watcher age; Messages open or not; how long since a text; who a bare reply would reach; no message text). If Full Disk Access for iMessage Relay Watcher is off, the chat says how to turn it back on, repeats while it stays off, and says "Watching Messages again." when reads work. If Chrome has not checked in, one line says replies from the phone will not send. `/pause` says texts during the pause are not kept and points at `/snooze`. `/snooze` (next 7:00 AM, or `8h`, or `until 7:00`) holds texts and delivers one digest; `/resume` ends a snooze too. `/help` is a few short lines. The routine prompt in this document is unchanged. **Update relay_post.py on your side** so the Full Disk Access line is the new sentence and those health lines notify. Then re-run `./install.sh` (the watcher app is not rebuilt).
 **v1.4.19**: speed on the current path (Mac helper + routine relay_post.py; the extension stays 1.4.16, so no reload). The watcher notices a chat.db change on the next 0.25 s step instead of ignoring the first second, which was ~1 s while Messages kept rewriting the database. The routine key cache lasts 24 h, so a warm run returns `send` on the first call; a failed encrypt still deletes the cache and asks for a fetch immediately. Direct post is unchanged and stays off. The undo window was already `undoSeconds` (default 5, range 0–10, `relayctl set undoSeconds N`). A shorter routine prompt is proposed at `docs/ROUTINE_PROMPT_FAST.md`; the template in this document is the live one and is not replaced. **Update relay_post.py on your side for the 24 h cache**, then re-run `./install.sh` (the watcher app is not rebuilt).

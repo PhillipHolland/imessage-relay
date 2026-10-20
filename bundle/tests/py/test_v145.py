@@ -42,7 +42,7 @@ class Groups(Base):
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual((r['handle'], r['reason']), (GROUP, 'group'))
         self.assertEqual(self.osa(), [])
-        self.assertEqual(self.kinds('needs_confirm')[-1]['detail'], '\u2753 Reply to the Family group? Reply yes within 2 min.')
+        self.assertEqual(self.kinds('needs_confirm')[-1]['detail'], 'Reply to the Family group? Reply yes within 2 min.')
         return r
 
     def test_exact_name_any_case_asks_then_yes_sends_to_the_chat(self):
@@ -65,7 +65,7 @@ class Groups(Base):
         r = self.send('sounds good')
         self.assertTrue(r.get('needsTarget'), r)
         self.assertEqual(self.osa(), [])
-        self.assertIn("Who's this for?", self.kinds('needs_target')[-1]['detail'])
+        self.assertIn('Who is this for?', self.kinds('needs_target')[-1]['detail'])
 
     def test_confirmed_without_a_prompt_is_refused(self):
         r = self.send('family: cute pup', confirmed=True, handle=GROUP)
@@ -158,7 +158,7 @@ class Trash(Base):
     def test_trash_asks_then_yes_mutes(self):
         r = self.trash('iMessage Sam: buy now')
         self.assertTrue(r.get('needsConfirm'), r)
-        self.assertIn('Block Sam?', self.prompt())
+        self.assertIn('Stop relaying Sam', self.prompt())
         self.assertIn('Reply yes within 2 min', self.prompt())
         self.assertNotIn(SAM, self.muted())
         self.clock.t += 5
@@ -192,7 +192,7 @@ class Trash(Base):
 
     def test_group_line_blocks_the_sender_not_the_group(self):
         self.trash('Family \u00b7 Sam: buy now')
-        self.assertIn('Block Sam?', self.prompt())
+        self.assertIn('Stop relaying Sam', self.prompt())
         self.clock.t += 5
         self.send('yes')
         self.assertIn(SAM, self.muted())
@@ -269,7 +269,7 @@ class Spam(test_watch.Base):
         rp = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(rp)
         out = rp.format_event({'type': 'message', 'id': 'a', 'label': '(555) 555-0166', 'text': 'vote', 'unknown': True})
-        self.assertEqual(out['lines'][0]['text'], '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: vote')
+        self.assertEqual(out['lines'][0]['text'], '\u26a0\ufe0f (555) 555-0166 \u00b7 not a contact: vote')
         out = rp.format_event({'type': 'message', 'id': 'b', 'label': 'Sam', 'text': 'hi'})
         self.assertEqual(out['lines'][0]['text'], 'Sam: hi')
 
@@ -331,7 +331,7 @@ class Batching(test_watch.Base):
         self.w.tick()
         out = rp.format_event(self.poster.calls[0][1])
         self.assertEqual([ln['text'] for ln in out['lines']],
-                         ['Test: one', '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: two'])
+                         ['Test: one', '\u26a0\ufe0f (555) 555-0166 \u00b7 not a contact: two'])
 
 
 

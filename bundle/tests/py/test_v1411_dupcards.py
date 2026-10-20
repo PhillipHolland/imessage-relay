@@ -91,7 +91,7 @@ class Rank(Base):
         self.assertEqual(len(r['options']), 4)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]['detail']
         self.assertEqual(ev.count('\n'), 5)
-        self.assertTrue(ev.startswith('\u2753 Text Jordan Rivera at which?\n1 \u00b7 '), ev)
+        self.assertTrue(ev.startswith('Text Jordan Rivera at which?\n1 \u00b7 '), ev)
         self.assertTrue(ev.endswith('\nReply 1\u20134, or no.'), ev)
 
     def test_confirm_prompt_is_typed_text_not_a_reaction(self):
@@ -103,5 +103,5 @@ class Rank(Base):
                                        now=self.clock.now, poster=self.poster)
         ui = r.get('ui') or {}
         self.assertFalse(ui.get('react'), ui)
-        self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 \u2753 Text Jordan Rivera at which?'))
+        self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 Text Jordan Rivera at which?'))
         self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_confirm'], 'routine copy is deferred')

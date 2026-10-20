@@ -142,7 +142,7 @@ class RoutineV2(unittest.TestCase):
         r = rp.process(self.dreq(drop={'url': DROP, 'get_key': 'g' * 40}), runner=self.runner)
         self.assertEqual((r['action'], r['media_status']), ('send', {'no_key': 1}))
         self.assertEqual(self.gets, [])
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
 
     def test_v2_wrong_wrap_key(self):
         r = rp.process(self.dreq(drop={'url': DROP, 'get_key': 'g' * 40, 'wrap_key': relay_drop.b64u(bytes(32))}),

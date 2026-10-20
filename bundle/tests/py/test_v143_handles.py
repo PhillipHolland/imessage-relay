@@ -72,7 +72,7 @@ class Odd(Base):
         r = self.send('Sounds good thanks')
         self.assertTrue(r.get('needsTarget'), r)
         self.assertEqual(self.osa(), [])
-        self.assertEqual(self.targets()[-1]['detail'], 'Who\'s this for? Start with a name, like "Alex: \u2026"')
+        self.assertEqual(self.targets()[-1]['detail'], 'Who is this for? name: your message, or text name \u2026')
         self.assertFalse(self.confirms())
         self.assertNotIn('Sounds good', read_log())
 
@@ -106,14 +106,14 @@ class Odd(Base):
         self.last(RORY, 'Rory')
         r = self.send('On my way')
         self.assertTrue(r.get('needsConfirm'), r)
-        self.assertEqual(self.confirms()[-1]['detail'], '\u2753 Reply to Rory? Reply yes within 2 min.')
+        self.assertEqual(self.confirms()[-1]['detail'], 'Reply to Rory? Reply yes within 2 min.')
 
     def test_guess_prompt_masks_unknown_number(self):
         self.last(NOBODY, '(555) 555-0144')
         r = self.send('On my way')
         self.assertTrue(r.get('needsConfirm'), r)
         ev = self.confirms()[-1]
-        self.assertEqual(ev['detail'], '\u2753 Reply to +1 \u2022\u2022\u20220144 (\u26a0\ufe0f not in Contacts)? Reply yes within 2 min.')
+        self.assertEqual(ev['detail'], 'Reply to +1 \u2022\u2022\u20220144 (\u26a0\ufe0f not in Contacts)? Reply yes within 2 min.')
         self.assertNotIn('555-0144', json.dumps(ev))
         self.clock.t += 5
         r = self.send('On my way', confirmed=True, handle=NOBODY)

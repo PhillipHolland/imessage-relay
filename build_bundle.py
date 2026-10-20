@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.21, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.22, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=347bb8f57a3907ca988af776593706935f3f6121137acec9c3831adf8ad20bab nl=1
-# iMessage Relay v1.4.21
+@@@@ FILE README.md mode=644 sha256=dc78e39eabc316bebb7c4a8ae94f14eb0801659c894946d693f1a49c9f02723a nl=1
+# iMessage Relay v1.4.22
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -40,7 +40,8 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   `{token, url, size, sha256, key}`, still accepted); the bot downloads the ciphertext once, checks
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
-  upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+  upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.22 (Mac helper + routine relay_post.py; the extension stays 1.4.21, so no reload): chat lines are shorter. The conversation header stays `💬 name · time`. Someone who is not a contact reads `⚠️ name · not a contact:`. Spam reads `🚫 name · spam:`. Promo and receipt have no icon. A confirmation is `→ name ✓` or `→ name ✓✓`. A held digest is `While you were away · N texts` and still uses • under each name. `/status` says `replies to name`. Health lines are one sentence; the spam count still starts with 🚫. `/test` is unchanged. **Update relay_post.py on the bot**, then re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.21 (Chrome extension + Mac helper): a lone emoji sent with X Chat's Reply on a contact's text reaches that contact. X draws that emoji as a large glyph, not as message text, so it used to be ignored with no warning. The usual 5 second undo still applies. A reply the relay sees and will not send posts a ⚠️ reason in the chat. A short word, digits, or an email start within 10 minutes of a prompt is still only a prompt answer. Reload the extension, then press Cmd+R on the x.com chat tab. Re-run `./install.sh` (the watcher app is not rebuilt). `relay_post.py` does not change.
 - v1.4.20 (Mac helper + routine relay_post.py; extension stays 1.4.16): `/status` is one short line in the relay chat. A lost Full Disk Access grant repeats, with the fix, and one line says when Messages is readable again. Chrome not checking in gets a line too. `/pause` says texts during the pause are not kept. `/snooze` holds them for one digest (default the next 7:00 AM). `/help` is a few short lines. Replace `relay_post.py` on the bot so health lines notify, then re-run `./install.sh` (the watcher app is not rebuilt; no extension reload).
 - v1.4.19 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new text is noticed on the
@@ -185,7 +186,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.21)
+## Limits (v1.4.22)
 - A lone emoji used as a native Reply to a contact's text is sent to that contact. An emoji that does not quote a contact, within 10 minutes of a prompt, is still only a prompt answer.
 - `/snooze` holds inbound texts the same way quiet hours do, then delivers one digest. A command can set at most 24 hours; a hand-edited time more than 36 hours ahead is ignored. `/pause` does not keep texts.
 - "Chrome hasn't checked in" means the extension has not talked to the Mac. Closing the chat tab while Chrome stays open does not raise it.
@@ -4023,10 +4024,10 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=b4a8320d7fe658298d8e3195cec365dd8e0cf535d05cf5d8881be474ab537dec nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=ff9c9db818ae49b55ca3cc5e45c9b71be7fab8a10631125f5f1a310311f2f47b nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.21.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.22.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -4399,15 +4400,15 @@ def handle_command(cmd, quoted, cfg, now, poster):
         if cmd['confirm']:
             pend = _take_pending_block(now())
             if not pend:
-                detail = 'Nothing to confirm \u2014 send "/block <name>" first (confirmations expire after 2 minutes).'
+                detail = 'Nothing is waiting to confirm. /block name. It expires after 2 minutes.'
                 return dict(base, ok=False, error=detail)
             if cmd['target']:
                 # "/block Bob yes" must confirm only the staged target, never a different one (item N2).
                 tgt = resolve_mute_target(cmd['target'], '', cfg, now())
                 if tgt.get('handle') and tgt['handle'] != pend['handle']:
                     _store_pending_block(pend['handle'], pend['label'], pend['at'])   # keep the staged one
-                    detail = ('That name doesn\u2019t match the block waiting on %s. Reply yes to '
-                              'mute %s, or "/block %s" to start over.' % (pend['label'], pend['label'], tgt['label']))
+                    detail = ('That doesn\u2019t match the block for %s. Reply yes to '
+                              'mute %s, or /block %s to start over.' % (pend['label'], pend['label'], tgt['label']))
                     return dict(base, ok=False, needsConfirm=True, label=pend['label'], error=detail)
             if not cfg['dryRun']:
                 toggle_mute(pend['handle'], True)      # dry run previews only; never mutates config
@@ -4418,19 +4419,19 @@ def handle_command(cmd, quoted, cfg, now, poster):
             return dict(base, ok=True, muted=True, label=pend['label'], action='blocked')
         tgt = resolve_mute_target(cmd['target'], quoted, cfg, now())
         if tgt.get('needsTarget'):
-            detail = 'Who do you want to block? Reply to their message, or say "/block <name>".'
+            detail = 'Who do you want to block? Reply to their message, or /block name.'
             rc.log_event('needs_target', reason=tgt['reason'], action='block')
             notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': tgt['reason'], 'at': rc.iso_utc(now())})
             return dict(base, ok=False, needsTarget=True, error=detail, reason=tgt['reason'])
         _store_pending_block(tgt['handle'], tgt['label'], now())
         _note_prompt(now())
-        detail = 'To stop relaying %s, reply yes within 2 min (no to cancel).' % tgt['label']
+        detail = 'Stop relaying %s? Reply yes within 2 min.' % tgt['label']
         notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'confirm-block', 'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=tgt['label'], error=detail)
     # unblock: safe, no confirmation
     tgt = resolve_mute_target(cmd['target'], quoted, cfg, now())
     if tgt.get('needsTarget'):
-        detail = 'Who do you want to unblock? Say "/unblock <name>".'
+        detail = 'Who do you want to unblock? /unblock name.'
         rc.log_event('needs_target', reason=tgt['reason'], action='unblock')
         notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': tgt['reason'], 'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsTarget=True, error=detail, reason=tgt['reason'])
@@ -4447,12 +4448,12 @@ def handle_command(cmd, quoted, cfg, now, poster):
 # can /resume. None of them ever sends an iMessage, so they are safe while paused.
 HELP_TEXT = ('/status \u00b7 /who\n'
              '/pause \u00b7 /resume \u00b7 /snooze\n'
-             '/block Name \u00b7 /unblock Name\n'
-             '/add Name\n'
-             'Sam: your message\n'
+             '/block name \u00b7 /unblock name\n'
+             '/add name\n'
+             'name: your message\n'
              '/test \u00b7 /help')
 PAUSE_DETAIL = ('Paused. Texts that arrive while paused are not kept. '
-                '/resume turns relaying back on, or /snooze to hold them for a digest.')
+                '/resume, or /snooze to hold them.')
 _OWNER_CMD_RE = re.compile(r'^/(who|pause|resume|help|add|test|status|snooze)\b\s*(.*)$', re.I | re.S)
 ADD_WINDOW_S = 120.0
 
@@ -4509,16 +4510,15 @@ def who_summary(cfg, now_t):
     live = sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] == 'contact'
                    and e['handle'] not in muted and 0 <= now_t - e['lastInboundAt'] <= window],
                   key=lambda e: -e['lastInboundAt'])
-    if not live:
-        target = 'no one yet \u2014 start a reply with a name, like "Sam: \u2026"'
-    elif len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
-        target = 'unclear (two people wrote close together) \u2014 start with a name'
-    else:
-        target = live[0]['label'] + ' (' + rc.ago(now_t - live[0]['lastInboundAt']) + ')'
     recents = sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] in ('contact', 'roster')],
                      key=lambda e: -e['lastInboundAt'])[:5]
-    recent = ', '.join('%s %s' % (e['label'], rc.ago(now_t - e['lastInboundAt'])) for e in recents) or 'none'
-    return 'A bare reply goes to: %s. Recent texters: %s.' % (target, recent)
+    recent = ', '.join('%s %s' % (e['label'], rc.ago(now_t - e['lastInboundAt'])) for e in recents)
+    recent_bit = (' Recent: %s.' % recent) if recent else ''
+    if not live:
+        return 'No one to reply to yet. Start with name: your message' + recent_bit
+    if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
+        return 'Replies are unclear. Two people wrote close together. Start with a name.' + recent_bit
+    return 'Replies go to %s, %s.%s' % (live[0]['label'], rc.ago(now_t - live[0]['lastInboundAt']), recent_bit)
 
 
 def _parse_iso(s):
@@ -4556,7 +4556,7 @@ def bare_reply_name(cfg, now_t):
 
 
 def status_line(cfg, now_t):
-    """One body-free line for /status. Ages and names only; the routine adds the ℹ️ prefix."""
+    """One body-free line for /status. Ages and names only. The routine posts this text as-is."""
     st = rc.read_json(os.path.join(rc.APP_DIR, 'status.json'), {}) or {}
     if cfg['paused']:
         state = 'Paused'
@@ -4565,14 +4565,14 @@ def status_line(cfg, now_t):
     else:
         state = 'On'
     if st.get('chatDb') == 'unavailable':
-        watcher = 'watcher blind'
+        watcher = 'watcher can\u2019t read'
     else:
         at = _parse_iso(st.get('lastTickAt'))
         if at is None:
-            watcher = 'watcher unseen'
+            watcher = 'watcher not seen'
         else:
             n, u = _age_unit(now_t - at)
-            watcher = 'watcher %d%s ago' % (n, u)
+            watcher = 'watcher %d%s' % (n, u)
     mr = st.get('messagesRunning')
     messages = 'Messages open' if mr is True else 'Messages closed' if mr is False else 'Messages not checked'
     fwd = _parse_iso(st.get('lastForwardAt'))
@@ -4583,8 +4583,15 @@ def status_line(cfg, now_t):
     else:
         n, u = _age_unit(now_t - fwd)
         last = 'last text %d%s' % (n, u)
-    return '%s \u00b7 v%s \u00b7 %s \u00b7 %s \u00b7 %s \u00b7 bare reply \u2192 %s' % (
-        state, rc.VERSION, watcher, messages, last, bare_reply_name(cfg, now_t))
+    who = bare_reply_name(cfg, now_t)
+    if who == 'unclear':
+        reply = 'replies unclear'
+    elif who == 'name someone':
+        reply = 'name someone'
+    else:
+        reply = 'replies to ' + who
+    return '%s \u00b7 v%s \u00b7 %s \u00b7 %s \u00b7 %s \u00b7 %s' % (
+        state, rc.VERSION, watcher, messages, last, reply)
 
 
 def last_unknown_texter(cfg):
@@ -4640,27 +4647,27 @@ def handle_add(oc, cfg, now, poster):
         h = rc.normalize_handle(oc['handle'], cfg['defaultCountryCode'])
         detail = None
         if not name:
-            detail = 'Say "/add <Name> <number>".'
+            detail = '/add name and the number.'
         elif not rc.valid_handle(h):
-            detail = 'That doesn\u2019t look like a phone number or email. Say "/add %s +1 555 555 0123".' % name
+            detail = 'That doesn\u2019t look like a phone number or email. /add %s and the number.' % name
         elif h in rc.owner_handle_set(cfg):
-            detail = 'That\u2019s your own number; it can\u2019t be a relay contact.'
+            detail = 'That\u2019s your own number. It can\u2019t be a contact.'
         if detail:
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, command='add', error=detail)
         if cfg['dryRun']:
-            detail = '(dry run) would add %s as %s. Nothing changed.' % (rc.mask_handle(h), name)
+            detail = 'Dry run. Would add %s (%s).' % (name, rc.mask_handle(h))
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=True, command='add', dryRun=True, added=name)
         add_contact(h, name)
         rc.log_event('contact_added', via='command-handle')
-        detail = 'Added %s (%s). Start a reply with "%s: \u2026" to text them.' % (name, rc.mask_handle(h), name)
+        detail = 'Added %s (%s).' % (name, rc.mask_handle(h))
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='add', added=name)
     if oc.get('confirm'):
         pend = _take_pending_add(now())
         if not pend:
-            detail = 'Nothing to add \u2014 say "/add <Name>" first (the offer expires after 2 minutes).'
+            detail = 'Nothing is waiting to add. /add name. It expires after 2 minutes.'
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, command='add', error=detail)
         # Nit: "/add <Name> yes" must name the SAME person that was staged; a mismatch is refused (and the
@@ -4668,32 +4675,32 @@ def handle_add(oc, cfg, now, poster):
         cname = (oc.get('name') or '').strip()
         if cname and cname.lower() != str(pend['name']).lower():
             _store_pending_add(pend['handle'], pend['name'], float(pend.get('at') or now()))
-            detail = 'That name doesn\u2019t match the pending add (%s). Say "/add yes" or "/add %s yes".' % (pend['name'], pend['name'])
+            detail = 'That doesn\u2019t match the add for %s. /add yes' % pend['name']
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=False, command='add', error=detail)
         if cfg['dryRun']:
             # Nit: dry run never writes config.
-            detail = '(dry run) would add %s as %s. Nothing changed.' % (rc.mask_handle(pend['handle']), pend['name'])
+            detail = 'Dry run. Would add %s (%s).' % (pend['name'], rc.mask_handle(pend['handle']))
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return dict(base, ok=True, command='add', dryRun=True, added=pend['name'])
         add_contact(pend['handle'], pend['name'])
         rc.log_event('contact_added', via='command')
-        detail = 'Added %s. Their texts now relay, and you can reply by name.' % pend['name']
+        detail = 'Added %s.' % pend['name']
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='add', added=pend['name'])
     name = oc.get('name') or ''
     if not name:
-        detail = 'Who do you want to add? Say "/add <Name>".'
+        detail = 'Who do you want to add? /add name'
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=False, command='add', needsTarget=True, error=detail)
     who = last_unknown_texter(cfg)
     if not who:
-        detail = 'No recent unknown number to add. (/add saves the last person who texted you who isn\u2019t a contact yet.)'
+        detail = 'No recent unknown number to add.'
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=False, command='add', needsTarget=True, error=detail)
     _store_pending_add(who['handle'], name, now())
     _note_prompt(now())
-    detail = 'Add %s as %s? Reply yes within 2 min.' % (rc.mask_handle(who['handle']), name)
+    detail = 'Add %s (%s)? Reply yes within 2 min.' % (name, rc.mask_handle(who['handle']))
     notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
     return dict(base, ok=False, command='add', needsConfirm=True, label=name)
 
@@ -4712,7 +4719,7 @@ def handle_owner_command(oc, quoted, cfg, now, poster):
             set_run_state(False, None)
         rc.log_event('resumed', via='command')
         notify(cfg, poster, {'type': 'status', 'status': 'resumed',
-                             'detail': 'Resumed. Relaying is back on.', 'at': rc.iso_utc(now())})
+                             'detail': 'Relaying is back on.', 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='resume', paused=False)
     if c == 'snooze':
         until, err = rc.parse_snooze(oc.get('rest') or '', now())
@@ -4722,7 +4729,7 @@ def handle_owner_command(oc, quoted, cfg, now, poster):
         until = int(round(float(until)))
         set_run_state(False, until)        # hold like quiet hours; do not use the pause cursor
         rc.log_event('snoozed', seconds=max(0, int(until - now())))
-        detail = 'Snoozing until %s. Tonight\u2019s texts arrive as one digest. /resume' % rc.format_clock(until)
+        detail = 'Snoozing until %s. Texts arrive as one digest. /resume' % rc.format_clock(until)
         notify(cfg, poster, {'type': 'status', 'status': 'snoozing', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='snooze', snoozeUntil=int(until))
     if c == 'help':
@@ -4982,7 +4989,7 @@ def handle_pending_pick(text, cfg, now, poster, quoted=''):
     if not (isinstance(p, dict) and p.get('options') and now() - float(p.get('at') or 0) <= PICK_WINDOW_S):
         # v1.4.14/15: a short answer-like reply right after ANY prompt is an answer, never a text
         if short_answer(text) and now() - float(state.get('lastPromptAt') or 0) <= PICK_WINDOW_S:
-            detail = 'That isn\u2019t one of the choices, so nothing was sent. Start with a name to text someone.'
+            detail = 'That isn\u2019t a choice. Nothing was sent.'
             rc.log_event('pick_unresolved', resolved=False, pending=False)
             notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
             return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
@@ -4990,12 +4997,11 @@ def handle_pending_pick(text, cfg, now, poster, quoted=''):
     like, h = pick_answer(text, p['options'])
     if not like and not short_answer(text):
         return None
-    name = rc.clean_label(p.get('name') or '') or 'them'
+    name = rc.clean_label(p.get('name') or '') or 'name'
     if h:
-        detail = ('That pick came in, but the message waiting for it is gone (the extension restarted?), so '
-                  'nothing was sent. Send it again starting with %s:' % name)
+        detail = 'That choice expired. Send it again, starting with %s:' % name
     else:
-        detail = 'That isn\u2019t one of the choices. Reply 1\u2013%d, or no. Nothing was sent.' % len(p['options'])
+        detail = 'Reply 1\u2013%d, or no. Nothing was sent.' % len(p['options'])
     rc.log_event('pick_unresolved', resolved=bool(h))
     notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
     return {'dryRun': cfg['dryRun'], 'ok': True, 'skipped': detail}
@@ -5051,7 +5057,7 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
         df = route['dirFuzzy']
         _store_pending_new(df['handle'], df['label'], now(), prefix=df['name'], existing=True)
         _note_prompt(now())
-        detail = '\u2753 Did you mean %s? Reply yes within 2 min to send it to %s (no to cancel).' % (df['label'], df['label'])
+        detail = 'Did you mean %s? Reply yes within 2 min.' % df['label']
         notify(cfg, poster, {'type': 'needs_confirm', 'label': df['label'], 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=df['label'], handle=df['handle'], reason='new_contact',
@@ -5060,8 +5066,7 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
         m = fuzzy[0]
         _store_pending_new(m['handle'], m['name'], now(), prefix=name)
         _note_prompt(now())
-        detail = ('\u2753 Did you mean %s? Reply yes within 2 min to text the %s in your Contacts (%s), or no to '
-                  'cancel.' % (m['name'], m['name'], rc.mask_handle(m['handle'])))
+        detail = 'Text %s (%s)? Reply yes within 2 min.' % (m['name'], rc.mask_handle(m['handle']))
         notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
@@ -5089,11 +5094,10 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
             # v1.4.12: one choice per line; he may answer the index, a phone's last 4 digits or an email's start
             def opt(i, x):
                 return '%d \u00b7 %s%s' % (i + 1, _short_mask(x['handle']), (' ' + x['label']) if x.get('label') else '')
-            detail = '\u2753 Text %s at which?\n%s\nReply 1\u2013%d, or no.' % (
+            detail = 'Text %s at which?\n%s\nReply 1\u2013%d, or no.' % (
                 m['name'], '\n'.join(opt(i, x) for i, x in enumerate(hs)), len(hs))
         else:
-            detail = ('\u2753 %s isn\u2019t on your relay list yet. Reply yes within 2 min to text the %s in your '
-                      'Contacts (%s), or /add %s <number>.' % (first, m['name'], rc.mask_handle(m['handle']), first))
+            detail = 'Text %s (%s)? Reply yes within 2 min.' % (m['name'], rc.mask_handle(m['handle']))
         notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
         r = dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
@@ -5104,18 +5108,16 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
     if matches and ' ' in name.strip():
         # v1.4.11: he already typed a full name; never tell him to "start with the full name"
         names = ', '.join(x['name'] for x in matches[:3]) + (', \u2026' if len(matches) > 3 else '')
-        detail = ('%s isn\u2019t on your relay list yet, and several Contacts match: %s. Reply /add %s <number>.'
+        detail = ('%s isn\u2019t on your list. Matches: %s. /add %s and the number.'
                   % (name, names, first))
     elif matches:
-        names = ', '.join(x['name'] for x in matches[:3]) + (', \u2026' if len(matches) > 3 else '')
-        detail = ('%s isn\u2019t on your relay list yet, and your Contacts have more than one: %s. Start with the full '
-                  'name ("%s: \u2026"), or /add %s <number>.' % (first, names, matches[0]['name'], first))
+        detail = 'More than one %s. Start with %s: your message' % (first, matches[0]['name'])
     elif res is None:
-        detail = ('%s isn\u2019t on your relay list yet (I couldn\u2019t check your Contacts just now). Reply /add %s '
-                  '<number>.' % (first, first))
+        detail = ('%s isn\u2019t on your list, and Contacts didn\u2019t answer. /add %s and the number.'
+                  % (first, first))
     else:
-        detail = ('%s isn\u2019t on your relay list yet, and I didn\u2019t find "%s" in your Contacts. Reply /add %s '
-                  '<number>.' % (first, name, first))
+        detail = ('%s isn\u2019t on your list, and isn\u2019t in Contacts. /add %s and the number.'
+                  % (first, first))
     notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'unknown-name', 'at': rc.iso_utc(now())})
     return dict(base, ok=False, needsTarget=True, error=detail, reason='unknown-name')
 
@@ -5168,7 +5170,7 @@ def handle_bare_confirm(word, quoted, cfg, now, poster):
             return handle_add({'cmd': 'add', 'name': '', 'confirm': True}, cfg, now, poster)
         if not recent:
             return None
-        detail = 'Nothing is waiting for a yes (confirmations expire after 2 minutes), so nothing was sent. Send your message again.'
+        detail = 'Nothing is waiting for yes. Send it again.'
     else:
         if not (block or add or recent):
             return None
@@ -5179,7 +5181,7 @@ def handle_bare_confirm(word, quoted, cfg, now, poster):
                 st.pop(k, None)
             rc.write_json_atomic(STATE_PATH, st)
         _with_host_lock(fn)
-        detail = 'Cancelled. Nothing was sent or changed.'
+        detail = 'Cancelled.'
     rc.log_event('bare_confirm', word=word, pending=bool(block or add))
     notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(t)})
     return dict(base, ok=True, skipped=detail)
@@ -5205,15 +5207,14 @@ def handle_trash_reaction(msg, cfg, now, poster):
     if st == 'match':
         tgt = by.get(h)
     if not tgt:
-        detail = "Couldn\u2019t tell whose message that was. To block someone, say \"/block <name>\"."
+        detail = 'Couldn\u2019t tell whose message that was. /block name.'
         rc.log_event('needs_target', reason='trash-unresolved', action='block')
         notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'trash-unresolved', 'at': rc.iso_utc(now())})
         return dict(base, ok=False, needsTarget=True, error=detail)
     shown = rc.guess_label(tgt)
     _store_pending_block(tgt['handle'], tgt['label'], now())
     _note_prompt(now())
-    detail = ('\U0001f5d1\ufe0f Block %s? Their texts stop relaying here (Messages is not changed). '
-              'Reply yes within 2 min (no to cancel).' % shown)
+    detail = 'Stop relaying %s here? Messages stays as it is. Reply yes within 2 min.' % shown
     rc.log_event('needs_confirm', reason='trash-block')
     notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'confirm-block', 'at': rc.iso_utc(now())})
     return dict(base, ok=False, needsConfirm=True, label=tgt['label'])
@@ -5247,7 +5248,8 @@ def _short_mask(handle):
     return m.split(' ', 1)[1] if m.startswith('+') and ' ' in m else m
 
 
-_UI_PROMPT_RE = re.compile(r'reply yes within 2 min|^\s*who\u2019?\'?s this for\?', re.I)
+_UI_PROMPT_RE = re.compile(
+    r"reply yes within 2 min|^\s*who(?:\u2019s|'s| is) this for\?", re.I)
 
 
 def is_relay_ui_text(text):
@@ -5313,8 +5315,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if '\u2022\u2022\u2022' in text or re.search(r'Reply 1\u2013\d, or no|Reply yes within 2 min', text) or rc.HEADER_LINE_RE.match(text):
         # v1.4.15: text that came from a prompt or a masked preview row is never his reply
         rc.log_event('refused_prompt_text', textLength=len(text))
-        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That text looks like a relay prompt, not your reply, '
-                             'so nothing was sent.', 'at': rc.iso_utc(now())})
+        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That looked like a prompt, so nothing was sent.',
+                             'at': rc.iso_utc(now())})
         return refuse('text from a prompt row', textLength=len(text))
     if not msg.get('confirmed'):
         r = handle_pending_pick(text, cfg, now, poster, quoted)
@@ -5325,7 +5327,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         return handle_command(cmd, quoted, cfg, now, poster)
     hint = bare_command_hint(text, cfg)
     if hint:                                  # bare "block"/"unblock [known name]" -> nudge, send nothing (item N1)
-        detail = 'Did you mean /%s \u2026? Nothing was sent.' % hint
+        detail = 'Did you mean /%s? Nothing was sent.' % hint
         rc.log_event('bare_command_hint', verb=hint)
         notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'bare-command', 'at': rc.iso_utc(now())})
         return dict(base, ok=True, skipped='bare "%s" is not a command (use /%s)' % (hint, hint))
@@ -5433,12 +5435,12 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             # v1.4.5: a reply to a group (exact name or a quote of its message) is ALWAYS confirmed first.
             guid = group_guid_lookup(handle, sleeper, now)
             if not guid:
-                detail = "Can't reach the %s group right now (the Mac helper didn't answer). Nothing was sent." % contact['label']
+                detail = 'Can\u2019t reach the %s group right now. Nothing was sent.' % contact['label']
                 rc.log_event('group_unavailable', routedBy=by, textLength=len(body))
                 notify(cfg, poster, {'type': 'needs_target', 'detail': detail, 'reason': 'group-unavailable', 'at': rc.iso_utc(now())})
                 return dict(base, ok=False, needsTarget=True, error=detail, reason='group-unavailable')
             _store_pending_group(handle, guid, contact['label'], now())
-            detail = '\u2753 Reply to the %s group? Reply yes within 2 min.' % contact['label']
+            detail = 'Reply to the %s group? Reply yes within 2 min.' % contact['label']
             rc.log_event('needs_confirm', routedBy=by, reason='group', textLength=len(body))
             _note_prompt(now())
             notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'reason': 'group',
@@ -5451,7 +5453,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             c = route['confirm']
             alt = c.get('altLabel')
             detail = ('Send to %s instead of %s?' % (contact['label'], alt)) if alt else ('Send to %s?' % contact['label'])
-            detail = '❓ ' + detail + ' Reply yes within 2 min.'
+            detail = detail + ' Reply yes within 2 min.'
             rc.log_event('needs_confirm', routedBy=by, reason='directive', textLength=len(body))
             _note_prompt(now())
             notify(cfg, poster, {'type': 'needs_confirm', 'label': contact['label'], 'alt': alt or '',
@@ -5467,7 +5469,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if must_ask or (by == 'recent' and cfg['confirmGuessed'] != 'off'
                         and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
             shown = rc.guess_label(contact)          # v1.4.3: Contacts name, else masked handle + warning
-            detail = '❓ Reply to %s? Reply yes within 2 min.' % shown
+            detail = 'Reply to %s? Reply yes within 2 min.' % shown
             rc.log_event('needs_confirm', routedBy=by, reason='guessed', textLength=len(body),
                          inContacts=shown == contact['label'])
             _note_prompt(now())
@@ -5603,18 +5605,18 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
 _REFUSAL_SILENT = {'relayConversationId not set in config', 'not the relay conversation', 'attachments could not be read',
                    'refusing to echo a relayed message back to its sender', 'refusing to send one of my own relay messages'}
 _REFUSAL_TEXT = {
-    'empty text': 'That message had nothing I could send as an iMessage.',
-    'empty text after the name prefix': 'There was nothing after the name to send. Type the message after "{label}:".',
-    'text too long': 'It is too long to relay (limit %d characters).' % MAX_TEXT,
-    'paused': 'The relay is paused, so nothing was sent. /resume turns it back on.',
-    'no contacts in config': 'No contacts are set up yet, so nothing was sent (/add Name +1 \u2026).',
-    'confirmed reply without a target handle': 'That yes no longer matched a waiting reply. Send the reply again.',
-    'confirmed group send without a pending group prompt': 'That yes no longer matched a waiting group reply. Send it again.',
-    'confirmed handle is not a current recipient': 'That yes no longer matched a waiting reply. Send the reply again.',
-    'confirmed group send no longer names that group': 'That reply no longer names the group. Send it again.',
-    'the routed recipient does not match the handle the extension reported': 'The recipient changed while sending. Send it again.',
-    'refusing to relay to the owner handle': 'That would text your own number. Use /test send for a self-test.',
-    'bad attachment': 'An attachment was damaged on the way to the Mac. Attach it again.',
+    'empty text': 'There was nothing to send.',
+    'empty text after the name prefix': 'Nothing came after \u201c{label}:\u201d.',
+    'text too long': 'Over %d characters.' % MAX_TEXT,
+    'paused': 'The relay is paused. /resume',
+    'no contacts in config': 'No contacts are set up yet. /add name and the number.',
+    'confirmed reply without a target handle': 'That yes expired. Send it again.',
+    'confirmed group send without a pending group prompt': 'That yes expired. Send it again.',
+    'confirmed handle is not a current recipient': 'That yes expired. Send it again.',
+    'confirmed group send no longer names that group': 'That no longer names the group. Send it again.',
+    'the routed recipient does not match the handle the extension reported': 'The recipient changed. Send it again.',
+    'refusing to relay to the owner handle': 'That would text your own number. /test send',
+    'bad attachment': 'The attachment was damaged. Attach it again.',
 }
 
 
@@ -5623,9 +5625,13 @@ def _tell_refusal(reason, label, cfg, poster, now):
         return
     detail = _REFUSAL_TEXT.get(reason)
     if detail is None:
-        detail = ('An attachment is over the limit. ' if reason.startswith(('too many attachments', 'attachment too large')) else '') + \
-                 'It was not sent (%s).' % reason[:80]
-    detail = detail.replace('{label}', rc.clean_label(label) or 'Name')
+        if reason.startswith('attachment too large'):
+            detail = 'The attachment is over 25 MB.'
+        elif reason.startswith('too many attachments'):
+            detail = 'Too many attachments.'
+        else:
+            detail = 'That reply was not sent.'
+    detail = detail.replace('{label}', rc.clean_label(label) or 'name')
     if _UI['on'] and _UI['uuid'] and cfg.get('uiReactions', True):
         _UI['react'].append({'emoji': '\u26a0\ufe0f', 'uuid': _UI['uuid']})    # instant, on his own message
     try:
@@ -5739,10 +5745,10 @@ def handle_test(msg, cfg, runner, sleeper, now, poster):
 
 # v1.4.21: the extension saw a reply and will not send it. Fixed sentences, never the message.
 _SKIP_REASON = {
-    'empty': 'That message had nothing I could send as an iMessage.',
-    'paused': 'The relay is paused, so nothing was sent. /resume turns it back on.',
-    'no_contacts': 'No contacts are set up yet, so nothing was sent (/add Name +1 \u2026).',
-    'host_down': 'The Mac helper isn\u2019t connected, so nothing was sent.',
+    'empty': 'There was nothing to send.',
+    'paused': 'The relay is paused. /resume',
+    'no_contacts': 'No contacts are set up yet. /add name and the number.',
+    'host_down': 'The Mac helper isn\u2019t connected.',
     'other': 'That reply was not sent.',
 }
 
@@ -5773,7 +5779,7 @@ def handle_signal(msg, cfg, now, poster):
         # v1.4.1: the owner answered a reply prompt with "no" / "cancel" (the extension dropped the text)
         label = str(msg.get('label') or '').strip()
         rc.log_event('signal', status='guess_cancelled')
-        detail = ('Cancelled. Nothing was sent to %s.' % label) if label else 'Cancelled. Nothing was sent.'
+        detail = ('Cancelled. Nothing sent to %s.' % label) if label else 'Cancelled.'
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return {'ok': True}
     if status == 'guess_expired':
@@ -5785,8 +5791,8 @@ def handle_signal(msg, cfg, now, poster):
     if status == 'typed_mismatch':
         # v1.4.14: the extension read his bubble back differently from what he typed and sent nothing
         rc.log_event('signal', status='typed_mismatch')
-        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That message read back differently from what you '
-                             'typed, so nothing was sent. Please send it again.', 'at': rc.iso_utc(now())})
+        notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That didn\u2019t match what you typed. Send it again.',
+                             'at': rc.iso_utc(now())})
         return {'ok': True}
     if status in ('test_seen', 'test_unseen'):
         # v1.3.8 /test: the extension saw (or gave up waiting for) the routine's report. Local only.
@@ -5899,7 +5905,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=f62f55325962aab8150af7fa265fd86285618b299dd4c9b3f2ca2e35d50dc38d nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=0024eaa20c23c57a481b370a589285bc0e52741d41d0d64c64a9d68cc0b2f448 nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -6013,10 +6019,10 @@ LOOP_STEP_S = 0.25           # v1.4.13: idle loop granularity (jobs, chat.db cha
 GROUP_STYLE = 43          # chat.style: 43 = group, 45 = 1:1
 MESSAGES_NOT_RUNNING_DETAIL = ('Messages is not running on the Mac. New iMessages and replies may stall '
                                'until it is opened again.')
-FDA_DETAIL = ("\u26a0\ufe0f Texts stopped: Full Disk Access for iMessage Relay Watcher is off. "
-              "Drag that app into System Settings \u2192 Privacy & Security \u2192 Full Disk Access.")
+FDA_DETAIL = ("\u26a0\ufe0f Texts stopped. Turn on Full Disk Access for iMessage Relay Watcher. "
+              "System Settings \u2192 Privacy & Security \u2192 Full Disk Access.")
 RECOVERED_DETAIL = 'Watching Messages again.'
-CHROME_AWAY = ("Chrome hasn\u2019t checked in, so replies from your phone won\u2019t send. "
+CHROME_AWAY = ("Chrome hasn\u2019t checked in, so replies won\u2019t send. "
                "Open Chrome on the Mac.")
 CHROME_BACK = 'Chrome is open again. Replies will send.'
 RESYNC_DETAIL = ('The watcher was offline for a while or Messages rebuilt its database, so a large backlog was '
@@ -6157,7 +6163,7 @@ def attachment_placeholder(con, rowid, is_audio):
     """A metadata-only placeholder for an attachment/audio message (item 4): photo / N photos / video /
     sticker / a file's transfer_name / voice message. Reads only names and mime types, never bytes."""
     if is_audio:
-        return '\U0001f3a4 Voice message'
+        return 'Voice message'
     try:
         rows = con.execute('SELECT a.transfer_name, a.mime_type, a.is_sticker FROM attachment a '
                            'JOIN message_attachment_join j ON j.attachment_id = a.ROWID WHERE j.message_id = ?',
@@ -6165,9 +6171,9 @@ def attachment_placeholder(con, rowid, is_audio):
     except sqlite3.Error:
         rows = []
     if not rows:
-        return '\U0001f4ce Attachment'
+        return 'Attachment'
     if any(r[2] for r in rows):
-        return '\U0001f9f7 Sticker'
+        return 'Sticker'
     kinds = []
     for name, mime, _ in rows:
         m = str(mime or '').lower()
@@ -6182,17 +6188,17 @@ def attachment_placeholder(con, rowid, is_audio):
     if len(kinds) == 1:
         k, name = kinds[0]
         if k == 'photo':
-            return '\U0001f4f7 Photo'
+            return 'Photo'
         if k == 'video':
-            return '\U0001f3a5 Video'
+            return 'Video'
         if k == 'audio':
-            return '\U0001f3a4 Voice message'
-        return '\U0001f4ce ' + (str(name)[:60] if name else 'File')
+            return 'Voice message'
+        return str(name)[:60] if name else 'File'
     if all(k[0] == 'photo' for k in kinds):
-        return '\U0001f4f7 %d photos' % len(kinds)
+        return '%d photos' % len(kinds)
     if all(k[0] == 'video' for k in kinds):
-        return '\U0001f3a5 %d videos' % len(kinds)
-    return '\U0001f4ce %d attachments' % len(kinds)
+        return '%d videos' % len(kinds)
+    return '%d attachments' % len(kinds)
 
 
 class Watcher:
@@ -6472,8 +6478,7 @@ class Watcher:
                 media, notes = staged
                 if media or notes:
                     parts = [body] if body else []
-                    if media and not body:
-                        parts.append(relay_media.placeholder(media))   # "📷 Photo" (the image rides along)
+                    # A photo that uploads has no extra "Photo" word. The image is the message.
                     body = '\n'.join(parts + notes)
             elif has_att and not is_audio and not chat['group'] and body:
                 # v1.4.7: a 1:1 photo that isn't uploaded (no drop, attachments off, quiet hours) is still
@@ -6481,12 +6486,12 @@ class Watcher:
                 ph = relay_media.placeholder(relay_media.attachment_rows(con, rowid))
                 if ph:
                     body = body + '\n' + ph
-            if not body:
-                # item 4: metadata-only placeholders (no bytes) for audio / attachments / unsent notices
+            if not body and not media:
+                # metadata-only placeholders (no bytes) for audio / attachments / unsent notices
                 if is_audio or has_att:
                     body = attachment_placeholder(con, rowid, bool(is_audio))
                 elif date_retracted:
-                    body = '\U0001f6ab Unsent a message'
+                    body = 'Unsent a message'
                 else:
                     first = self._empty_since.setdefault(rowid, ctx['now'])
                     if ctx['now'] - first < EMPTY_GRACE_S:
@@ -6496,7 +6501,7 @@ class Watcher:
                     self._empty_since.pop(rowid, None)
                     return ('skip', None)
             elif date_edited:
-                body = body + '  \u270f\ufe0f (edited)'   # new text only; the original is never stored
+                body = (body + ' \u00b7 edited') if body else 'edited'   # new text only; the original is never stored
             self._empty_since.pop(rowid, None)
             if cfg['relayAll'] and cfg.get('redactCodes', True):
                 body = redact_codes(body)
@@ -7275,7 +7280,7 @@ class Watcher:
         if t - self._spam_summary_at < SPAM_SUMMARY_EVERY_S or rc.holding_inbound(cfg, t):
             return
         n = self._spam_held
-        detail = ('\U0001f6ab %d text%s went to Messages \u203a Spam in the last hour (not relayed; open Messages to review).'
+        detail = ('\U0001f6ab %d text%s went to spam in Messages. Not relayed.'
                   % (n, '' if n == 1 else 's'))
         if self.post(cfg, {'type': 'status', 'status': 'spam_summary', 'detail': detail, 'count': n, 'at': rc.iso_utc(t)}):
             rc.log_event('spam_summary', count=n)
@@ -7484,7 +7489,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=8756581768f69de56daea209e6aa59778e84d7ca6202d732f9bc186fa086031c nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=9392f30c35ec2455e3ed8283b51865333e894e62e777199d2eee2691deb2986c nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7510,8 +7515,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.21'
-EXTENSION_VERSION = '1.4.21'   # v1.4.21 changes the extension (reload it, then Cmd+R the x.com chat tab)
+VERSION = '1.4.22'
+EXTENSION_VERSION = '1.4.21'   # v1.4.22 does not change the extension (no reload)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -8412,14 +8417,14 @@ def record_inbound(handle, at, path=None, label=''):
 
 
 def example_label(cfg=None, directory=None):
-    """v1.4.2: always a generic example name, never one of the owner's contacts or roster labels."""
-    return 'Alex'
+    """A stand-in word for a prompt, never one of the owner's contacts and never a sample name."""
+    return 'name'
 
 
 def ask_for_name_message(cfg, directory=None):
-    # v1.3.5: show both the colon form and a conversational form so the owner knows either works.
+    # Both the colon form and a conversational form, with the word "name" (never a sample contact).
     lbl = example_label(cfg, directory)
-    return 'Who\'s this for? Start with a name, like "%s: \u2026" or "text %s \u2026".' % (lbl, lbl)
+    return 'Who is this for? %s: your message, or text %s \u2026' % (lbl, lbl)
 
 
 def _maybe_confirm_directive(res, target, form, name, live):
@@ -8469,21 +8474,21 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                 return need('a bare reply never goes to a group')
             if not cfg['relayAll']:
                 return need('group replies need relay-all',
-                            "Can't send to the %s group: group replies need relay-all on." % e['label'])
+                            'Can\u2019t send to the %s group. Group replies need relay-all on.' % e['label'])
             at = e['lastInboundAt']
             if at is None or now - at > cfg['rosterDays'] * 86400:
                 return need('%s has not texted within rosterDays' % e['label'],
-                            "Can't send to the %s group: it hasn't texted you in the last %d days." % (e['label'], cfg['rosterDays']))
+                            'Can\u2019t send to the %s group. No text from it in %d days.' % (e['label'], cfg['rosterDays']))
             return {'contact': e, 'body': body, 'by': by, 'group': True}
         if e['kind'] == 'roster':
             if not cfg['relayAll']:
                 return need('%s is not a contact (relayAll is off)' % e['label'],
-                            "Can't send to %s: they aren't one of your relay contacts. Ask me to add them." % e['label'])
+                            'Can\u2019t send to %s. They aren\u2019t a relay contact. /add %s' % (e['label'], e['label']))
             at = e['lastInboundAt']
             if at is None or now - at > cfg['rosterDays'] * 86400:
                 return need('%s has not texted within rosterDays' % e['label'],
-                            "Can't send to %s: they haven't texted you in the last %d days. Ask me to add them as a contact."
-                            % (e['label'], cfg['rosterDays']))
+                            'Can\u2019t send to %s. No text from them in %d days. /add %s'
+                            % (e['label'], cfg['rosterDays'], e['label']))
         return {'contact': e, 'body': body, 'by': by}
 
     muted = set(cfg.get('mute') or ())
@@ -8525,7 +8530,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
         if d_status == 'empty':
             e = by_handle.get(d_handle)
             return need('named a recipient but gave no message',
-                        'What should I send to %s?' % (e['label'] if e else 'them'))
+                        'What should I send to %s?' % (e['label'] if e else 'name'))
         if d_status == 'unknown_handle':
             # W4: a verb aimed at a phone/email that has never texted in. Refuse; never recent.
             p_handle, p_status = d_handle, 'unknown_handle'
@@ -8537,8 +8542,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
     quoted_present = bool(re.sub(r'\s+', '', str(quoted or '')))
     if p_status == 'unknown_handle':
         return need('that number or email has never texted in',
-                    "Can't send to %s: they have never texted you. Ask me to add them as a contact first."
-                    % format_handle(p_handle))
+                    'Can\u2019t send to %s. They\u2019ve never texted you.' % format_handle(p_handle))
     if q_status == 'match':
         if p_status == 'match' and p_handle != q_handle:
             return need('the quoted message and the name prefix point to different people')
@@ -8568,7 +8572,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                and 0 <= now - e['lastInboundAt'] <= window]
         if grp and (not live or max(g['lastInboundAt'] for g in grp) >= live[0]['lastInboundAt']):
             return need('a group wrote last (group replies are not supported)',
-                        'Who\'s this for? Start with a name, like "%s: \u2026" (group replies aren\'t supported yet)'
+                        'Who is this for? %s: your message. Group replies aren\u2019t supported yet.'
                         % example_label(cfg, d))
         if not live:
             return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
@@ -8577,7 +8581,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
         if not is_person_handle(live[0]['handle']):
             # v1.4.3: the last texter is a business / short code / odd handle: never guessed; ask for a name
             return need('the last texter is a business or short-code handle',
-                        'Who\'s this for? Start with a name, like "%s: \u2026"' % example_label(cfg, d))
+                        ask_for_name_message(cfg, d))
         return deliver(live[0], text, 'recent')
 
     cands = name_candidates(text) if p_status == 'none' and not quote_unresolved else []
@@ -8586,7 +8590,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
         # only a match makes it a name. No match -> `fallback` (ordinary text, routed as if no name).
         c0 = cands[0]
         res = need('the name prefix matches no one on the relay list',
-                   "%s isn't on your relay list yet. Start with a name from it, or /add %s <number>."
+                   '%s isn\u2019t on your list. /add %s and the number.'
                    % (c0['name'], first_name(c0['name'])))
         res.update(unknownName=c0['name'], body=c0['body'], candidates=cands, fallback=recent_route())
         # a close typo of someone on the relay list ("Jordn:" for Jordan): offered, never sent unasked
@@ -8612,7 +8616,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
             # v1.4.4: a quote we could not place never falls back to someone who is not in Contacts
             # (e.g. a spam sender who wrote last): ask for a name instead of offering them.
             return need('a quote could not be placed and the last texter is not in Contacts',
-                        'Who\'s this for? Start with a name, like "%s: \u2026"' % example_label(cfg, d))
+                        ask_for_name_message(cfg, d))
         res['quoteUnresolved'] = True
     return res
 
@@ -9534,7 +9538,7 @@ def upload_staged(media, cfg, requester=_request, rand=secrets.token_bytes):
         out.append(item)
     return out, failed
 @@@@ END
-@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=b4147f31fbced66663673af9775fbd1ef28bf8f62994981523901deca229c070 nl=1
+@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=807ae37bf9b25f687c346582bc5c632138fdd920172d6feaa68695cc11d3a997 nl=1
 """iMessage Relay v1.4.8 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
@@ -9599,33 +9603,67 @@ def record_relayed_text(text, at=None, path=None, handle=''):
 BOT_LINE_SIGILS = (
     '\u2192',        # →  sent / dry-run
     '\u26a0',        # ⚠  warnings: send_failed, wrong_account, refused, messages_not_running, fda_missing
-    '\u23f3',        # ⏳  catching up
-    '\U0001f504',    # 🔄  resynced
-    '\u2139',        # ℹ  generic status
-    '\U0001f6ab',    # 🚫  muted
-    '\u2705',        # ✅  unmuted
-    '\u231b',        # ⌛  not sent (guess expired)
-    '\U0001f4ec',    # 📬  quiet-hours digest header
-    '\u2753',        # ❓  needs_confirm (directive / guessed reply) prompt
-    '\U0001f9ea',    # 🧪  v1.3.8 /test report ("🧪 relay test #tag …")
+    '\u23f3',        # ⏳  older catching-up lines
+    '\U0001f504',    # 🔄  older resynced lines
+    '\u2139',        # ℹ  older status lines
+    '\U0001f6ab',    # 🚫  spam tag, spam count, older mute lines
+    '\u2705',        # ✅  /test pass rows, older unmute lines
+    '\u231b',        # ⌛  older guess-expired lines
+    '\U0001f319',    # 🌙  older digest headers
+    '\U0001f4ec',    # 📬  older digest headers
+    '\u2753',        # ❓  older confirm prompts
+    '\U0001f9ea',    # 🧪  /test report ("🧪 relay test #tag …")
 )
 BOT_LINE_PHRASES = (
-    "Who's this for?", "Who\u2019s this for?",   # needs_target (straight and curly apostrophe)
-    'What should I send to',                      # needs_target (directive named a contact but no body)
-    'Who do you want to',                        # needs_target (block/unblock)
-    'To stop relaying',                          # block confirmation prompt
-    'Nothing to confirm',                        # stale confirmation
+    "Who's this for?", "Who\u2019s this for?", 'Who is this for?',
+    'What should I send to',
+    'Who do you want to',
+    'To stop relaying', 'Stop relaying',
+    'Nothing to confirm', 'Nothing is waiting',
+    'Catching up. Nothing is dropped.',
+    'Older messages were skipped after a gap.',
+    'Watching Messages again.',
+    'Chrome hasn\u2019t checked in', "Chrome hasn't checked in",
+    'Chrome is open again.',
+    'Relaying is back on.',
+    'Snoozing until ',
+    'Say /snooze',
+    'Replies go to ',
+    'Replies are unclear.',
+    'No one to reply to yet.',
+    'Muted ', 'Unmuted ', 'Dry run.', 'Added ',
+    'Cancelled.',
+    'That isn\u2019t a choice', "That isn't a choice",
+    'That choice expired',
+    'More than one ',
+    'No recent unknown number',
+    'Couldn\u2019t tell whose', "Couldn't tell whose",
+    'That doesn\u2019t look like a phone', "That doesn't look like a phone",
+    'That\u2019s your own number', "That's your own number",
+    'That doesn\u2019t match the', "That doesn't match the",
+    'Paused. Texts that arrive while paused are not kept.',
+    'Not sent. The question timed out.',
+    '/status \u00b7 /who',
+    'On \u00b7 v', 'Paused \u00b7 v',
 )
 BOT_FORMAT_RE = re.compile(
     r'^\s*(?:' + '|'.join(list(BOT_LINE_SIGILS) + [re.escape(p) for p in BOT_LINE_PHRASES]) + r')', re.I)
-# Item 13: the host's routing replies ("Can't send to <who>: they ...", "Group replies aren't
-# supported ...") and the bare-command hint ("Did you mean /block ...") are structured, not fixed
-# prefixes, so they get their own matcher. Derived from the exact wording route_reply() / the host
-# post with, so the watcher never relays one of these back out as an iMessage.
+# Routing replies and confirm prompts are structured, not one fixed prefix. Old colon wording stays
+# matched so a quoted line from before v1.4.22 is still not texted out.
 BOT_STRUCTURED_RE = re.compile(
-    r"^\s*(?:can[\u2019']t send to\b.*:\s*(?:they|you)\b"
+    r"^\s*(?:can[\u2019']t send to\b(?:"
+    r".*:\s*(?:they|you)\b"
+    r"|.*\.\s+(?:They|No text|They[\u2019']ve|Group)"
+    r")"
+    r"|can[\u2019']t reach the\b"
     r"|group replies aren[\u2019']t supported"
-    r"|did you mean\s*/)", re.I)
+    r"|did you mean\s*/"
+    r"|(?:reply to|send to|text|did you mean|add|stop relaying)\s+.+\?\s*reply yes within 2 min"
+    r"|text\s+.+\bat which\?"
+    r"|reply\s+1[\u2013-]\d+,\s*or no"
+    r"|not sent to\s+\S.*\bthe question timed out"
+    r"|while you were away\s+\u00b7\s+\d+\s+texts?"
+    r")", re.I)
 
 
 def looks_like_bot_output(text):
@@ -9724,7 +9762,7 @@ def lookup_quote(quoted, cfg=None, at=None, path=None):
             return hits
     return set()
 @@@@ END
-@@@@ FILE mac-helper/relay_header.py mode=644 sha256=1e136200dff45ded59ff4418c69f1b766ffda4d8b940a9f5dc7756c06e5095e7 nl=1
+@@@@ FILE mac-helper/relay_header.py mode=644 sha256=45cb6cebd092112dc06dde635545c438ac954df5efff89a925f6d91b2b1c28fa nl=1
 #!/usr/bin/python3
 """v1.4.18: conversation headers on the Mac. Same algorithm as routine/relay_post.py.
 
@@ -9741,12 +9779,10 @@ import time
 import relay_common as rc
 
 GROUP_SEP = ' \u00b7 '
-UNKNOWN_TAG = '\u26a0\ufe0f Unknown \u00b7 '
-TAGS = {'spam': '\U0001f6ab Spam \u00b7 ', 'promotion': '\U0001f3f7\ufe0f Promo \u00b7 ',
-        'transaction': '\U0001f9fe '}
 HEADER_ICON = '\U0001f4ac'
 HEADER_GAP_DEFAULT_MIN = 30
-_PHOTO_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
+# A photo-only body is never a quiet name. Still matches an older "📷 Photo" line.
+_PHOTO_PLACEHOLDER = re.compile(r'(?:\U0001f4f7 )?(?:Photo|\d+ photos)$')
 
 
 def state_path():
@@ -9755,6 +9791,23 @@ def state_path():
 
 def _label(p, default='someone'):
     return str(p.get('label') or p.get('contactName') or default).strip() or default
+
+
+def _filing(m, gl):
+    """v1.4.22: the name leads. Safety tags keep a leading icon; filing tags are a quiet word.
+    Groups are never tagged. Keep in lockstep with routine/relay_post.py. Returns (prefix, suffix)."""
+    if gl:
+        return '', ''
+    tag = str(m.get('tag') or '')
+    if tag == 'spam':
+        return '\U0001f6ab ', ' \u00b7 spam'
+    if tag == 'promotion':
+        return '', ' \u00b7 promo'
+    if tag == 'transaction':
+        return '', ' \u00b7 receipt'
+    if m.get('unknown'):
+        return '\u26a0\ufe0f ', ' \u00b7 not a contact'
+    return '', ''
 
 
 def _hdr_meta(m):
@@ -9804,18 +9857,15 @@ def add_headers(lines, gap_min, state, now=None):
 
 
 def _message_line(m):
-    """`<label>: <text>` or `<group.label> · <label>: <text>`. A tapback joins with a space, not a colon."""
+    """`<label>: <text>` or `<group.label> · <label>: <text>`. A tapback joins with a space, not a colon.
+    A safety tag leads (`⚠️ <label> · not a contact:`, `🚫 <label> · spam:`). Promo and receipt are quiet words."""
     label = _label(m)
     text = str(m.get('text') or '')
     g = m.get('group') or {}
     gl = str(g.get('label') or g.get('name') or '').strip()
-    head = (gl + GROUP_SEP if gl else '') + label
-    tag = TAGS.get(str(m.get('tag') or '')) if not gl else None
-    if tag:
-        head = tag + head
-    elif m.get('unknown') and not gl:
-        head = UNKNOWN_TAG + head
-    if (m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown')
+    prefix, suffix = _filing(m, gl)
+    head = prefix + (gl + GROUP_SEP if gl else '') + label + suffix
+    if (m.get('quiet') and not gl and not m.get('reaction') and not prefix and not suffix
             and not m.get('media') and not _PHOTO_PLACEHOLDER.fullmatch(text.strip())):
         return text
     sep = ' ' if m.get('reaction') else ': '
@@ -10071,7 +10121,7 @@ def secitem_update(account, secret):
             except Exception:
                 pass
 @@@@ END
-@@@@ FILE mac-helper/relay_media.py mode=644 sha256=64c5ac38b2ad36114a510d8e5c024430b97ee6b1944b4fbdc56b2d6d1d48a0c0 nl=1
+@@@@ FILE mac-helper/relay_media.py mode=644 sha256=c6cae50442031b5e0985ef82178e6691763f849814a118a1ceb337bcbf392359 nl=1
 """iMessage Relay v1.4.8 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
 
 Inbound (iMessage -> X Chat). The watcher holds Full Disk Access, so it is the only process that can
@@ -10258,31 +10308,32 @@ def missing_images(rows):
     return any(r['kind'] == 'image' and (not r['path'] or not os.path.isfile(r['path'])) for r in rows)
 
 
-_KIND_WORD = {'image': ('\U0001f4f7', 'Photo'), 'video': ('\U0001f3a5', 'Video'), 'audio': ('\U0001f3a4', 'Voice message'),
-              'file': ('\U0001f4ce', 'File')}
+_KIND_WORD = {'image': 'Photo', 'video': 'Video', 'audio': 'Voice message', 'file': 'File'}
 
 
 def notice(row, reason):
     """One body-free line for an attachment that is not relayed. Type and size only, never a name.
-    reason: 'too_large' | 'unsupported' | 'unavailable' | 'off' | 'digest'."""
-    emoji, word = _KIND_WORD.get(row.get('kind'), _KIND_WORD['file'])
-    if row.get('sticker'):
-        emoji, word = '\U0001f9f7', 'Sticker'
-    elif row.get('kind') == 'file' and row.get('ext'):
+    reason: 'too_large' | 'unsupported' | 'unavailable' | 'off' | 'digest'. No decorative icon."""
+    word = 'Sticker' if row.get('sticker') else _KIND_WORD.get(row.get('kind'), _KIND_WORD['file'])
+    if not row.get('sticker') and row.get('kind') == 'file' and row.get('ext'):
         word = row['ext'].upper() + ' file'
     size = fmt_size(row.get('size'))
-    head = '%s %s%s' % (emoji, word, (', ' + size) if size and row.get('kind') != 'audio' else '')
-    tail = {'too_large': ' (too large to relay)', 'unsupported': ' (not relayed \u2014 open Messages to see it)',
-            'unavailable': ' (couldn\u2019t be relayed)', 'off': '', 'digest': ''}.get(reason, '')
-    return head + tail
+    sized = word + ((', ' + size) if size and row.get('kind') != 'audio' else '')
+    if reason == 'too_large':
+        return sized + '. Too large. Open Messages.'
+    if reason == 'unsupported':
+        return word + '. Open Messages to see it.'
+    if reason == 'unavailable':
+        return word + '. Couldn\u2019t relay it.'
+    return word
 
 
 def placeholder(rows):
-    """Summary placeholder (no names) for photos that end up not uploaded: '📷 Photo' / '📷 3 photos'."""
+    """Summary placeholder (no names) for photos that end up not uploaded: 'Photo' / '3 photos'."""
     n = len([r for r in rows if r.get('kind') == 'image'])
     if n <= 0:
         return ''
-    return '\U0001f4f7 Photo' if n == 1 else '\U0001f4f7 %d photos' % n
+    return 'Photo' if n == 1 else '%d photos' % n
 
 
 def _convert(src, dst, runner, max_side):
@@ -13233,9 +13284,10 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=e40d9005ff747a268ced8ea84ec72657344da9ae82afb8f52d4936fe2f826c21 nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=e5a0206126ca929582e15bf007413bd3dcb003303d37889368ef202df23c619a nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.20 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.22 — routine helper (runs on the BOT's computer, not the Mac).
+v1.4.22 changes chat wording only. Routing, notify kinds, and dedupe are unchanged.
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -13362,9 +13414,23 @@ def _label(p, default='someone'):
     return str(p.get('label') or p.get('contactName') or default).strip() or default
 
 
-UNKNOWN_TAG = '\u26a0\ufe0f Unknown \u00b7 '
-TAGS = {'spam': '\U0001f6ab Spam \u00b7 ', 'promotion': '\U0001f3f7\ufe0f Promo \u00b7 ',   # v1.4.6 follow-messages
-        'transaction': '\U0001f9fe '}
+def _filing(m, gl):
+    """v1.4.22: the name leads. Safety tags keep a leading icon; filing tags are a quiet word.
+    Groups are never tagged. Keep in lockstep with mac-helper/relay_header.py. Returns (prefix, suffix)."""
+    if gl:
+        return '', ''
+    tag = str(m.get('tag') or '')
+    if tag == 'spam':
+        return '\U0001f6ab ', ' \u00b7 spam'
+    if tag == 'promotion':
+        return '', ' \u00b7 promo'
+    if tag == 'transaction':
+        return '', ' \u00b7 receipt'
+    if m.get('unknown'):
+        return '\u26a0\ufe0f ', ' \u00b7 not a contact'
+    return '', ''
+
+
 BATCH_MAX = 20
 DIGEST_MAX_CHARS = 9000
 KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
@@ -13377,8 +13443,8 @@ HEADER_ICON = '\U0001f4ac'
 HEADER_STATE = 'header_state.json'
 # v1.4.20: shown when a status payload has no ⚠️ detail of its own (an older Mac). Keep in lockstep
 # with mac-helper/imessage_relay_watch.py FDA_DETAIL.
-FDA_LINE = ('\u26a0\ufe0f Texts stopped: Full Disk Access for iMessage Relay Watcher is off. '
-            'Drag that app into System Settings \u2192 Privacy & Security \u2192 Full Disk Access.')
+FDA_LINE = ('\u26a0\ufe0f Texts stopped. Turn on Full Disk Access for iMessage Relay Watcher. '
+            'System Settings \u2192 Privacy & Security \u2192 Full Disk Access.')
 _HEALTH_KINDS = ('status:fda_missing', 'status:recovered', 'status:chrome_away', 'status:chrome_back')
 HEADER_GAP_DEFAULT_MIN = 30
 
@@ -13480,24 +13546,20 @@ def add_headers(lines, gap_min, state, now=None):
 
 def _message_line(m):
     """`<label>: <text>` or `<group.label> · <label>: <text>`. Carries the (untrusted) body. A tapback
-    line (item 5) joins with a space, not a colon: "Alex \u2764\ufe0f your message"."""
+    line joins with a space, not a colon. A safety tag leads; promo and receipt are quiet words after the name."""
     label = _label(m)
     text = str(m.get('text') or '')
     g = m.get('group') or {}
     gl = str(g.get('label') or g.get('name') or '').strip()
-    head = (gl + GROUP_SEP if gl else '') + label
-    tag = TAGS.get(str(m.get('tag') or '')) if not gl else None
-    if tag:
-        head = tag + head               # v1.4.6: Messages filed it under Spam / Promotions / Transactions
-    elif m.get('unknown') and not gl:
-        head = UNKNOWN_TAG + head       # v1.4.5 spamMode tag: not in Contacts / flagged by Messages
-    if (m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown')
+    prefix, suffix = _filing(m, gl)
+    head = prefix + (gl + GROUP_SEP if gl else '') + label + suffix
+    if (m.get('quiet') and not gl and not m.get('reaction') and not prefix and not suffix
             and not m.get('media') and not _PHOTO_PLACEHOLDER.fullmatch(text.strip())):
         return text                     # v1.4.6 quiet names: same sender as the line just above
         # (v1.4.9: never for a photo line -- an image bubble or a photo notice always says who sent it)
     sep = ' ' if m.get('reaction') else ': '
     if not text.strip() and not m.get('reaction'):
-        return head + ':'               # v1.4.9: a photo with no caption -> "Jordan:" (the image's caption)
+        return head + ':'               # a photo with no caption -> "<label>:" (the image rides along)
     return head + sep + text
 
 
@@ -13509,7 +13571,8 @@ MEDIA_EXTS = ('jpg', 'jpeg', 'png', 'gif', 'webp')
 MEDIA_MAX_PER_LINE = 10
 _HEX32 = re.compile(r'^[0-9a-f]{32}$')
 _HEX64 = re.compile(r'^[0-9a-f]{64}$')
-_PHOTO_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
+_PHOTO_PLACEHOLDER = re.compile(r'(?:\U0001f4f7 )?(?:Photo|\d+ photos)$')
+_PHOTO_EMOJI_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
 
 
 _B64U_KEY = re.compile(r'^[A-Za-z0-9_-]{43}$')
@@ -13825,14 +13888,14 @@ def media_log(state_dir, status, photos, nbytes, now=None):
 
 
 def media_failed_text(text, n, bare=False):
-    """The line when its photo(s) could not be relayed: a clear notice instead of a silent drop.
-    v1.4.9: a photo-only line ("Jordan:") gets the notice on the same line: "Jordan: 📷 Photo couldn't …"."""
-    note = '\U0001f4f7 %s couldn\u2019t be relayed \u2014 open Messages to see %s' % (
-        ('Photo', 'it') if n == 1 else ('%d photos' % n, 'them'))
+    """The line when its photo(s) could not be relayed. A photo-only line ("<label>:") gets the notice
+    on the same line. Only an older camera-icon placeholder is replaced; a user's word "Photo" is kept."""
+    note = ('Photo didn\u2019t come through. Open Messages.' if n == 1
+            else '%d photos didn\u2019t come through. Open Messages.' % n)
     if bare:
         return (text.rstrip() + ' ' + note) if text.strip() else note
-    if _PHOTO_PLACEHOLDER.search(text):
-        return _PHOTO_PLACEHOLDER.sub(lambda _m: note, text)
+    if _PHOTO_EMOJI_PLACEHOLDER.search(text):
+        return _PHOTO_EMOJI_PLACEHOLDER.sub(lambda _m: note, text)
     return text + '\n\u2002' + note
 
 
@@ -13951,7 +14014,7 @@ def format_event(payload):
             gl = str(g.get('label') or g.get('name') or '').strip()
             head = (gl + GROUP_SEP if gl else '') + label
             if m.get('unknown') and not gl:
-                head = UNKNOWN_TAG + head
+                head = '\u26a0\ufe0f ' + head + ' \u00b7 not a contact'
             if head not in index:
                 index[head] = len(groups)
                 groups.append([head, [], []])
@@ -13959,16 +14022,15 @@ def format_event(payload):
             sep = ' ' if m.get('reaction') else ''
             groups[gi][1].append(sep + str(m.get('text') or '') if sep else str(m.get('text') or ''))
             groups[gi][2].append(mid)
-        n, people = len(msgs), len(groups)
-        header = '\U0001f319 Overnight: %d message%s%s' % (
-            n, '' if n == 1 else 's', (' from %d people' % people) if people > 1 else '')
-        # v1.4.6: ONE tidy post (header, then each person once with their texts under them); the line
-        # ids still carry every message id so a retried webhook dedupes.
+        n = len(msgs)
+        header = 'While you were away \u00b7 %d %s' % (n, 'text' if n == 1 else 'texts')
+        # ONE tidy post (header, then each person once with their texts under them). The • stays so a
+        # held line that starts with "Name:" cannot look like a new sender. ids still dedupe a retry.
         blocks = [head + ':\n' + '\n'.join('\u2002\u2022 ' + x.replace('\n\u2002', '\n\u2002\u2002 ') for x in texts)
                   for head, texts, _ in groups]
         text = header + '\n\n' + '\n\n'.join(blocks)
         if len(text) > DIGEST_MAX_CHARS:
-            text = text[:DIGEST_MAX_CHARS - 40].rstrip() + '\n\u2026 (more in Messages)'
+            text = text[:DIGEST_MAX_CHARS - 24].rstrip() + '\nMore is in Messages.'
         ids = '+'.join(i for _, _, ids_ in groups for i in ids_)
         return {'kind': 'digest', 'lines': [{'id': 'digest:' + (base_id or ids)[:200], 'text': text, 'body': True}]}
     if t == 'sent':
@@ -13981,25 +14043,22 @@ def format_event(payload):
         elif note:
             line = '\u2192 ' + label + (' \u2713\u2713' if payload.get('delivered') else ' \u2713') + ' (' + note + ')'
         elif payload.get('delivered'):
-            line = '\u2192 ' + label + ' \u2713\u2713 delivered'
+            line = '\u2192 ' + label + ' \u2713\u2713'
         else:
-            line = '\u2192 ' + label + ' \u2713 sent'
+            line = '\u2192 ' + label + ' \u2713'
         return {'kind': 'sent', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'dry_run':
         return {'kind': 'dry_run', 'lines': [{'id': base_id, 'text': '\u2192 ' + _label(payload) + ' (dry run, not sent)', 'body': False}]}
     if t == 'send_failed':
         if str(payload.get('reason') or '') == 'unconfirmed':
-            # W3: no chat.db row ever appeared for this send within ~10 minutes.
-            line = '\u26a0\ufe0f Couldn\u2019t confirm your reply to ' + _label(payload) + ' was delivered.'
+            # No chat.db row ever appeared for this send within ~10 minutes. The raw code stays out of the chat.
+            line = '\u26a0\ufe0f Couldn\u2019t confirm it reached ' + _label(payload) + '.'
             return {'kind': 'send_failed', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
-        err = str(payload.get('error') or '').strip()
-        tail = (' (' + err + ')') if err else ''
         if payload.get('superseded'):
-            # W3 nit: a soft "\u2713 sent" already went out, then the send failed -> say this corrects it.
-            line = ('\u26a0\ufe0f Correction: your reply to ' + _label(payload)
-                    + ' actually failed to deliver \u2014 disregard the earlier \u2713 sent' + tail + '.')
+            # A soft check already went out, then the send failed. Say the earlier check was wrong.
+            line = '\u26a0\ufe0f The earlier \u2713 to ' + _label(payload) + ' was wrong. It did not deliver.'
         else:
-            line = '\u26a0\ufe0f Couldn\u2019t deliver your reply to ' + _label(payload) + ' \u2014 it may not have sent' + tail + '.'
+            line = '\u26a0\ufe0f Didn\u2019t reach ' + _label(payload) + '.'
         return {'kind': 'send_failed', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'needs_confirm':
         # W1/item 3: a label-only confirmation prompt. Never carries the message body. should_notify false.
@@ -14008,72 +14067,76 @@ def format_event(payload):
         if payload.get('reason') == 'new_contact':
             # v1.4.0: someone found in the Mac's Contacts (host-composed, name + last 4 digits, no body).
             detail = str(payload.get('detail') or '').strip()[:400]
-            text = detail or ('\u2753 Text %s from your Contacts? Reply yes within 2 min.' % label)
+            text = detail or ('Text %s from your Contacts? Reply yes within 2 min.' % label)
             return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': text, 'body': False}]}
         if payload.get('reason') == 'directive':
             core = ('Send to %s instead of %s?' % (label, alt)) if alt else ('Send to %s?' % label)
         else:
             core = 'Reply to %s?' % label
-        detail = str(payload.get('detail') or '').strip()[:400]      # v1.4.1: host-composed, body-free
-        text = detail or ('\u2753 ' + core + ' Reply yes within 2 min.')
+        detail = str(payload.get('detail') or '').strip()[:400]      # host-composed, body-free
+        text = detail or (core + ' Reply yes within 2 min.')
         return {'kind': 'needs_confirm', 'lines': [{'id': base_id, 'text': text, 'body': False}]}
     if t == 'needs_target':
-        detail = str(payload.get('detail') or 'Who\u2019s this for? Start with a name, like "Alex: \u2026" or "text Alex \u2026".').strip()
+        detail = str(payload.get('detail') or 'Who is this for? name: your message, or text name \u2026').strip()
         return {'kind': 'needs_target', 'lines': [{'id': base_id, 'text': detail, 'body': False}]}
     if t == 'blocked':
         label = _label(payload)
         if payload.get('dryRun'):
-            line = '\U0001f6ab (dry run) would mute ' + label + '. Say "/unblock ' + label + '" to undo once live.'
+            line = 'Dry run. Would mute ' + label + '.'
         else:
-            line = '\U0001f6ab Muted ' + label + '. Say "/unblock ' + label + '" to undo.'
+            line = 'Muted ' + label + '. /unblock ' + label
         return {'kind': 'blocked', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'unblocked':
-        return {'kind': 'unblocked', 'lines': [{'id': base_id, 'text': '\u2705 Unmuted ' + _label(payload) + '.', 'body': False}]}
+        return {'kind': 'unblocked', 'lines': [{'id': base_id, 'text': 'Unmuted ' + _label(payload) + '.', 'body': False}]}
     if t in ('status', 'catching_up', 'resynced'):
         status = t if t in ('catching_up', 'resynced') else str(payload.get('status') or '').strip()
         detail = str(payload.get('detail') or '').strip()
         if status == 'catching_up':
-            line = '\u23f3 Catching up \u2014 relaying a burst in batches (nothing dropped).'
+            line = 'Catching up. Nothing is dropped.'
         elif status == 'resynced':
-            line = '\U0001f504 Resynced after a long gap; older messages were skipped.'
+            line = 'Older messages were skipped after a gap.'
         elif status == 'messages_not_running':
-            line = '\u26a0\ufe0f Messages isn\u2019t running on the Mac, so replies can\u2019t be sent right now.'
+            line = '\u26a0\ufe0f Messages isn\u2019t open, so replies can\u2019t send.'
         elif status == 'spam_summary' and detail:
-            line = detail[:300]               # v1.4.6: counts only ("\U0001f6ab 3 texts went to Messages \u203a Spam ...")
+            line = detail[:300]               # counts only; the watcher line keeps 🚫
         elif status == 'fda_missing':
-            # A v1.4.20 Mac sends the sentence in detail (it starts with ⚠️). Older detail is prose, so
+            # A current Mac sends the sentence in detail (it starts with ⚠️). Older detail is prose, so
             # fall back to FDA_LINE. Either way the owner sees the fix, not "can't read Messages yet".
             line = detail[:400] if detail.startswith('\u26a0') else FDA_LINE
         else:
-            line = '\u2139\ufe0f ' + (detail or ('Status: ' + (status or 'unknown')))
+            line = detail or ('Status: ' + (status or 'unknown'))
         return {'kind': 'status:' + (status or 'unknown'), 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'wrong_account':
-        line = '\u26a0\ufe0f The relay tab is signed in to the wrong X account \u2014 replies are paused until you switch back to the owner account.'
+        line = '\u26a0\ufe0f Wrong X account in this tab. Replies are paused.'
         return {'kind': 'wrong_account', 'lines': [{'id': base_id or 'wrong_account', 'text': line, 'body': False}]}
     if t == 'guess_expired':
         label = _label(payload, '')
-        tail = (' to ' + label) if label else ''
-        return {'kind': 'guess_expired', 'lines': [{'id': base_id, 'text': '\u231b Not sent%s.' % tail, 'body': False}]}
+        line = ('Not sent to ' + label + '. The question timed out.') if label else 'Not sent. The question timed out.'
+        return {'kind': 'guess_expired', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'refused':
         reason = str(payload.get('reason') or '').strip()
         label = _label(payload, '')
         if reason == 'echo':
-            line = '\u26a0\ufe0f Didn\u2019t send that to ' + (label or 'them') + ' \u2014 it looked like a relayed message bounced straight back.'
+            if label:
+                line = '\u26a0\ufe0f Not sent to ' + label + '. That looked like a relayed text.'
+            else:
+                line = '\u26a0\ufe0f Not sent. That looked like a relayed text.'
         elif reason == 'not_sent' and str(payload.get('detail') or '').strip():
-            # v1.4.6: the Mac's fixed, body-free reason ("There was nothing after the name to send …")
+            # The Mac's fixed, body-free reason. One warning, then the sentence.
             detail = re.sub(r'\s+', ' ', str(payload.get('detail')))[:200].strip()
-            line = '\u26a0\ufe0f Not sent: ' + detail
+            line = '\u26a0\ufe0f Not sent. ' + detail
         elif reason == 'attachment':
-            # v1.4.6: a photo/file he sent in X Chat couldn't be read or was over the limit (counts only)
+            # A photo or file in X Chat couldn't be read (counts only).
             try:
                 n = max(1, min(10, int(payload.get('count') or 1)))
             except (TypeError, ValueError):
                 n = 1
-            what = 'An attachment' if n == 1 else '%d attachments' % n
-            line = '\u26a0\ufe0f %s couldn\u2019t be sent%s (too large, over 25 MB, or not loaded in X). ' % (
-                what, (' to ' + label) if label else '') + ('The text went through.' if payload.get('sentText') else 'Nothing was sent.')
+            what = 'The attachment' if n == 1 else '%d attachments' % n
+            where = (' to ' + label) if label else ''
+            tail = 'The text went through.' if payload.get('sentText') else 'Nothing went out.'
+            line = '\u26a0\ufe0f %s didn\u2019t send%s. %s' % (what, where, tail)
         else:
-            line = '\u26a0\ufe0f A reply wasn\u2019t sent' + ((' to ' + label) if label else '') + '.'
+            line = '\u26a0\ufe0f Not sent' + ((' to ' + label) if label else '') + '.'
         return {'kind': 'refused', 'lines': [{'id': base_id, 'text': line, 'body': False}]}
     if t == 'relay_test':
         return _relay_test(payload, base_id)
@@ -18280,7 +18343,7 @@ class RosterTolerance(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_host.py mode=644 sha256=c230a11403fd00ed99b4f41a4dea0c37373182de5bf2af1faa5146e8af07a320 nl=1
+@@@@ FILE tests/py/test_host.py mode=644 sha256=3b0f300b2fca9e1ef24a9d15c031e62959328149c43adec91efab983e6922521 nl=1
 """Native host: framing, get_config, send gating (paused / relay chat / routing / normalization /
 rate limit), confirmations and "who is this for?" webhooks, dry run, -1712 retry, self-test, and
 an end-to-end run of the real script."""
@@ -18513,7 +18576,7 @@ class RoutingAndWebhooks(Base):
         self.clock.t += 3 * 3600                     # nobody wrote within replyWindowMinutes (120)
         resp = self.req(text='sounds good', runner=r, dryRun=False)
         self.assertEqual((resp['ok'], resp['needsTarget']), (False, True))
-        self.assertTrue(resp['error'].startswith("Who's this for? Start with a name, like "))
+        self.assertTrue(resp['error'].startswith('Who is this for? name: your message'))
         self.assertEqual(r.calls, [])
         self.assertEqual(self.posts[-1]['type'], 'needs_target')
         self.assertNotIn('sounds good', json.dumps(self.posts))
@@ -19420,7 +19483,7 @@ class BlockMute(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_relay_post.py mode=644 sha256=ea17ffc3990437c5a70679f289d154b6f32d0fc9da0376126934fc4941ac35f6 nl=1
+@@@@ FILE tests/py/test_relay_post.py mode=644 sha256=c8e5907861e09133a5d4bb111ea16a06742c73677d0f2300811c91cd9a41956e nl=1
 """Tests for the routine helper relay_post.py (bot-side): formatting per event type, id dedupe
 (ids only, no bodies on disk), and that message text is passed to xchat_lite on STDIN, never argv."""
 import json
@@ -19464,7 +19527,7 @@ class Formatting(unittest.TestCase):
         self.assertEqual(ev['kind'], 'digest')
         self.assertEqual(len(ev['lines']), 1)
         self.assertEqual(ev['lines'][0]['text'],
-                         '\U0001f319 Overnight: 3 messages from 2 people\n\n'
+                         'While you were away \u00b7 3 texts\n\n'
                          'Alex:\n\u2002\u2022 one\n\u2002\u2022 three\n\n'
                          'Crew \u00b7 Sam:\n\u2002\u2022 two')
         self.assertEqual(ev['lines'][0]['id'], 'digest:d')
@@ -19472,25 +19535,25 @@ class Formatting(unittest.TestCase):
 
     def test_digest_single_message_header(self):
         ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [{'label': 'Alex', 'text': 'hi'}]})
-        self.assertTrue(ev['lines'][0]['text'].startswith('\U0001f319 Overnight: 1 message\n\n'))
+        self.assertTrue(ev['lines'][0]['text'].startswith('While you were away \u00b7 1 text\n\n'))
 
     def test_digest_is_capped(self):
         ev = rp.format_event({'type': 'digest', 'id': 'd', 'messages': [{'label': 'Alex', 'text': 'x' * 3000}] * 5})
         self.assertLessEqual(len(ev['lines'][0]['text']), rp.DIGEST_MAX_CHARS)
-        self.assertTrue(ev['lines'][0]['text'].endswith('(more in Messages)'))
+        self.assertTrue(ev['lines'][0]['text'].endswith('More is in Messages.'))
 
     def test_sent_and_dry_run(self):
-        # item 6: delivered -> double check, otherwise the ~20s "sent" fallback.
-        self.assertEqual(self.one({'type': 'sent', 'label': 'Alex', 'delivered': True})[1]['text'], '\u2192 Alex \u2713\u2713 delivered')
-        self.assertEqual(self.one({'type': 'sent', 'label': 'Alex'})[1]['text'], '\u2192 Alex \u2713 sent')
+        # item 6: delivered -> double check, otherwise one check. The words "sent" and "delivered" stay off the line.
+        self.assertEqual(self.one({'type': 'sent', 'label': 'Alex', 'delivered': True})[1]['text'], '\u2192 Alex \u2713\u2713')
+        self.assertEqual(self.one({'type': 'sent', 'label': 'Alex'})[1]['text'], '\u2192 Alex \u2713')
         self.assertEqual(self.one({'type': 'sent', 'label': 'Alex', 'dryRun': True})[1]['text'], '\u2192 Alex (dry run, not sent)')
         self.assertEqual(self.one({'type': 'dry_run', 'label': 'Alex'})[1]['text'], '\u2192 Alex (dry run, not sent)')
         self.assertFalse(self.one({'type': 'sent', 'label': 'Alex', 'delivered': True})[1]['body'], 'confirmation is silent')
 
     def test_send_failed_needs_target(self):
         _, ln = self.one({'type': 'send_failed', 'label': 'Alex', 'error': '-1712'})
-        self.assertIn('Couldn', ln['text'])
-        self.assertIn('-1712', ln['text'])
+        self.assertEqual(ln['text'], '\u26a0\ufe0f Didn\u2019t reach Alex.')
+        self.assertNotIn('-1712', ln['text'], 'the raw Messages code stays out of the chat line')
         self.assertFalse(ln['body'])
         _, ln = self.one({'type': 'needs_target', 'detail': 'Who\u2019s this for? Start with a name, like Alex: \u2026'})
         self.assertTrue(ln['text'].startswith('Who'))
@@ -19498,22 +19561,21 @@ class Formatting(unittest.TestCase):
     def test_send_failed_unconfirmed_and_superseded(self):
         # W3: no row ever -> "couldn't confirm"; a late failure after a soft check -> a correction line.
         _, ln = self.one({'type': 'send_failed', 'label': 'Alex', 'reason': 'unconfirmed'})
-        self.assertIn('confirm', ln['text'])
+        self.assertEqual(ln['text'], '\u26a0\ufe0f Couldn\u2019t confirm it reached Alex.')
         self.assertFalse(ln['body'])
         _, ln = self.one({'type': 'send_failed', 'label': 'Alex', 'error': '-1712', 'superseded': True})
-        self.assertIn('Correction', ln['text'])
-        self.assertIn('\u2713 sent', ln['text'])     # names the earlier soft confirmation it supersedes
-        self.assertIn('-1712', ln['text'])
+        self.assertEqual(ln['text'], '\u26a0\ufe0f The earlier \u2713 to Alex was wrong. It did not deliver.')
+        self.assertNotIn('-1712', ln['text'])
         self.assertFalse(ln['body'])
 
     def test_block_unblock(self):
-        self.assertEqual(self.one({'type': 'blocked', 'label': 'Spam'})[1]['text'], '\U0001f6ab Muted Spam. Say "/unblock Spam" to undo.')
-        self.assertEqual(self.one({'type': 'blocked', 'label': 'Spam', 'dryRun': True})[1]['text'], '\U0001f6ab (dry run) would mute Spam. Say "/unblock Spam" to undo once live.')
-        self.assertEqual(self.one({'type': 'unblocked', 'label': 'Spam'})[1]['text'], '\u2705 Unmuted Spam.')
+        self.assertEqual(self.one({'type': 'blocked', 'label': 'Spam'})[1]['text'], 'Muted Spam. /unblock Spam')
+        self.assertEqual(self.one({'type': 'blocked', 'label': 'Spam', 'dryRun': True})[1]['text'], 'Dry run. Would mute Spam.')
+        self.assertEqual(self.one({'type': 'unblocked', 'label': 'Spam'})[1]['text'], 'Unmuted Spam.')
 
     def test_status_variants(self):
         self.assertIn('Catching up', self.one({'type': 'status', 'status': 'catching_up'})[1]['text'])
-        self.assertIn('Resynced', self.one({'type': 'resynced'})[1]['text'])
+        self.assertIn('skipped after a gap', self.one({'type': 'resynced'})[1]['text'])
         self.assertIn('Catching up', self.one({'type': 'catching_up'})[1]['text'])
         self.assertIn('Full Disk Access', self.one({'type': 'status', 'status': 'fda_missing'})[1]['text'])
 
@@ -19714,7 +19776,7 @@ class SpeedV145(unittest.TestCase):
                         'xchat': dict(self.FULL), 'dedupe_path': self.dedupe, 'defer_commit': True}, runner=self.runner())
         self.assertEqual(r['action'], 'send')
         self.assertEqual([c['text'] for c in self.calls],
-                         ['Alex: one', 'Family \u00b7 Sam: two', '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: three'])
+                         ['Alex: one', 'Family \u00b7 Sam: two', '\u26a0\ufe0f (555) 555-0166 \u00b7 not a contact: three'])
         self.assertTrue(all(s['should_notify'] for s in r['sends']))
         self.assertEqual(r['ack_ids'], ['m1', 'm2', 'm3'])
         rp.ack({'dedupe_path': self.dedupe, 'ids': ['m1']})
@@ -20036,7 +20098,7 @@ class SelfTestAndJobs(Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_routing.py mode=644 sha256=5fa95920e77437362b11e5854602e7a0b8b4cc857166d62030c3a77b7fdaea20 nl=1
+@@@@ FILE tests/py/test_routing.py mode=644 sha256=4b1d3f1100fe582618f10a5c41598c93f6d094d842511993a6e1cf48b6133d9b nl=1
 """Reply routing in ONE relay chat: labels (shared first names), "<name>:" prefix parsing,
 quote > prefix > most recent contact, reply window, ambiguity, and handle normalization."""
 import unittest
@@ -20153,7 +20215,7 @@ class Route(Base):
         r = self.route('ok')
         self.assertTrue(r['needsTarget'])
         self.assertIn('120 minutes', r['reason'])
-        self.assertEqual(r['error'], 'Who\'s this for? Start with a name, like "Alex: \u2026" or "text Alex \u2026".')
+        self.assertEqual(r['error'], 'Who is this for? name: your message, or text name \u2026')
 
     def test_two_contacts_close_together_is_ambiguous(self):
         self.inbound('+15555550123', 40)
@@ -20185,6 +20247,18 @@ class Route(Base):
         self.assertEqual((r['contact']['label'], r['body']), ('KJ', 'sure'), 'agreeing prefix is stripped')
         self.assertTrue(self.route('Mike: sure', quoted='KJ: dinner?')['needsTarget'], 'conflict')
         self.assertTrue(self.route('Alex: sure', quoted='KJ: dinner?')['needsTarget'], 'ambiguous prefix')
+
+    def test_quote_finds_sender_on_safety_tags_and_old_headers(self):
+        # v1.4.22: a leading safety icon must not hide the name. Quiet filing tags and an old
+        # "Unknown · Name:" line still resolve to that contact.
+        for quoted in ('\u26a0\ufe0f KJ \u00b7 not a contact: hi',
+                       '\U0001f6ab KJ \u00b7 spam: offer',
+                       'KJ \u00b7 promo: sale',
+                       'KJ \u00b7 receipt: lunch',
+                       '\u26a0\ufe0f Unknown \u00b7 KJ: hi'):
+            r = self.route('sure', quoted=quoted)
+            self.assertEqual(r['contact']['label'], 'KJ', quoted)
+            self.assertEqual(r['by'], 'quote', quoted)
 
     def test_quote_with_sender_account_name_and_ambiguous_quote(self):
         r = self.route('yes', quoted='SenderBot Alex R.: you up?', senderXHandle='@SenderBot')
@@ -20355,7 +20429,7 @@ class Decode(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v132.py mode=644 sha256=4f65b18679e9ea6ef5844f35656b4478baa7eb849f792fe35eddc3e325e5b920 nl=1
+@@@@ FILE tests/py/test_v132.py mode=644 sha256=4d8e0314d7da409bc5e5a9332a41808704f261d3d21f828801e42691a7afbbb8 nl=1
 """v1.3.2 NO-SHIP remediation: one regression test per fixed item. Each test is written to pass on
 1.3.2 and fail on 1.3.1 (run this same file against a 1.3.1 checkout to confirm). JS-only items (owner
 gate #1, frame inbox-nav #7) have their regression tests under tests/js/."""
@@ -20564,7 +20638,7 @@ class BotFormat(unittest.TestCase):
                         {'type': 'status', 'status': 'resynced'},
                         {'type': 'status', 'status': 'messages_not_running'},
                         {'type': 'status', 'status': 'fda_missing'},
-                        {'type': 'status', 'status': 'whatever', 'detail': 'hi'},
+                        {'type': 'status', 'status': 'whatever', 'detail': 'Relaying is back on.'},
                         {'type': 'wrong_account'},
                         {'type': 'refused', 'reason': 'echo', 'label': 'Alex'}):
             shapes.append(rp.format_event(payload)['lines'][0]['text'])
@@ -21035,7 +21109,7 @@ class XdgExpansion(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v134.py mode=644 sha256=c6af7f9e45389e2f65cfa8be26de629a90c7d777ff1bbb9b6d289b10228c54df nl=1
+@@@@ FILE tests/py/test_v134.py mode=644 sha256=d71382aefe9a7509e34ba659b3074279fde3aa2c175357d9f5d2009e847ab624 nl=1
 """Regression tests: one+ per shipped change. The v1.3.4 items (A, B) pass on 1.3.4 and fail on the
 frozen 1.3.3 checkout; the v1.3.5 items (C1/W1/W4 + nits, classes suffixed W1/W4/Nits/W) pass on 1.3.5
 and fail on a 1.3.4 checkout (run this same file against that tree to confirm). Items:
@@ -21533,24 +21607,26 @@ class Placeholders(_WatchBase):
         self.db.add(self.ALLOWED, text=None, attach=[{'mime': 'image/jpeg'}, {'mime': 'image/png'}])
         self.w.tick()
         t = self.texts()
-        self.assertIn('📷 Photo', t)
-        self.assertIn('🎥 Video', t)
-        self.assertIn('📎 budget.pdf', t)
-        self.assertIn('🧷 Sticker', t)
-        self.assertIn('🎤 Voice message', t)
-        self.assertIn('📷 2 photos', t)
+        self.assertIn('Photo', t)
+        self.assertIn('Video', t)
+        self.assertIn('budget.pdf', t)
+        self.assertIn('Sticker', t)
+        self.assertIn('Voice message', t)
+        self.assertIn('2 photos', t)
+        self.assertFalse(any(x in ''.join(t) for x in ('\U0001f4f7', '\U0001f3a5', '\U0001f4ce', '\U0001f9f7', '\U0001f3a4')))
 
     def test_unsent_notice_no_old_text(self):
         self.w.tick()
         self.db.add(self.ALLOWED, text=None, date_retracted=123)
         self.w.tick()
-        self.assertIn('🚫 Unsent a message', self.texts())
+        self.assertIn('Unsent a message', self.texts())
+        self.assertNotIn('\U0001f6ab', ''.join(self.texts()))
 
     def test_edited_marks_without_old_text(self):
         self.w.tick()
         self.db.add(self.ALLOWED, text='new wording', date_edited=123)
         self.w.tick()
-        self.assertIn('new wording  ✏️ (edited)', self.texts())
+        self.assertIn('new wording · edited', self.texts())
 
 
 # ---------- item 7: first bare reply after a quiet-hours digest must name a person ----------
@@ -21746,7 +21822,7 @@ class TapbackLastSenderW(_WatchBase):
         self.assertEqual(after.get(self.ALLOWED), before_at.get(self.ALLOWED),
                          'a tapback must not advance the last-inbound time')
 @@@@ END
-@@@@ FILE tests/py/test_v138.py mode=644 sha256=da224739237cab8382889b22fd2c295fb5c8c39d2189e3cda358ae29a0b60fb4 nl=1
+@@@@ FILE tests/py/test_v138.py mode=644 sha256=a44ffe2a25c9c2fb53c191bdb3c36c6a8a6efdee6411c78f38f70a84ad671109 nl=1
 """v1.3.8: the /test end-to-end check (host, watcher probe, relay_post rendering, never texts a
 contact, every step time-boxed) and the guided setup helpers (owner-handle detection from chat.db,
 relayctl setup / test-result, relay-all pending until the owner's handles are known)."""
@@ -21955,6 +22031,39 @@ class HostTest(Base):
                         self.assertNotIn(b'secret body zz9', fh.read(), p)
 
 
+# v1.4.22 rewrote the chat lines. The golden file still stores the v1.3.7 wording; these are the
+# same payloads rendered in the current voice. /test rows are not in this map.
+_V1422_LINE = {
+    '\u2192 Alex \u2713\u2713 delivered': '\u2192 Alex \u2713\u2713',
+    '\u2192 Alex \u2713 sent': '\u2192 Alex \u2713',
+    '\u26a0\ufe0f Couldn\u2019t deliver your reply to Alex \u2014 it may not have sent (not_delivered).':
+        '\u26a0\ufe0f Didn\u2019t reach Alex.',
+    '\u26a0\ufe0f Couldn\u2019t confirm your reply to Alex was delivered.':
+        '\u26a0\ufe0f Couldn\u2019t confirm it reached Alex.',
+    '\u26a0\ufe0f Correction: your reply to Alex actually failed to deliver \u2014 disregard the earlier \u2713 sent (not_delivered).':
+        '\u26a0\ufe0f The earlier \u2713 to Alex was wrong. It did not deliver.',
+    '\u2753 Send to Alex? Reply yes within 2 min.': 'Send to Alex? Reply yes within 2 min.',
+    '\u2753 Reply to Alex? Reply yes within 2 min.': 'Reply to Alex? Reply yes within 2 min.',
+    '\U0001f6ab Muted Alex. Say "/unblock Alex" to undo.': 'Muted Alex. /unblock Alex',
+    '\u2705 Unmuted Alex.': 'Unmuted Alex.',
+    '\u23f3 Catching up \u2014 relaying a burst in batches (nothing dropped).':
+        'Catching up. Nothing is dropped.',
+    '\U0001f504 Resynced after a long gap; older messages were skipped.':
+        'Older messages were skipped after a gap.',
+    '\u26a0\ufe0f Messages isn\u2019t running on the Mac, so replies can\u2019t be sent right now.':
+        '\u26a0\ufe0f Messages isn\u2019t open, so replies can\u2019t send.',
+    '\u2139\ufe0f Paused. I won\u2019t relay.': 'Paused. I won\u2019t relay.',
+    '\u2139\ufe0f Commands: /who': 'Commands: /who',
+    '\u26a0\ufe0f The relay tab is signed in to the wrong X account \u2014 replies are paused until you switch back to the owner account.':
+        '\u26a0\ufe0f Wrong X account in this tab. Replies are paused.',
+    '\u231b Not sent to Alex.': 'Not sent to Alex. The question timed out.',
+    '\u231b Not sent.': 'Not sent. The question timed out.',
+    '\u26a0\ufe0f Didn\u2019t send that to Alex \u2014 it looked like a relayed message bounced straight back.':
+        '\u26a0\ufe0f Not sent to Alex. That looked like a relayed text.',
+    '\u26a0\ufe0f A reply wasn\u2019t sent to Alex.': '\u26a0\ufe0f Not sent to Alex.',
+}
+
+
 class RelayPostTest(unittest.TestCase):
     def payload(self, steps, tag='abcdef'):
         return {'type': 'relay_test', 'id': 'relay_test:abcdef123456', 'tag': tag, 'steps': steps}
@@ -22012,6 +22121,9 @@ class RelayPostTest(unittest.TestCase):
                            'New texts aren\u2019t coming through.')
                 want = json.loads(json.dumps(g['expect'], ensure_ascii=False).replace(
                     'Say /yes within 2 min.', 'Reply yes within 2 min.').replace(old_fda, rp.FDA_LINE))
+                for ln in want.get('lines') or []:
+                    if ln.get('text') in _V1422_LINE:
+                        ln['text'] = _V1422_LINE[ln['text']]
                 self.assertEqual(rp.format_event(g['payload']), want, g['payload']['type'])
 
     def test_relay_test_through_process_is_silent(self):
@@ -22335,7 +22447,7 @@ class HostSendPath(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v140.py mode=644 sha256=617fc4ac36e1c73ab29d2d195c2e2d2d74410874dfe3713eee0f828567a8b79b nl=1
+@@@@ FILE tests/py/test_v140.py mode=644 sha256=888d0aa32e0355ab290cc8a6c442b71c47ac6c13138bb6def72cdfd86ffec372 nl=1
 """v1.4.0: multi-word names, a reply to someone new (Contacts lookup + /yes), and host notifications
 that no longer vanish when the webhook is slow (the needs_target notify ok:false bug)."""
 import json
@@ -22483,8 +22595,7 @@ class NewContact(Base):
         r = self.send('Sam: hi')
         self.assertTrue(r.get('needsTarget'), r)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
-        self.assertIn('Sam Lee', ev['detail'])
-        self.assertIn('Sam Ortiz', ev['detail'])
+        self.assertIn('More than one Sam. Start with Sam Lee: your message', ev['detail'])
         self.assertNotIn('555', ev['detail'])
         self.assertEqual(self.osa(), [])
 
@@ -22500,7 +22611,7 @@ class NewContact(Base):
         r = self.send('Jordan Rivera: hi')
         self.assertTrue(r.get('needsTarget'), r)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
-        self.assertIn('couldn\u2019t check', ev['detail'])
+        self.assertIn('Contacts didn\u2019t answer', ev['detail'])
 
     def test_owner_never_offered(self):
         make_ab(self.tmp, [('Owen', 'Owner', [('mobile', '555-555-0199')])])
@@ -22601,7 +22712,7 @@ class PhotoReply(Quote):
 
 del Quote
 @@@@ END
-@@@@ FILE tests/py/test_v1411_dupcards.py mode=644 sha256=36842b7a17a025e7bd1b4c3db21a86369cfd95d40c748183bc05f89010526d5d nl=1
+@@@@ FILE tests/py/test_v1411_dupcards.py mode=644 sha256=545c716cac52aab4e8e16de0c6267cf3f4c6ad4c82b4b77ff74eb10b37b07baf nl=1
 """v1.4.11: duplicate Contacts cards with the same full name are one person (handles merged, deduped);
 several numbers -> a numbered pick prompt (most recently used first), never "start with the full name"."""
 from helpers import read_log
@@ -22695,7 +22806,7 @@ class Rank(Base):
         self.assertEqual(len(r['options']), 4)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]['detail']
         self.assertEqual(ev.count('\n'), 5)
-        self.assertTrue(ev.startswith('\u2753 Text Jordan Rivera at which?\n1 \u00b7 '), ev)
+        self.assertTrue(ev.startswith('Text Jordan Rivera at which?\n1 \u00b7 '), ev)
         self.assertTrue(ev.endswith('\nReply 1\u20134, or no.'), ev)
 
     def test_confirm_prompt_is_typed_text_not_a_reaction(self):
@@ -22707,10 +22818,10 @@ class Rank(Base):
                                        now=self.clock.now, poster=self.poster)
         ui = r.get('ui') or {}
         self.assertFalse(ui.get('react'), ui)
-        self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 \u2753 Text Jordan Rivera at which?'))
+        self.assertTrue(ui['type'][0]['text'].startswith('\U0001f916 Text Jordan Rivera at which?'))
         self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_confirm'], 'routine copy is deferred')
 @@@@ END
-@@@@ FILE tests/py/test_v1413_pick.py mode=644 sha256=12d8d02124802a7c23cb92e85bed92c153fb446c55ac03672f6867fd32ab05eb nl=1
+@@@@ FILE tests/py/test_v1413_pick.py mode=644 sha256=f04093dbc5edf102808f2a183173f25f068045bb541d4ec6b892e398493174e4 nl=1
 """v1.4.13: an answer to a pending pick prompt is checked against the pick first, never routed as a new text."""
 from helpers import FakeRunner, read_log
 from test_v140 import Base, CONV
@@ -22777,7 +22888,7 @@ class PendingPick(Base):
         refused = [p for p, _ in self.posts[n:] if p.get('type') == 'refused']
         self.assertEqual(len(refused), 1)
         self.assertEqual(refused[0].get('reason'), 'not_sent')
-        self.assertIn('nothing I could send', refused[0].get('detail') or '')
+        self.assertEqual(refused[0].get('detail') or '', 'There was nothing to send.')
         self.assertNotIn('text', refused[0])
         n = len(self.posts)
         self.m.host.handle_request(
@@ -22856,7 +22967,7 @@ class HeaderGuards(Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v1418_direct.py mode=644 sha256=16d4788f8ebef1f980b16e94f09d6d4f3bdb8eb5758450654db25f5ab11f8935 nl=1
+@@@@ FILE tests/py/test_v1418_direct.py mode=644 sha256=77a211d0fdd2c8a131beb8c58df6f037dcd7baa2972c02e979280328738ec4bc nl=1
 """v1.4.18: opt-in direct poster. Default off. Fictional names only. No live X calls."""
 import collections
 import contextlib
@@ -22965,7 +23076,7 @@ class HeaderParity(unittest.TestCase):
         self.assertEqual(rh._message_line(msgs[2]), 'on my way')
         self.assertNotIn(': ', rh._message_line(msgs[3]))
         self.assertEqual(rh._message_line(msgs[4]), rp._message_line(msgs[4]))
-        self.assertTrue(rh._message_line(msgs[5]).startswith('\u26a0\ufe0f Unknown'))
+        self.assertEqual(rh._message_line(msgs[5]), '\u26a0\ufe0f Sam \u00b7 not a contact: hi')
         self.assertTrue(rh._message_line(msgs[6]).startswith('\U0001f6ab'))
         now = 1_800_000_000
         a_lines, a_st = rh.add_headers(_lines(rh, msgs), 30, {}, now=now)
@@ -23554,7 +23665,7 @@ class Wake(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=c445fb291fdea4cdc89b2bd5f7ab91094df5a633c64ffa6e67098166e2e4446c nl=1
+@@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=42d890bd09450c4ce4eb5cd88056213f05c14b4ceeaedfefaea6713d1dcf612f nl=1
 """v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),
 and an exact full-name match to one Contacts card with one number sends without asking."""
 import json
@@ -23581,7 +23692,7 @@ class BareWords(Base):
     def test_plain_yes_confirms_block(self):
         self.send('/block Test Contact')
         self.assertNotIn('+15555550123', self.cfg().get('mute', []))
-        self.assertIn('reply yes within 2 min', self.posts[-1][0].get('detail', ''))
+        self.assertIn('Reply yes within 2 min', self.posts[-1][0].get('detail', ''))
         self.clock.t += 10
         r = self.send('Yes')
         self.assertEqual(self.osa(), [], 'the word is never texted')
@@ -23678,7 +23789,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=5e491a4f8f78ee0c11c874bcfd29de3bf1a3967623a55f226ab47789fc1dbd44 nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=50881be3a1c366ebcd50f00c4e10f77ee4af70941aafa724ca449b9dcecfa2f0 nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -23807,7 +23918,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.21 \u00b7 watcher 4s ago \u00b7 Messages open \u00b7 last text 2m \u00b7 bare reply \u2192 Alex')
+            'On \u00b7 v1.4.22 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -23815,15 +23926,16 @@ class Host(unittest.TestCase):
     def test_status_variants_and_paused(self):
         self.write_status(chatDb='unavailable')
         self.send('/status')
-        self.assertIn('watcher blind', self.posts[-1]['detail'])
+        self.assertIn('watcher can\u2019t read', self.posts[-1]['detail'])
         self.assertNotIn('4s ago', self.posts[-1]['detail'])
         os.unlink(os.path.join(self.rc.APP_DIR, 'status.json'))
         self.send('/status')
         d = self.posts[-1]['detail']
-        self.assertIn('watcher unseen', d)
+        self.assertIn('watcher not seen', d)
         self.assertIn('Messages not checked', d)
         self.assertIn('no texts yet', d)
-        self.assertIn('bare reply \u2192 name someone', d)
+        self.assertIn('name someone', d)
+        self.assertNotIn('bare reply', d)
         self.write_status(messagesRunning=False, lastForwardAt=self.rc.iso_utc(self.t - 10))
         self.send('/status')
         self.assertIn('Messages closed', self.posts[-1]['detail'])
@@ -23832,11 +23944,11 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(SAM, self.t - 40, label='Sam')
         self.write_status()
         self.send('/status')
-        self.assertIn('bare reply \u2192 unclear', self.posts[-1]['detail'])
+        self.assertIn('replies unclear', self.posts[-1]['detail'])
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.21 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.22 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -23844,9 +23956,9 @@ class Host(unittest.TestCase):
         self.assertEqual(self.h.HELP_TEXT, (
             '/status \u00b7 /who\n'
             '/pause \u00b7 /resume \u00b7 /snooze\n'
-            '/block Name \u00b7 /unblock Name\n'
-            '/add Name\n'
-            'Sam: your message\n'
+            '/block name \u00b7 /unblock name\n'
+            '/add name\n'
+            'name: your message\n'
             '/test \u00b7 /help'))
         n = len(self.osa())
         self.send('/help')
@@ -23870,7 +23982,7 @@ class Host(unittest.TestCase):
         self.assertFalse(cfg['paused'])
         self.assertEqual(cfg['snoozeUntil'], want)
         self.assertEqual(self.rc.format_clock(want), '7:00 AM')
-        detail = 'Snoozing until 7:00 AM. Tonight\u2019s texts arrive as one digest. /resume'
+        detail = 'Snoozing until 7:00 AM. Texts arrive as one digest. /resume'
         self.assertEqual(self.posts[-1]['detail'], detail)
         self.assertNotIn('text', self.posts[-1])
         log = read_log()
@@ -23878,7 +23990,7 @@ class Host(unittest.TestCase):
         self.assertIn('"seconds":', log)
         self.assertNotIn('Tonight', log)
         self.send('/resume')
-        self.assertEqual(self.posts[-1]['detail'], 'Resumed. Relaying is back on.')
+        self.assertEqual(self.posts[-1]['detail'], 'Relaying is back on.')
         self.assertNotIn('snoozeUntil', self.rc.read_raw_config())
         self.assertFalse(self.rc.load_config()['paused'])
 
@@ -23887,7 +23999,7 @@ class Host(unittest.TestCase):
         stored = self.rc.load_config()['snoozeUntil']
         self.assertEqual(stored, int(round(self.t + 8 * 3600)))
         self.assertTrue(self.posts[-1]['detail'].startswith('Snoozing until %s.' % self.rc.format_clock(stored)))
-        self.assertIn('Tonight\u2019s texts arrive as one digest. /resume', self.posts[-1]['detail'])
+        self.assertIn('Texts arrive as one digest. /resume', self.posts[-1]['detail'])
         before = json.dumps(self.rc.read_raw_config(), sort_keys=True)
         r = self.send('/snooze tomorrow')
         self.assertFalse(r.get('ok'))
@@ -23920,7 +24032,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.21 \u00b7 watcher 4s ago \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.22 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -24173,27 +24285,27 @@ class Routine(unittest.TestCase):
         self.assertEqual(m.watch.CHROME_BACK, 'Chrome is open again. Replies will send.')
         self.assertEqual(
             m.watch.CHROME_AWAY,
-            'Chrome hasn\u2019t checked in, so replies from your phone won\u2019t send. Open Chrome on the Mac.')
+            'Chrome hasn\u2019t checked in, so replies won\u2019t send. Open Chrome on the Mac.')
         self.assertEqual(self.line({'type': 'status', 'status': 'fda_missing', 'id': 'a'}), rp.FDA_LINE)
         custom = '\u26a0\ufe0f Texts stopped: custom.'
         self.assertEqual(self.line({'type': 'status', 'status': 'fda_missing', 'detail': custom, 'id': 'b'}), custom)
         self.assertEqual(self.line({'type': 'status', 'status': 'fda_missing', 'detail': 'plain prose', 'id': 'c'}),
                          rp.FDA_LINE)
         self.assertEqual(self.line({'type': 'status', 'status': 'recovered', 'detail': 'Watching Messages again.', 'id': 'd'}),
-                         '\u2139\ufe0f Watching Messages again.')
+                         'Watching Messages again.')
         away = self.line({'type': 'status', 'status': 'chrome_away', 'detail': m.watch.CHROME_AWAY, 'id': 'e'})
-        self.assertEqual(away, '\u2139\ufe0f ' + m.watch.CHROME_AWAY)
+        self.assertEqual(away, m.watch.CHROME_AWAY)
         self.assertNotIn('\u26a0\ufe0f\u26a0', away)
         self.assertEqual(self.line({'type': 'status', 'status': 'chrome_back', 'detail': m.watch.CHROME_BACK, 'id': 'f'}),
-                         '\u2139\ufe0f Chrome is open again. Replies will send.')
+                         'Chrome is open again. Replies will send.')
         self.assertEqual(self.line({'type': 'status', 'detail': m.host.HELP_TEXT, 'id': 'h'}),
-                         '\u2139\ufe0f ' + m.host.HELP_TEXT)
+                         m.host.HELP_TEXT)
         self.assertGreaterEqual(m.host.HELP_TEXT.count('\n'), 5)
         self.assertEqual(self.line({'type': 'status', 'status': 'paused', 'detail': m.host.PAUSE_DETAIL, 'id': 'p'}),
-                         '\u2139\ufe0f ' + m.host.PAUSE_DETAIL)
-        snooze = 'Snoozing until 7:00 AM. Tonight\u2019s texts arrive as one digest. /resume'
+                         m.host.PAUSE_DETAIL)
+        snooze = 'Snoozing until 7:00 AM. Texts arrive as one digest. /resume'
         self.assertEqual(self.line({'type': 'status', 'status': 'snoozing', 'detail': snooze, 'id': 's'}),
-                         '\u2139\ufe0f ' + snooze)
+                         snooze)
         fda = self._post({'type': 'status', 'status': 'fda_missing', 'id': 'fda1'})
         self.assertTrue(fda['sends'][0]['should_notify'])
         self.assertIsNone(fda['sends'][0]['reply_to'])
@@ -24212,7 +24324,7 @@ class Routine(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v142_names.py mode=644 sha256=0f51c4d623671344ddc53984632ffd49d9aa4e699279755e0a1a5894760d5a00 nl=1
+@@@@ FILE tests/py/test_v142_names.py mode=644 sha256=e55f20f16f6791a7735933f17a2786749c17c27ca25e73f199b30cfbeec16211 nl=1
 """v1.4.2: smart name recognition (any case; a name only when the relay list or Contacts know it, close
 typos always ask) and thumbs-up / thumbs-down reactions on a pending prompt."""
 import os
@@ -24294,7 +24406,8 @@ class Names(Base):
         r = self.send('jordn rivera: hi')
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual(self.osa(), [])
-        self.assertIn('Did you mean Jordan Rivera?', self.confirms()[-1]['detail'])
+        self.assertEqual(self.confirms()[-1]['detail'],
+                         'Text Jordan Rivera (+1 \u2022\u2022\u20220188)? Reply yes within 2 min.')
         self.clock.t += 10
         r = self.send('jordn rivera: hi', confirmed=True, handle='+15555550188')
         self.assertEqual(self.sent(), [('hi', '+15555550188')])
@@ -24384,7 +24497,7 @@ class Reactions(Base):
         self.assertFalse(r['ok'])
         self.assertFalse(self.cfg().get('mute'))
 @@@@ END
-@@@@ FILE tests/py/test_v142_quote.py mode=644 sha256=b283b8eb4ebd3e979eb9bd3583ba69f93646ce1d6a9493803fa1566c036f2879 nl=1
+@@@@ FILE tests/py/test_v142_quote.py mode=644 sha256=db719c1f6ec0171b575a38b2846c66309008227106bda47eeeb2f28a2ab71797 nl=1
 """v1.4.2: X's native Reply ("Replied to <name>" + preview) routes to the quoted person; a roster-only
 last texter (relay-all) gets a confirm instead of "Who's this for?"; an unresolved quote falls back to the
 last texter (always confirmed); the "Who's this for?" example is generic."""
@@ -24427,7 +24540,7 @@ class Quote(Base):
         self.assertEqual(r['handle'], RORY)
         self.assertEqual(self.osa(), [])
         ev = [p for p, _ in self.posts if p['type'] == 'needs_confirm'][-1]
-        self.assertEqual(ev['detail'], '\u2753 Reply to Rory? Reply yes within 2 min.')
+        self.assertEqual(ev['detail'], 'Reply to Rory? Reply yes within 2 min.')
         self.assertFalse([p for p, _ in self.posts if p['type'] == 'needs_target'])
 
     def test_bare_reply_to_roster_last_texter_asks_not_whos_this_for(self):
@@ -24453,7 +24566,8 @@ class GenericExample(Base):
         r = self.send('hello there')
         self.assertTrue(r.get('needsTarget'), r)
         ev = [p for p, _ in self.posts if p['type'] == 'needs_target'][-1]
-        self.assertIn('"Alex: \u2026"', ev['detail'])
+        self.assertIn('name: your message', ev['detail'])
+        self.assertNotIn('Alex', ev['detail'])
         self.assertNotIn('Test Contact', ev['detail'])
         self.assertNotIn('Test', ev['detail'])
 
@@ -24510,7 +24624,7 @@ class FastDeliveryCheck(Base):
             _s.signal(_s.SIGTERM, old)
         self.assertEqual(calls, [])
 @@@@ END
-@@@@ FILE tests/py/test_v143_handles.py mode=644 sha256=20aacc0d3f0b860a6daf3c07f56cb55c437d35ac9d7a83ac2560371b2a6bb639 nl=1
+@@@@ FILE tests/py/test_v143_handles.py mode=644 sha256=5c8836a5e4456e0a1534432241f0ed86403f88be26aadbbcabf259c2dacf313a nl=1
 """v1.4.3: business / short-code / odd handles are never a last-texter guess; guessed prompts show the
 Contacts name or a masked handle + "not in Contacts"; text-free quote diagnostics are logged."""
 import json
@@ -24585,7 +24699,7 @@ class Odd(Base):
         r = self.send('Sounds good thanks')
         self.assertTrue(r.get('needsTarget'), r)
         self.assertEqual(self.osa(), [])
-        self.assertEqual(self.targets()[-1]['detail'], 'Who\'s this for? Start with a name, like "Alex: \u2026"')
+        self.assertEqual(self.targets()[-1]['detail'], 'Who is this for? name: your message, or text name \u2026')
         self.assertFalse(self.confirms())
         self.assertNotIn('Sounds good', read_log())
 
@@ -24619,14 +24733,14 @@ class Odd(Base):
         self.last(RORY, 'Rory')
         r = self.send('On my way')
         self.assertTrue(r.get('needsConfirm'), r)
-        self.assertEqual(self.confirms()[-1]['detail'], '\u2753 Reply to Rory? Reply yes within 2 min.')
+        self.assertEqual(self.confirms()[-1]['detail'], 'Reply to Rory? Reply yes within 2 min.')
 
     def test_guess_prompt_masks_unknown_number(self):
         self.last(NOBODY, '(555) 555-0144')
         r = self.send('On my way')
         self.assertTrue(r.get('needsConfirm'), r)
         ev = self.confirms()[-1]
-        self.assertEqual(ev['detail'], '\u2753 Reply to +1 \u2022\u2022\u20220144 (\u26a0\ufe0f not in Contacts)? Reply yes within 2 min.')
+        self.assertEqual(ev['detail'], 'Reply to +1 \u2022\u2022\u20220144 (\u26a0\ufe0f not in Contacts)? Reply yes within 2 min.')
         self.assertNotIn('555-0144', json.dumps(ev))
         self.clock.t += 5
         r = self.send('On my way', confirmed=True, handle=NOBODY)
@@ -24679,7 +24793,7 @@ class Probe(Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v144_safety.py mode=644 sha256=81122897950102455ab97dbd623f4a817079a2e56dae3c22b47164180c2c626c nl=1
+@@@@ FILE tests/py/test_v144_safety.py mode=644 sha256=ebe9d22673b3fb50ccec3c5ab7e018db37ca98fb2d850d668b8c1ab345b48a38 nl=1
 """v1.4.4: an unplaceable quote never falls back to a sender who is not in Contacts; a reply never
 reaches a group (bare, quoted, or named) -- group replies are not supported, so it asks instead."""
 import json
@@ -24711,7 +24825,7 @@ class Safety(Base):
         self.assertTrue(r.get('needsTarget'), r)
         self.assertEqual(self.osa(), [])
         self.assertFalse(self.kinds('needs_confirm'))
-        self.assertEqual(self.kinds('needs_target')[-1]['detail'], 'Who\'s this for? Start with a name, like "Alex: \u2026"')
+        self.assertEqual(self.kinds('needs_target')[-1]['detail'], 'Who is this for? name: your message, or text name \u2026')
 
     def test_unresolved_quote_still_offers_a_contacts_name(self):
         self.last(RORY, 'Rory')
@@ -24751,7 +24865,7 @@ class Safety(Base):
         self.assertEqual(self.osa(), [])
         self.assertFalse(r.get('ok'), r)
 @@@@ END
-@@@@ FILE tests/py/test_v145.py mode=644 sha256=a537610fe0f6fa8838c9fd50fdf69137899f20ef72c210c9021a3f17b0747b22 nl=1
+@@@@ FILE tests/py/test_v145.py mode=644 sha256=6bdac499235210b0b7baea5dd11f802efe41bc67bd537f2f77fe6e28b4a96b5e nl=1
 """v1.4.5: replies to a group (exact group name or a quote of its message, always confirmed, relay-all
 only, delivery proven in the group chat), the wastebasket-to-block flow, and the spamMode tag."""
 import json
@@ -24796,7 +24910,7 @@ class Groups(Base):
         self.assertTrue(r.get('needsConfirm'), r)
         self.assertEqual((r['handle'], r['reason']), (GROUP, 'group'))
         self.assertEqual(self.osa(), [])
-        self.assertEqual(self.kinds('needs_confirm')[-1]['detail'], '\u2753 Reply to the Family group? Reply yes within 2 min.')
+        self.assertEqual(self.kinds('needs_confirm')[-1]['detail'], 'Reply to the Family group? Reply yes within 2 min.')
         return r
 
     def test_exact_name_any_case_asks_then_yes_sends_to_the_chat(self):
@@ -24819,7 +24933,7 @@ class Groups(Base):
         r = self.send('sounds good')
         self.assertTrue(r.get('needsTarget'), r)
         self.assertEqual(self.osa(), [])
-        self.assertIn("Who's this for?", self.kinds('needs_target')[-1]['detail'])
+        self.assertIn('Who is this for?', self.kinds('needs_target')[-1]['detail'])
 
     def test_confirmed_without_a_prompt_is_refused(self):
         r = self.send('family: cute pup', confirmed=True, handle=GROUP)
@@ -24912,7 +25026,7 @@ class Trash(Base):
     def test_trash_asks_then_yes_mutes(self):
         r = self.trash('iMessage Sam: buy now')
         self.assertTrue(r.get('needsConfirm'), r)
-        self.assertIn('Block Sam?', self.prompt())
+        self.assertIn('Stop relaying Sam', self.prompt())
         self.assertIn('Reply yes within 2 min', self.prompt())
         self.assertNotIn(SAM, self.muted())
         self.clock.t += 5
@@ -24946,7 +25060,7 @@ class Trash(Base):
 
     def test_group_line_blocks_the_sender_not_the_group(self):
         self.trash('Family \u00b7 Sam: buy now')
-        self.assertIn('Block Sam?', self.prompt())
+        self.assertIn('Stop relaying Sam', self.prompt())
         self.clock.t += 5
         self.send('yes')
         self.assertIn(SAM, self.muted())
@@ -25023,7 +25137,7 @@ class Spam(test_watch.Base):
         rp = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(rp)
         out = rp.format_event({'type': 'message', 'id': 'a', 'label': '(555) 555-0166', 'text': 'vote', 'unknown': True})
-        self.assertEqual(out['lines'][0]['text'], '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: vote')
+        self.assertEqual(out['lines'][0]['text'], '\u26a0\ufe0f (555) 555-0166 \u00b7 not a contact: vote')
         out = rp.format_event({'type': 'message', 'id': 'b', 'label': 'Sam', 'text': 'hi'})
         self.assertEqual(out['lines'][0]['text'], 'Sam: hi')
 
@@ -25085,7 +25199,7 @@ class Batching(test_watch.Base):
         self.w.tick()
         out = rp.format_event(self.poster.calls[0][1])
         self.assertEqual([ln['text'] for ln in out['lines']],
-                         ['Test: one', '\u26a0\ufe0f Unknown \u00b7 (555) 555-0166: two'])
+                         ['Test: one', '\u26a0\ufe0f (555) 555-0166 \u00b7 not a contact: two'])
 
 
 
@@ -25093,7 +25207,7 @@ class Batching(test_watch.Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v146.py mode=644 sha256=680e44bd95bdcf4a8d59e6462673faf74cab721a756c0a290a76e20d7b6f52d7 nl=1
+@@@@ FILE tests/py/test_v146.py mode=644 sha256=99787aeeaab0d703166c047049b822c521a5b3551e127b41db9f2b3838783c0f nl=1
 """v1.4.6: fast feedback in the owner's X tab (✅ / ❓ / 🤖 prompts / 👀 / mirrored tapbacks), the relay
 ignoring its own output, undo, quiet names (+ quote routing), follow-messages spam mode, STOP-footer
 cleanup, the one-post overnight recap. Fictional names only."""
@@ -25645,11 +25759,11 @@ class QuietNames(test_watch.Base):
 class RecapAndFormatting(unittest.TestCase):
     def test_tags(self):
         line = lambda **m: rp.format_event(dict({'type': 'message', 'label': 'Alex', 'text': 'hi'}, **m))['lines'][0]['text']
-        self.assertEqual(line(tag='promotion'), '\U0001f3f7\ufe0f Promo \u00b7 Alex: hi')
-        self.assertEqual(line(tag='transaction'), '\U0001f9fe Alex: hi')
-        self.assertEqual(line(tag='spam'), '\U0001f6ab Spam \u00b7 Alex: hi')
+        self.assertEqual(line(tag='promotion'), 'Alex \u00b7 promo: hi')
+        self.assertEqual(line(tag='transaction'), 'Alex \u00b7 receipt: hi')
+        self.assertEqual(line(tag='spam'), '\U0001f6ab Alex \u00b7 spam: hi')
         self.assertEqual(line(quiet=True), 'hi')
-        self.assertEqual(line(quiet=True, unknown=True), '\u26a0\ufe0f Unknown \u00b7 Alex: hi', 'tagged lines always name')
+        self.assertEqual(line(quiet=True, unknown=True), '\u26a0\ufe0f Alex \u00b7 not a contact: hi', 'tagged lines always name')
         self.assertEqual(line(quiet=True, group={'label': 'Family'}), 'Family \u00b7 Alex: hi', 'groups unchanged')
 
     def test_spam_summary_status(self):
@@ -25660,7 +25774,7 @@ class RecapAndFormatting(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v146_cards.py mode=644 sha256=61b5bd977dbb05c895dcfbc2a6d0e03dfaeebb3ead470e22bb03876ab65b47ed nl=1
+@@@@ FILE tests/py/test_v146_cards.py mode=644 sha256=4b54f14072a7c9a551e18f0ddc25f4a95d4c17ef802dcbf4eeb2c5622f76f648 nl=1
 """v1.4.6: a shared post arrives as its URL; every refusal tells him why (text line + ⚠️ on his message).
 Fictional names only."""
 import os
@@ -25692,13 +25806,13 @@ class Cards(HostBase):
         [p] = self.posts
         self.assertEqual((p['type'], p['reason']), ('refused', 'not_sent'))
         line = rp.format_event(p)['lines'][0]['text']
-        self.assertEqual(line, WARN + ' Not sent: There was nothing after the name to send. Type the message after "Jordan:".')
+        self.assertEqual(line, WARN + ' Not sent. Nothing came after \u201cJordan:\u201d.')
 
     def test_paused_and_other_refusals_also_say_why(self):
         self.req({'type': 'send', 'text': 'Jordan: hi'}, paused=True)
         self.assertIn('paused', self.posts[-1]['detail'])
         self.req({'type': 'send', 'text': 'x' * 4001})
-        self.assertIn('too long', self.posts[-1]['detail'])
+        self.assertEqual(self.posts[-1]['detail'], 'Over 4000 characters.')
 
     def test_not_his_relay_chat_stays_silent(self):
         self.h.handle_request({'type': 'send', 'text': 'Jordan: hi', 'conversationId': '9999-8888'}, cfg=self.cfg(),
@@ -25718,7 +25832,7 @@ class Cards(HostBase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v146_media.py mode=644 sha256=ffe2bd66f3d3e349acbf380a88cd57704ceab278deca7ad614f2c3d7e86817d2 nl=1
+@@@@ FILE tests/py/test_v146_media.py mode=644 sha256=220bf262556fca8c23aa8bf2e769a2561eac95f9d6b569b6c9aa0cf0ee732178 nl=1
 """v1.4.6: attachments both ways (1:1 photos in, his photos/files out). In-flight temp files only (mode
 600), deleted right after use or on error; logs carry counts, sizes and types only. Fictional names only."""
 import base64
@@ -25873,7 +25987,7 @@ class Outbound(HostBase):
         self.assertEqual([(p['type'], p['reason'], p['count'], p['sentText']) for p in self.posts],
                          [('refused', 'attachment', 2, False)])
         line = rp.format_event(self.posts[0])['lines'][0]['text']
-        self.assertIn('2 attachments couldn\u2019t be sent', line)
+        self.assertIn('2 attachments didn\u2019t send', line)
         self.posts.clear()
         r = self.req({'type': 'send', 'text': 'Jordan: hi', 'attachmentsSkipped': 1}, runner=FakeRunner([OK]))
         self.assertTrue(r['sent'])
@@ -25951,7 +26065,8 @@ class WatchMedia(test_watch.Base):
         self.w.tick()
         [m] = self.msgs()
         self.assertNotIn('media', m)
-        self.assertIn('\U0001f4f7 Photo', m['text'])
+        self.assertIn('\n\u2002Photo', m['text'])
+        self.assertNotIn('\U0001f4f7', m['text'])
         self.assertEqual(self.puts, [])
 
     def test_a_failed_upload_gets_a_notice_and_leaves_nothing(self):
@@ -25960,7 +26075,7 @@ class WatchMedia(test_watch.Base):
         self.w.tick()
         [m] = self.msgs()
         self.assertNotIn('media', m)
-        self.assertIn('couldn\u2019t be relayed', m['text'])
+        self.assertIn('Couldn\u2019t relay it', m['text'])
         self.assertEqual([f for _, _, fs in os.walk(self.m.media.OUTBOX_DIR) for f in fs], [])
 
     def test_two_photos_get_different_keys(self):
@@ -25975,7 +26090,8 @@ class WatchMedia(test_watch.Base):
     def test_photo_without_text_says_photo(self):
         self.photo()
         self.w.tick()
-        self.assertEqual(self.msgs()[0]['text'], '\U0001f4f7 Photo')
+        self.assertEqual(self.msgs()[0]['text'], '')
+        self.assertIn('media', self.msgs()[0])
 
     def test_non_image_gets_a_notice_and_no_bytes(self):
         self.photo(data=b'%PDF-1.4 fake', name='Lease.pdf', mime='application/pdf', text='see attached')
@@ -25983,7 +26099,7 @@ class WatchMedia(test_watch.Base):
         [m] = self.msgs()
         self.assertNotIn('media', m)
         self.assertIn('PDF file', m['text'])
-        self.assertIn('open Messages', m['text'])
+        self.assertIn('Open Messages', m['text'])
         self.assertNotIn('Lease', m['text'])
 
     def test_still_downloading_is_retried_then_noticed(self):
@@ -25994,7 +26110,7 @@ class WatchMedia(test_watch.Base):
         self.w.tick()
         [m] = self.msgs()
         self.assertNotIn('media', m)
-        self.assertIn('couldn\u2019t be relayed', m['text'])
+        self.assertIn('Couldn\u2019t relay it', m['text'])
 
     def test_groups_and_quiet_hours_are_not_staged(self):
         self.cfg['relayAll'] = True
@@ -26124,7 +26240,7 @@ class RoutineMedia(unittest.TestCase):
         r = rp.process(self.req(), runner=self.runner)
         self.assertEqual(r['action'], 'send', 'nothing uploadable: post the text')
         text = self.calls[-1][1]['text']
-        self.assertIn('Photo couldn\u2019t be relayed', text)
+        self.assertIn('didn\u2019t come through', text)
         self.assertNotIn('media', self.calls[-1][1])
         self.assertEqual(self.files(), [])
 
@@ -26132,20 +26248,20 @@ class RoutineMedia(unittest.TestCase):
         os.remove(os.path.join(self.media_dir, 'e' * 32 + '.png'))
         r = rp.process(self.req(), runner=self.runner)
         self.assertEqual(r['action'], 'send')
-        self.assertIn('open Messages', self.calls[-1][1]['text'])
+        self.assertIn('Open Messages', self.calls[-1][1]['text'])
 
     def test_media_off_after_a_failed_upload(self):
         rp.process(self.req(), runner=self.runner)
         r = rp.process(self.req(media_off=True), runner=self.runner)
         self.assertEqual(r['action'], 'send')
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
         self.assertEqual(self.files(), [])
 
     def test_text_with_photo_gets_an_appended_notice(self):
         self.assertEqual(rp.media_failed_text('Jordan: beach', 1),
-                         'Jordan: beach\n\u2002\U0001f4f7 Photo couldn\u2019t be relayed \u2014 open Messages to see it')
+                         'Jordan: beach\n\u2002Photo didn\u2019t come through. Open Messages.')
         self.assertEqual(rp.media_failed_text('Jordan: \U0001f4f7 3 photos', 3),
-                         'Jordan: \U0001f4f7 3 photos couldn\u2019t be relayed \u2014 open Messages to see them')
+                         'Jordan: 3 photos didn\u2019t come through. Open Messages.')
 
     def test_invalid_media_meta_is_ignored(self):
         bad = [{'token': '../x', 'ext': 'png', 'size': 1, 'sha256': 'a' * 64}, {'token': 'f' * 32, 'ext': 'exe', 'size': 1, 'sha256': 'a' * 64},
@@ -26163,7 +26279,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=cc0462c790cd487c48c4ab792db64502e392cc02612abc7aae62ed6ce8be0625 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=d1c6ae9cecb7e7153198a95a5832d842b37b1f7b5e80d0607829295983c4622c nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -26290,27 +26406,27 @@ class RoutineDrop(unittest.TestCase):
         r = rp.process(self.dreq(), runner=self.runner)
         self.assertEqual(r['action'], 'send')
         self.assertEqual(self.gets, [], 'the get key never goes to another host')
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
 
     def test_gone_tampered_or_wrong_size(self):
         for wire in (None, self.wire[:-1] + bytes([self.wire[-1] ^ 1]), self.wire + b'x'):
             self.wire, self.gets, self.calls = wire, [], []
             r = rp.process(self.dreq(payload=dict(self.req()['payload'], id='g-%d' % len(str(wire)))), runner=self.runner)
             self.assertEqual(r['action'], 'send')
-            self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+            self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
             self.assertEqual(self.files(), [])
 
     def test_a_prompt_without_the_photo_steps_never_gets_upload(self):
         r = rp.process(self.dreq(media_upload=False), runner=self.runner)
         self.assertEqual(r['action'], 'send', 'the text always posts')
         self.assertEqual(self.gets, [], 'nothing fetched: the drop copy just expires')
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
         self.assertEqual(self.files(), [])
 
     def test_no_drop_configured(self):
         r = rp.process(self.req(drop_config=os.path.join(self.d, 'missing.json')), runner=self.runner)
         self.assertEqual(r['action'], 'send')
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
 
     def test_drop_json_beside_the_dedupe_file(self):
         p = os.path.join(self.d, 'drop.json')
@@ -26356,7 +26472,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.21')
+        self.assertEqual(m.rc.VERSION, '1.4.22')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)
@@ -26385,7 +26501,7 @@ class Ctl(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v148_wrap.py mode=644 sha256=0ad51862ef02a04feae79457aabab199204d15198408b04773ceb82021090a6c nl=1
+@@@@ FILE tests/py/test_v148_wrap.py mode=644 sha256=f6a73c128eae2f675a68443150fd48bda5021609a96232ae489e0b811bea2705 nl=1
 """v1.4.8: the per-photo key travels sealed inside the drop blob (wrap key), so the webhook item carries no
 key and no url; relay_post derives the url from drop.json; body-free media_status codes + counts-only
 media.log. Regression: an item whose key did not survive the routine's hands is diagnosed ('no_key'),
@@ -26530,7 +26646,7 @@ class RoutineV2(unittest.TestCase):
         r = rp.process(self.dreq(drop={'url': DROP, 'get_key': 'g' * 40}), runner=self.runner)
         self.assertEqual((r['action'], r['media_status']), ('send', {'no_key': 1}))
         self.assertEqual(self.gets, [])
-        self.assertIn('couldn\u2019t be relayed', self.calls[-1][1]['text'])
+        self.assertIn('didn\u2019t come through', self.calls[-1][1]['text'])
 
     def test_v2_wrong_wrap_key(self):
         r = rp.process(self.dreq(drop={'url': DROP, 'get_key': 'g' * 40, 'wrap_key': relay_drop.b64u(bytes(32))}),
@@ -26624,7 +26740,7 @@ class CtlWrap(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v149_labels.py mode=644 sha256=e3b0bce9d119f81464a8925e6cfc5fef9791e81ce05840f4bf8224049a72990d nl=1
+@@@@ FILE tests/py/test_v149_labels.py mode=644 sha256=607d1c716ebcc1693328c82991318bdb8d0befa6fe4ab09b46d2e10d04bcb625 nl=1
 """v1.4.9: a photo line always carries the sender label (never "quiet"), and a routine media_off may
 carry a body-free media_error code. Replays 2026-10-19 16:45: a quiet, photo-only 1:1 message whose
 upload failed in the routine posted an unnamed notice. Fictional names only; fake drop, no network."""
@@ -26637,7 +26753,7 @@ import test_v148_wrap as v148
 import relay_drop  # noqa: E402
 rp = v148.rp
 
-NOTE = '\U0001f4f7 Photo couldn\u2019t be relayed \u2014 open Messages to see it'
+NOTE = 'Photo didn\u2019t come through. Open Messages.'
 
 
 class Labels(unittest.TestCase):
@@ -26708,7 +26824,7 @@ class Labels(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_watch.py mode=644 sha256=6cefc0ae2cb0b622f7816559d35ecac0125d11ce97bc46395b82050c1c5052e8 nl=1
+@@@@ FILE tests/py/test_watch.py mode=644 sha256=a30c9a926e58cbed9f1f15a45120d5b8d4a7e0768888f1bc20987d59ced0690a nl=1
 """Inbound watcher against a temp sqlite db shaped like chat.db."""
 import json
 import os
@@ -26821,7 +26937,7 @@ class Forwarding(Base):
         self.db.add(ALLOWED, text=None, ab=None)                           # nothing readable
         c = self.w.tick()
         self.assertEqual([p['text'] for _, p, _ in self.poster.calls],
-                         ['from the blob 👋', '❤️ a message', '📷 Photo'])
+                         ['from the blob \U0001f44b', '\u2764\ufe0f a message', 'Photo'])
         # a tapback is no longer a skipped "reaction"; the unreadable row is deferred (item 3), not dropped
         self.assertEqual((c['reactionsOrEvents'], c['group'], c['deferredEmpty'], c['empty']), (0, 1, 1, 0))
         # the tapback row never forwards the reacted message's own text

@@ -206,6 +206,39 @@ class HostTest(Base):
                         self.assertNotIn(b'secret body zz9', fh.read(), p)
 
 
+# v1.4.22 rewrote the chat lines. The golden file still stores the v1.3.7 wording; these are the
+# same payloads rendered in the current voice. /test rows are not in this map.
+_V1422_LINE = {
+    '\u2192 Alex \u2713\u2713 delivered': '\u2192 Alex \u2713\u2713',
+    '\u2192 Alex \u2713 sent': '\u2192 Alex \u2713',
+    '\u26a0\ufe0f Couldn\u2019t deliver your reply to Alex \u2014 it may not have sent (not_delivered).':
+        '\u26a0\ufe0f Didn\u2019t reach Alex.',
+    '\u26a0\ufe0f Couldn\u2019t confirm your reply to Alex was delivered.':
+        '\u26a0\ufe0f Couldn\u2019t confirm it reached Alex.',
+    '\u26a0\ufe0f Correction: your reply to Alex actually failed to deliver \u2014 disregard the earlier \u2713 sent (not_delivered).':
+        '\u26a0\ufe0f The earlier \u2713 to Alex was wrong. It did not deliver.',
+    '\u2753 Send to Alex? Reply yes within 2 min.': 'Send to Alex? Reply yes within 2 min.',
+    '\u2753 Reply to Alex? Reply yes within 2 min.': 'Reply to Alex? Reply yes within 2 min.',
+    '\U0001f6ab Muted Alex. Say "/unblock Alex" to undo.': 'Muted Alex. /unblock Alex',
+    '\u2705 Unmuted Alex.': 'Unmuted Alex.',
+    '\u23f3 Catching up \u2014 relaying a burst in batches (nothing dropped).':
+        'Catching up. Nothing is dropped.',
+    '\U0001f504 Resynced after a long gap; older messages were skipped.':
+        'Older messages were skipped after a gap.',
+    '\u26a0\ufe0f Messages isn\u2019t running on the Mac, so replies can\u2019t be sent right now.':
+        '\u26a0\ufe0f Messages isn\u2019t open, so replies can\u2019t send.',
+    '\u2139\ufe0f Paused. I won\u2019t relay.': 'Paused. I won\u2019t relay.',
+    '\u2139\ufe0f Commands: /who': 'Commands: /who',
+    '\u26a0\ufe0f The relay tab is signed in to the wrong X account \u2014 replies are paused until you switch back to the owner account.':
+        '\u26a0\ufe0f Wrong X account in this tab. Replies are paused.',
+    '\u231b Not sent to Alex.': 'Not sent to Alex. The question timed out.',
+    '\u231b Not sent.': 'Not sent. The question timed out.',
+    '\u26a0\ufe0f Didn\u2019t send that to Alex \u2014 it looked like a relayed message bounced straight back.':
+        '\u26a0\ufe0f Not sent to Alex. That looked like a relayed text.',
+    '\u26a0\ufe0f A reply wasn\u2019t sent to Alex.': '\u26a0\ufe0f Not sent to Alex.',
+}
+
+
 class RelayPostTest(unittest.TestCase):
     def payload(self, steps, tag='abcdef'):
         return {'type': 'relay_test', 'id': 'relay_test:abcdef123456', 'tag': tag, 'steps': steps}
@@ -263,6 +296,9 @@ class RelayPostTest(unittest.TestCase):
                            'New texts aren\u2019t coming through.')
                 want = json.loads(json.dumps(g['expect'], ensure_ascii=False).replace(
                     'Say /yes within 2 min.', 'Reply yes within 2 min.').replace(old_fda, rp.FDA_LINE))
+                for ln in want.get('lines') or []:
+                    if ln.get('text') in _V1422_LINE:
+                        ln['text'] = _V1422_LINE[ln['text']]
                 self.assertEqual(rp.format_event(g['payload']), want, g['payload']['type'])
 
     def test_relay_test_through_process_is_silent(self):

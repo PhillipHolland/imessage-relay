@@ -23,8 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.21'
-EXTENSION_VERSION = '1.4.21'   # v1.4.21 changes the extension (reload it, then Cmd+R the x.com chat tab)
+VERSION = '1.4.22'
+EXTENSION_VERSION = '1.4.21'   # v1.4.22 does not change the extension (no reload)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -925,14 +925,14 @@ def record_inbound(handle, at, path=None, label=''):
 
 
 def example_label(cfg=None, directory=None):
-    """v1.4.2: always a generic example name, never one of the owner's contacts or roster labels."""
-    return 'Alex'
+    """A stand-in word for a prompt, never one of the owner's contacts and never a sample name."""
+    return 'name'
 
 
 def ask_for_name_message(cfg, directory=None):
-    # v1.3.5: show both the colon form and a conversational form so the owner knows either works.
+    # Both the colon form and a conversational form, with the word "name" (never a sample contact).
     lbl = example_label(cfg, directory)
-    return 'Who\'s this for? Start with a name, like "%s: \u2026" or "text %s \u2026".' % (lbl, lbl)
+    return 'Who is this for? %s: your message, or text %s \u2026' % (lbl, lbl)
 
 
 def _maybe_confirm_directive(res, target, form, name, live):
@@ -982,21 +982,21 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                 return need('a bare reply never goes to a group')
             if not cfg['relayAll']:
                 return need('group replies need relay-all',
-                            "Can't send to the %s group: group replies need relay-all on." % e['label'])
+                            'Can\u2019t send to the %s group. Group replies need relay-all on.' % e['label'])
             at = e['lastInboundAt']
             if at is None or now - at > cfg['rosterDays'] * 86400:
                 return need('%s has not texted within rosterDays' % e['label'],
-                            "Can't send to the %s group: it hasn't texted you in the last %d days." % (e['label'], cfg['rosterDays']))
+                            'Can\u2019t send to the %s group. No text from it in %d days.' % (e['label'], cfg['rosterDays']))
             return {'contact': e, 'body': body, 'by': by, 'group': True}
         if e['kind'] == 'roster':
             if not cfg['relayAll']:
                 return need('%s is not a contact (relayAll is off)' % e['label'],
-                            "Can't send to %s: they aren't one of your relay contacts. Ask me to add them." % e['label'])
+                            'Can\u2019t send to %s. They aren\u2019t a relay contact. /add %s' % (e['label'], e['label']))
             at = e['lastInboundAt']
             if at is None or now - at > cfg['rosterDays'] * 86400:
                 return need('%s has not texted within rosterDays' % e['label'],
-                            "Can't send to %s: they haven't texted you in the last %d days. Ask me to add them as a contact."
-                            % (e['label'], cfg['rosterDays']))
+                            'Can\u2019t send to %s. No text from them in %d days. /add %s'
+                            % (e['label'], cfg['rosterDays'], e['label']))
         return {'contact': e, 'body': body, 'by': by}
 
     muted = set(cfg.get('mute') or ())
@@ -1038,7 +1038,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
         if d_status == 'empty':
             e = by_handle.get(d_handle)
             return need('named a recipient but gave no message',
-                        'What should I send to %s?' % (e['label'] if e else 'them'))
+                        'What should I send to %s?' % (e['label'] if e else 'name'))
         if d_status == 'unknown_handle':
             # W4: a verb aimed at a phone/email that has never texted in. Refuse; never recent.
             p_handle, p_status = d_handle, 'unknown_handle'
@@ -1050,8 +1050,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
     quoted_present = bool(re.sub(r'\s+', '', str(quoted or '')))
     if p_status == 'unknown_handle':
         return need('that number or email has never texted in',
-                    "Can't send to %s: they have never texted you. Ask me to add them as a contact first."
-                    % format_handle(p_handle))
+                    'Can\u2019t send to %s. They\u2019ve never texted you.' % format_handle(p_handle))
     if q_status == 'match':
         if p_status == 'match' and p_handle != q_handle:
             return need('the quoted message and the name prefix point to different people')
@@ -1081,7 +1080,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                and 0 <= now - e['lastInboundAt'] <= window]
         if grp and (not live or max(g['lastInboundAt'] for g in grp) >= live[0]['lastInboundAt']):
             return need('a group wrote last (group replies are not supported)',
-                        'Who\'s this for? Start with a name, like "%s: \u2026" (group replies aren\'t supported yet)'
+                        'Who is this for? %s: your message. Group replies aren\u2019t supported yet.'
                         % example_label(cfg, d))
         if not live:
             return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
@@ -1090,7 +1089,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
         if not is_person_handle(live[0]['handle']):
             # v1.4.3: the last texter is a business / short code / odd handle: never guessed; ask for a name
             return need('the last texter is a business or short-code handle',
-                        'Who\'s this for? Start with a name, like "%s: \u2026"' % example_label(cfg, d))
+                        ask_for_name_message(cfg, d))
         return deliver(live[0], text, 'recent')
 
     cands = name_candidates(text) if p_status == 'none' and not quote_unresolved else []
@@ -1099,7 +1098,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
         # only a match makes it a name. No match -> `fallback` (ordinary text, routed as if no name).
         c0 = cands[0]
         res = need('the name prefix matches no one on the relay list',
-                   "%s isn't on your relay list yet. Start with a name from it, or /add %s <number>."
+                   '%s isn\u2019t on your list. /add %s and the number.'
                    % (c0['name'], first_name(c0['name'])))
         res.update(unknownName=c0['name'], body=c0['body'], candidates=cands, fallback=recent_route())
         # a close typo of someone on the relay list ("Jordn:" for Jordan): offered, never sent unasked
@@ -1125,7 +1124,7 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
             # v1.4.4: a quote we could not place never falls back to someone who is not in Contacts
             # (e.g. a spam sender who wrote last): ask for a name instead of offering them.
             return need('a quote could not be placed and the last texter is not in Contacts',
-                        'Who\'s this for? Start with a name, like "%s: \u2026"' % example_label(cfg, d))
+                        ask_for_name_message(cfg, d))
         res['quoteUnresolved'] = True
     return res
 
