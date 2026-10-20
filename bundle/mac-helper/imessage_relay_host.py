@@ -1406,6 +1406,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if hint_norm and hint_norm != handle:
             return refuse('the routed recipient does not match the handle the extension reported', handle=handle)
         if not body.strip() and not atts:
+            # v1.4.28: "Alex:" with a photo that could not be read still says the photo did not send.
+            if skipped_n:
+                _warn_photo(contact.get('label', ''), cfg, poster, now)
+                return refuse('attachments could not be read', label=contact.get('label', ''), handle=handle)
             return refuse('empty text after the name prefix', label=contact.get('label', ''), handle=handle)
         if contact.get('kind') == 'group':
             # v1.4.5: a reply to a group (exact name or a quote of its message) is ALWAYS confirmed first.
@@ -1743,12 +1747,15 @@ def _quote_label(msg):
 
 # v1.4.24: the extension saw the owner's send and the host never answered. Exact line, via status detail.
 UNACKED_LINE = '\u26a0\ufe0f Didn\u2019t send. Reload X Chat and retype.'
-# v1.4.27: a photo was seen and did not go out. The label is the contact, or the word "name".
+# v1.4.28: a photo was seen and did not go out. With a person, name them. With no name, the short line.
 PHOTO_MISS = '\u26a0\ufe0f photo didn\u2019t send to %s, send it from Messages'
+PHOTO_MISS_BARE = '\u26a0\ufe0f photo didn\u2019t send'
 
 
 def photo_miss_line(label):
-    who = rc.clean_label(label) or 'name'
+    who = rc.clean_label(label)
+    if not who:
+        return PHOTO_MISS_BARE
     return PHOTO_MISS % who
 
 
@@ -1808,6 +1815,20 @@ def handle_signal(msg, cfg, now, poster):
         label = str(msg.get('label') or '').strip()
         rc.log_event('signal', status='guess_expired')
         notify(cfg, poster, {'type': 'guess_expired', 'label': label, 'at': rc.iso_utc(now())})
+        return {'ok': True}
+    if status == 'photo_held':
+        # v1.4.28: a lone photo was seen and is waiting for its caption. Counts only. No bytes, no text.
+        try:
+            count = int(msg.get('count') or 0)
+        except (TypeError, ValueError):
+            count = 0
+        try:
+            nbytes = int(msg.get('bytes') or 0)
+        except (TypeError, ValueError):
+            nbytes = 0
+        raw_kinds = msg.get('kinds') if isinstance(msg.get('kinds'), list) else []
+        kinds = sorted({k for k in raw_kinds if k in ('jpeg', 'png', 'gif', 'webp', 'heic')})
+        rc.log_event('photo_held', count=max(0, min(10, count)), bytes=max(0, min(250 * 1024 * 1024, nbytes)), kinds=kinds)
         return {'ok': True}
     if status == 'photo_miss':
         # v1.4.27: a photo was seen and never handed off (grab failed, or the short pairing window ended).

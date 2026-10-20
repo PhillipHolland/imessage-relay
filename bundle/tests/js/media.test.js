@@ -19,7 +19,7 @@ async function test(name, fn) {
 const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
 const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, photoPairMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
 
-function setup(extra) {
+function setup(extra, beforeStart) {
   const dom = new JSDOM('<html><body><div data-testid="dm-conversation-panel"></div></body></html>', { url: 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
   const { window } = dom;
   window.Element.prototype.getBoundingClientRect = function () {
@@ -28,12 +28,13 @@ function setup(extra) {
     const [l, t, w, h] = v.split(',').map(Number);
     return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
   };
-  const logs = [];
+  const logs = [], statuses = [];
+  if (beforeStart) beforeStart(window.document);
   out(window.document, 900, 'older history');      // already on the page at start: baselined, never sent
   const det = createRelayDetector({ window, document: window.document, config: Object.assign({}, FAST, extra || {}), getState: () => ({ paused: false, conversationFilter: '' }),
-    onEmit: i => logs.push(i), onStatus: () => {}, log: () => {}, onReaction: () => {}, seen: { has: () => false, add: () => {} } });
+    onEmit: i => logs.push(i), onStatus: s => statuses.push(s), log: () => {}, onReaction: () => {}, seen: { has: () => false, add: () => {} } });
   det.start();
-  return { window, doc: window.document, det, logs };
+  return { window, doc: window.document, det, logs, statuses };
 }
 function out(doc, n, text, imgs) {
   const e = doc.createElement('div');
@@ -369,6 +370,76 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     const send = b.host.filter(m => m.type === 'send')[1];
     assert.ok(send.attachments && send.attachments.length === 1);
     assert.ok(!send.attachmentsSkipped);
+  });
+
+  const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  function splitSend(doc, n) {
+    const textId = uuid(n), imgId = uuid(n + 1);
+    const wrap = doc.createElement('div');
+    wrap.innerHTML =
+      '<div><div><div data-testid="message-' + textId + '" data-dm-message-row data-send-status="sent">' +
+        '<span hidden>You sent</span>' +
+        '<div><div><div><div role="group" tabindex="0">' +
+          '<div data-side="right"><div><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"></circle><path d="M0 0"></path></svg></div></div>' +
+          '<div role="article"><div data-testid="message-text-' + textId + '"><span>Jordan:</span></div></div>' +
+        '</div></div></div></div></div></div></div>' +
+      '<div><div data-testid="message-' + imgId + '" data-dm-message-row data-send-status="sent">' +
+        '<span hidden>You sent</span>' +
+        '<div data-testid="bubble-sent" data-fake-rect="780,0,220,80"><div data-side="right">' +
+          '<img alt="Image" src="blob:https://x.com/split' + n + '">' +
+        '</div></div></div></div>';
+    doc.querySelector('[data-testid="dm-conversation-panel"]').appendChild(wrap);
+  }
+
+  await test('content: the text bubble reads the photo X rendered next to it', async () => {
+    const s = setup({ photoPairMs: 800 });
+    s.window.fetch = async () => ({ ok: true, arrayBuffer: async () => PNG.buffer });
+    await sleep(200);
+    splitSend(s.doc, 40);
+    await sleep(200);
+    assert.strictEqual(s.logs.length, 1, JSON.stringify(s.logs.map(l => [l.text, l.mediaCount])));
+    assert.strictEqual(s.logs[0].text, 'Jordan:');
+    assert.strictEqual(s.logs[0].mediaCount, 1);
+    assert.ok(!s.logs[0].quotedText, 'the photo slot is not a reply quote');
+    assert.ok(!JSON.stringify(s.logs[0]).includes('blob:'));
+    await sleep(40);
+    const held = s.statuses.find(x => x.status === 'photo_held');
+    assert.ok(held, JSON.stringify(s.statuses));
+    assert.strictEqual(held.count, 1);
+    assert.strictEqual(held.bytes, PNG.length);
+    assert.deepStrictEqual(held.kinds, ['png']);
+    assert.ok(!s.statuses.some(x => x.status === 'photo_miss'));
+  });
+
+  await test('content: a name prefix does not take a photo that was already on the page', async () => {
+    const s = setup({ photoPairMs: 5000 });
+    await sleep(180);
+    photoRow(s.doc, 48, {});
+    await sleep(40);
+    s.det.rebaseline();
+    await sleep(180);   // settleMs is 150; a row added during settle with no clock is history
+    photoRow(s.doc, 49, { text: 'Jordan: hi', side: false });
+    await sleep(150);
+    const it = s.logs.find(l => l.text === 'Jordan: hi');
+    assert.ok(it, JSON.stringify(s.logs.map(l => [l.text, l.mediaCount])));
+    assert.ok(!it.mediaCount, 'history stays history');
+  });
+
+  await test('content: a lone photo is held and a later name prefix sends it with no caption', async () => {
+    const s = setup({ photoPairMs: 800 });
+    s.window.fetch = async () => ({ ok: true, arrayBuffer: async () => PNG.buffer });
+    await sleep(200);
+    photoRow(s.doc, 46, {});
+    await sleep(80);
+    assert.strictEqual(s.logs.length, 0, 'held');
+    photoRow(s.doc, 47, { text: 'Jordan:', side: false });
+    await sleep(150);
+    assert.strictEqual(s.logs.length, 1, JSON.stringify(s.logs.map(l => [l.text, l.mediaCount, l.quotedText || ''])));
+    assert.strictEqual(s.logs[0].text, 'Jordan:');
+    assert.strictEqual(s.logs[0].mediaCount, 1);
+    await sleep(40);
+    const held = s.statuses.find(x => x.status === 'photo_held');
+    assert.ok(held && held.count === 1 && held.kinds.indexOf('png') >= 0, JSON.stringify(held));
   });
 
   console.log(`${passed} passed, ${failed} failed (v1.4.6 attachments)`);

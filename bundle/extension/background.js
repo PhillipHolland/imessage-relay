@@ -835,6 +835,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     else if (msg.signal.status === 'unacked') handleUnacked(msg.signal).catch(() => {});
     else if (msg.signal.status === 'photo_miss') {
       try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_miss' }); } catch (e) { /* host down */ }
+    } else if (msg.signal.status === 'photo_held') {
+      // v1.4.28: counts only. Kinds stay on the allow-list. No message text, no image bytes.
+      const count = Math.max(0, Math.min(10, Number(msg.signal.count) || 0));
+      const bytes = Math.max(0, Math.min(250 * 1024 * 1024, Number(msg.signal.bytes) || 0));
+      const allow = { jpeg: 1, png: 1, gif: 1, webp: 1, heic: 1 };
+      const kinds = [];
+      for (const k of (msg.signal.kinds || [])) if (allow[k] && kinds.indexOf(k) < 0) kinds.push(k);
+      kinds.sort();
+      try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_held', count, bytes, kinds }); } catch (e) { /* host down */ }
     }
     return false;
   }

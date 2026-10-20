@@ -104,6 +104,7 @@
     emptyTextRetries: 3,
     emptyRetryDelayMs: 400,
     photoPairMs: 20000,       // v1.4.27: a photo with no caption waits this long for the next text
+    photoGroupMs: 2000,       // v1.4.28: adjacent own bubbles from one send (image, then the text)
     urlPollMs: 1000,
     newestAt: 'auto',
     maxTextLength: 4000,       // aligned with the host's MAX_TEXT; over this = refuse, never truncate
@@ -149,6 +150,8 @@
     let recentEmits = [];
     let photoHold = null;              // v1.4.27: an image-only bubble waiting for the next text
     const photoReady = new WeakSet();  // released from that wait; emit once, do not hold again
+    const firstSeen = new WeakMap();   // v1.4.28: when this bubble first appeared (0 = already on the page)
+    const photoNoted = new WeakSet();  // photo_held already logged for this bubble
     const PHOTO_BARE_RE = /^(?:yes|y|yep|yeah|yes please|ok|okay|send|send it|do it|no|n|nope|cancel|cancel it)\.?$/i;
     const lastEls = {};
     const stats = { baselined: 0, emitted: 0, skippedHistory: 0, skippedDup: 0, skippedFilter: 0, skippedPaused: 0, skippedBulk: 0, skippedSettle: 0, skippedWrongAccount: 0, skippedOld: 0, refusedTooLong: 0 };
@@ -812,7 +815,11 @@
         if (holdsSelfSend(a)) keep.add(newest);
       }
       for (const e of list) {
-        if (keep.has(e)) continue;
+        if (keep.has(e)) {
+          if (!firstSeen.has(e)) firstSeen.set(e, now());
+          continue;
+        }
+        firstSeen.set(e, 0);            // v1.4.28: history must not pair with the next send
         processed.add(e);
         seenKeys.add(conversationId() + '|id:uuid=' + uuidOf(e));
       }
@@ -1089,14 +1096,95 @@
         schedule(0);
       }
       photoHold = { entry, media: srcs.slice(), quotedText: a.quotedText || '', youSent: !!a.youSent, key: a.key };
+      notePhotoHeld(entry, srcs);
       photoHold.timer = win.setTimeout(() => {
         if (!photoHold || photoHold.entry !== entry) return;
         photoHold = null;
+        if (!entry.isConnected) {
+          try { onStatus({ status: 'photo_miss', conversationId: conversationId() }); } catch (err) { /* ignore */ }
+          return;
+        }
         photoReady.add(entry);
         pending.add(entry);
         schedule(0);
       }, ms);
       return true;
+    }
+    // v1.4.28: one send is sometimes two own bubbles. Same message id, a shared send-group id
+    // (data-send-status is only "sent" on every row, so that word is not a group), or the next
+    // own bubble when both showed up within photoGroupMs.
+    function groupKey(el) {
+      const v = String(el && el.getAttribute ? (el.getAttribute('data-send-status') || '') : '').trim();
+      if (!v || /^(sent|sending|delivered|read|failed|pending|error)$/i.test(v)) return '';
+      return v.slice(0, 64);
+    }
+    function sameSend(a, b) {
+      if (!a || !b || a === b) return false;
+      const ua = uuidOf(a), ub = uuidOf(b);
+      if (ua && ua === ub) return true;
+      const ga = groupKey(a), gb = groupKey(b);
+      if (ga && ga === gb) return true;
+      const all = allEntries();
+      const ia = all.indexOf(a), ib = all.indexOf(b);
+      if (ia < 0 || ib < 0 || Math.abs(ia - ib) !== 1) return false;
+      const windowMs = Number(cfg.photoGroupMs) > 0 ? Number(cfg.photoGroupMs) : 0;
+      if (!windowMs) return false;
+      const ta = firstSeen.has(a) ? firstSeen.get(a) : 0;
+      const tb = firstSeen.has(b) ? firstSeen.get(b) : 0;
+      if (ta && tb && Math.abs(ta - tb) <= windowMs) return true;
+      const da = Date.parse(entryTimeIso(a) || ''), db = Date.parse(entryTimeIso(b) || '');
+      return !isNaN(da) && !isNaN(db) && Math.abs(da - db) <= windowMs;
+    }
+    function absorbMates(entry, quotedText) {
+      const srcs = [], mates = [];
+      let mateQuote = '', mateYou = false, mateEntry = null;
+      const pushSrc = src => { if (src && srcs.indexOf(src) < 0 && srcs.length < 10) srcs.push(src); };
+      const takeEntry = e => {
+        if (!e || e === entry || mates.indexOf(e) >= 0 || processed.has(e)) return;
+        if (!sameSend(entry, e)) return;
+        let other = null;
+        try { other = analyze(e); } catch (err) { return; }
+        if (!other || other.direction !== 'outbound') return;
+        if (quotesConflict(quotedText, other.quotedText)) return;
+        if (String(other.text || '').trim()) return;          // its own caption is a separate send
+        const foundMedia = mediaOf(e);
+        if (!foundMedia.length && !ownerPhotoSlots(e).length) return;
+        mates.push(e);
+        for (const s of foundMedia) pushSrc(s);
+        if (!mateQuote && other.quotedText) {
+          mateQuote = other.quotedText;
+          mateYou = !!other.youSent;
+          mateEntry = e;
+        }
+      };
+      const takeNode = node => {
+        if (!node || node.nodeType !== 1 || node === entry) return;
+        const entries = isUuidEntry(node) ? [node] : collectEntries(node);
+        if (entries.length) { entries.forEach(takeEntry); return; }
+        for (const img of safeAll(node, 'img')) {
+          if (!inOwnerPhoto(img) || isEmojiImg(img) || isExcluded(img)) continue;
+          pushSrc(imageSrc(img, true));
+        }
+      };
+      const chain = [entry];
+      let up = parentOf(entry);
+      for (let i = 0; i < 6 && up && up !== doc.body && collectEntries(up).length <= 1; i++, up = parentOf(up)) chain.push(up);
+      for (const node of chain) {
+        takeNode(node.previousElementSibling);
+        takeNode(node.nextElementSibling);
+      }
+      const all = allEntries();
+      const at = all.indexOf(entry);
+      if (at >= 0) { takeEntry(all[at - 1]); takeEntry(all[at + 1]); }
+      return { srcs, mates, mateQuote, mateYou, mateEntry };
+    }
+    function notePhotoHeld(entry, srcs) {
+      const list = (srcs || []).filter(Boolean).slice(0, 10);
+      if (!list.length || (entry && photoNoted.has(entry))) return;
+      if (entry) photoNoted.add(entry);
+      describeHeld(list).then(info => {
+        try { onStatus({ status: 'photo_held', count: info.count, bytes: info.bytes, kinds: info.kinds }); } catch (e) { /* ignore */ }
+      }).catch(() => {});
     }
     function flush() { try { flushInner(); } finally { flushCache = null; } }
     function flushInner() {
@@ -1134,9 +1222,12 @@
 
       const all = allEntries();
       flushCache = all;
+      const seenNow = now();
+      for (const e of found) if (!firstSeen.has(e)) firstSeen.set(e, seenNow);
       const ordered = Array.from(found).sort((a, b) => all.indexOf(a) - all.indexOf(b));
       const topNewest = newestAtTop();
       for (const e of ordered) {
+        if (processed.has(e)) continue;   // v1.4.28: the text bubble already took this photo
         const a = analyze(e);
         let cardUrls = [];
         const rawText = a.text;
@@ -1147,6 +1238,30 @@
         }
         let media = a.direction === 'outbound' ? mediaOf(e) : [];
         let quoteEntry = e;
+        // v1.4.28: X draws one send as two own bubbles, image then text. The text bubble reads the
+        // photo from the adjacent bubble (same message, or a neighbor that appeared within 2s).
+        // A name prefix with nothing after it ("Alex:") still takes that photo. A bare yes does not.
+        if (a.direction === 'outbound' && canPairText(a.text) && !baselineReason) {
+          const got = absorbMates(e, a.quotedText);
+          if (got.srcs.length) {
+            for (const src of got.srcs) if (media.indexOf(src) < 0) media.push(src);
+            for (const m of got.mates) {
+              processed.add(m);
+              try { const mk = analyze(m).key; if (mk) seenKeys.add(mk); } catch (err) { /* taken */ }
+            }
+            notePhotoHeld(got.mates[0] || e, got.srcs);
+            if (!a.quotedText && (got.mateQuote || (photoHold && got.mates.indexOf(photoHold.entry) >= 0 && photoHold.quotedText))) {
+              const fromHold = photoHold && got.mates.indexOf(photoHold.entry) >= 0 ? photoHold : null;
+              a.quotedText = got.mateQuote || (fromHold && fromHold.quotedText) || '';
+              if (got.mateYou || (fromHold && fromHold.youSent)) a.youSent = true;
+              quoteEntry = got.mateEntry || (fromHold && fromHold.entry) || quoteEntry;
+            }
+            if (photoHold && got.mates.indexOf(photoHold.entry) >= 0) {
+              if (photoHold.timer) win.clearTimeout(photoHold.timer);
+              photoHold = null;
+            }
+          }
+        }
         // v1.4.27: a photo with no caption rides on the next text to the same person. A bare yes/no
         // answers a prompt and must not take the photo. Differing quotes stay separate sends.
         if (photoHold && photoHold.entry !== e && a.direction === 'outbound' && canPairText(a.text) &&
@@ -1163,7 +1278,7 @@
           processed.add(held.entry);
           if (held.key) seenKeys.add(held.key);
         }
-        if (!a.text && !media.length || (a.direction === 'outbound' && mediaShell(e))) {
+        if ((!a.text && !media.length) || (a.direction === 'outbound' && !media.length && mediaShell(e))) {
           const n = retryCounts.get(e) || 0;
           if (n < cfg.emptyTextRetries && !baselineReason) {
             retryCounts.set(e, n + 1);
@@ -1938,6 +2053,27 @@
         if (/^(heic|heix|hevc|hevx|mif1|msf1|heif)$/i.test(brand)) return 'image/heic';
       }
       return '';
+    }
+    // v1.4.28: size and kind for the photo_held log. The buffer is not kept.
+    const HELD_KIND = { 'image/jpeg': 'jpeg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heic' };
+    async function describeHeld(srcs) {
+      const kinds = [];
+      let bytes = 0;
+      const f = win.fetch;
+      if (typeof f === 'function') {
+        for (const src of srcs.slice(0, 10)) {
+          try {
+            const r = await f(src, { credentials: 'include' });
+            if (!r || !r.ok) continue;
+            const u8 = new Uint8Array(await r.arrayBuffer());
+            bytes += u8.length;
+            const k = HELD_KIND[sniffMime(u8)] || '';
+            if (k && kinds.indexOf(k) < 0) kinds.push(k);
+          } catch (e) { /* the send path reports a miss; this log stays counts-only */ }
+        }
+      }
+      kinds.sort();
+      return { count: Math.min(10, srcs.length), bytes, kinds };
     }
     async function uiMediaInfo(uuid, index) {
       pruneMedia();

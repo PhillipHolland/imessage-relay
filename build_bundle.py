@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.27, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.28, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=66b4e485414d1435d61533f714fbd30d701ab2ff25f12972fde269a15e387b0c nl=1
-# iMessage Relay v1.4.27
+@@@@ FILE README.md mode=644 sha256=e021b02a6338c856363eada57e338a7fcad35d4d183126fd398c61184aef21a1 nl=1
+# iMessage Relay v1.4.28
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.28 (Chrome extension 1.4.28 + Mac helper; `relay_post.py` does not change): a photo X Chat draws as its own bubble still goes with the text from that same send. A name prefix on its own ("Alex:") sends the photo with no caption. If the photo never goes out, the chat says so, and says "⚠️ photo didn’t send" when it does not know who it was for. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.27 (Chrome extension 1.4.27 + Mac helper; `relay_post.py` does not change): a photo you attach in the relay chat is sent to the same person as the text. A caption in the same bubble goes with it. A photo alone pairs with the next text within about 20 seconds, or follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.26 (Chrome extension 1.4.26 + Mac helper; `relay_post.py` does not change): a ✅ on your own sent message is placed from the hover tray. The "+" opens the emoji picker, and a twemoji chip counts as placed. A background or unfocused X Chat tab is injected again after the extension reloads. If that script is not running, or a fresh self-send is not picked up, the chat posts the reload warning instead of staying silent. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.25 (Mac helper and installer only; the extension stays 1.4.24, so no reload; `relay_post.py` does not change): the test suite no longer clears Full Disk Access. A test uninstall was resetting that grant for the live watcher, and a test install could compile a second app with the same bundle id. Tests use a test bundle id in a temp directory, or they skip the compile. `install.sh` will not rebuild or re-sign the live app unless `--rebuild-watcher-app` is set. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -191,7 +192,8 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.27)
+## Limits (v1.4.28)
+- A photo X Chat splits into its own bubble is sent with the text from that same send. "Alex:" on its own sends the photo with no caption. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages, or "⚠️ photo didn’t send" when there is no name.
 - A photo you attach is sent with its caption, or with the next text within about 20 seconds. A photo alone follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages.
 - A native Reply that quotes only the message body goes to that sender when one person sent it, or when the 💬 header above that bubble names one person. Two matches ask who it is for.
 - A typed reply that gets no answer from the Mac within 10 seconds says to reload X Chat and retype. A background X Chat tab is injected again after the extension reloads. If that script is missing, or a fresh self-send is not picked up, the same warning is posted. A ✅ on the sent message is the confirmation. `→ name ✓✓` is posted only when that reaction does not land. A failed delivery still warns.
@@ -1341,7 +1343,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=0aa519748207809f2ecfac9a42d69ed82fff851562bfd8823db962e4d7aa544f nl=1
+@@@@ FILE extension/background.js mode=644 sha256=9c6958c8e8b54ee13384115b655244fd6c17d6f28e786d3967c0a03d1a605b3b nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -2179,6 +2181,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     else if (msg.signal.status === 'unacked') handleUnacked(msg.signal).catch(() => {});
     else if (msg.signal.status === 'photo_miss') {
       try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_miss' }); } catch (e) { /* host down */ }
+    } else if (msg.signal.status === 'photo_held') {
+      // v1.4.28: counts only. Kinds stay on the allow-list. No message text, no image bytes.
+      const count = Math.max(0, Math.min(10, Number(msg.signal.count) || 0));
+      const bytes = Math.max(0, Math.min(250 * 1024 * 1024, Number(msg.signal.bytes) || 0));
+      const allow = { jpeg: 1, png: 1, gif: 1, webp: 1, heic: 1 };
+      const kinds = [];
+      for (const k of (msg.signal.kinds || [])) if (allow[k] && kinds.indexOf(k) < 0) kinds.push(k);
+      kinds.sort();
+      try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_held', count, bytes, kinds }); } catch (e) { /* host down */ }
     }
     return false;
   }
@@ -2366,7 +2377,7 @@ chrome.runtime.onStartup.addListener(boot);
 // onStartup does not fire. Tests omit getURL, so they do not inject on load.
 try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot(); } catch (e) { /* tests */ }
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=57652cd1cc91686b6a37083d628fe11b8b413ea5dadacc752f69eb00c1afa87f nl=1
+@@@@ FILE extension/content.js mode=644 sha256=5bca0ac7cf1fd9fa4e3a5072372011ffd9de8aceee622e7bc543595a8ac594d3 nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -2473,6 +2484,7 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
     emptyTextRetries: 3,
     emptyRetryDelayMs: 400,
     photoPairMs: 20000,       // v1.4.27: a photo with no caption waits this long for the next text
+    photoGroupMs: 2000,       // v1.4.28: adjacent own bubbles from one send (image, then the text)
     urlPollMs: 1000,
     newestAt: 'auto',
     maxTextLength: 4000,       // aligned with the host's MAX_TEXT; over this = refuse, never truncate
@@ -2518,6 +2530,8 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
     let recentEmits = [];
     let photoHold = null;              // v1.4.27: an image-only bubble waiting for the next text
     const photoReady = new WeakSet();  // released from that wait; emit once, do not hold again
+    const firstSeen = new WeakMap();   // v1.4.28: when this bubble first appeared (0 = already on the page)
+    const photoNoted = new WeakSet();  // photo_held already logged for this bubble
     const PHOTO_BARE_RE = /^(?:yes|y|yep|yeah|yes please|ok|okay|send|send it|do it|no|n|nope|cancel|cancel it)\.?$/i;
     const lastEls = {};
     const stats = { baselined: 0, emitted: 0, skippedHistory: 0, skippedDup: 0, skippedFilter: 0, skippedPaused: 0, skippedBulk: 0, skippedSettle: 0, skippedWrongAccount: 0, skippedOld: 0, refusedTooLong: 0 };
@@ -3181,7 +3195,11 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
         if (holdsSelfSend(a)) keep.add(newest);
       }
       for (const e of list) {
-        if (keep.has(e)) continue;
+        if (keep.has(e)) {
+          if (!firstSeen.has(e)) firstSeen.set(e, now());
+          continue;
+        }
+        firstSeen.set(e, 0);            // v1.4.28: history must not pair with the next send
         processed.add(e);
         seenKeys.add(conversationId() + '|id:uuid=' + uuidOf(e));
       }
@@ -3458,14 +3476,95 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
         schedule(0);
       }
       photoHold = { entry, media: srcs.slice(), quotedText: a.quotedText || '', youSent: !!a.youSent, key: a.key };
+      notePhotoHeld(entry, srcs);
       photoHold.timer = win.setTimeout(() => {
         if (!photoHold || photoHold.entry !== entry) return;
         photoHold = null;
+        if (!entry.isConnected) {
+          try { onStatus({ status: 'photo_miss', conversationId: conversationId() }); } catch (err) { /* ignore */ }
+          return;
+        }
         photoReady.add(entry);
         pending.add(entry);
         schedule(0);
       }, ms);
       return true;
+    }
+    // v1.4.28: one send is sometimes two own bubbles. Same message id, a shared send-group id
+    // (data-send-status is only "sent" on every row, so that word is not a group), or the next
+    // own bubble when both showed up within photoGroupMs.
+    function groupKey(el) {
+      const v = String(el && el.getAttribute ? (el.getAttribute('data-send-status') || '') : '').trim();
+      if (!v || /^(sent|sending|delivered|read|failed|pending|error)$/i.test(v)) return '';
+      return v.slice(0, 64);
+    }
+    function sameSend(a, b) {
+      if (!a || !b || a === b) return false;
+      const ua = uuidOf(a), ub = uuidOf(b);
+      if (ua && ua === ub) return true;
+      const ga = groupKey(a), gb = groupKey(b);
+      if (ga && ga === gb) return true;
+      const all = allEntries();
+      const ia = all.indexOf(a), ib = all.indexOf(b);
+      if (ia < 0 || ib < 0 || Math.abs(ia - ib) !== 1) return false;
+      const windowMs = Number(cfg.photoGroupMs) > 0 ? Number(cfg.photoGroupMs) : 0;
+      if (!windowMs) return false;
+      const ta = firstSeen.has(a) ? firstSeen.get(a) : 0;
+      const tb = firstSeen.has(b) ? firstSeen.get(b) : 0;
+      if (ta && tb && Math.abs(ta - tb) <= windowMs) return true;
+      const da = Date.parse(entryTimeIso(a) || ''), db = Date.parse(entryTimeIso(b) || '');
+      return !isNaN(da) && !isNaN(db) && Math.abs(da - db) <= windowMs;
+    }
+    function absorbMates(entry, quotedText) {
+      const srcs = [], mates = [];
+      let mateQuote = '', mateYou = false, mateEntry = null;
+      const pushSrc = src => { if (src && srcs.indexOf(src) < 0 && srcs.length < 10) srcs.push(src); };
+      const takeEntry = e => {
+        if (!e || e === entry || mates.indexOf(e) >= 0 || processed.has(e)) return;
+        if (!sameSend(entry, e)) return;
+        let other = null;
+        try { other = analyze(e); } catch (err) { return; }
+        if (!other || other.direction !== 'outbound') return;
+        if (quotesConflict(quotedText, other.quotedText)) return;
+        if (String(other.text || '').trim()) return;          // its own caption is a separate send
+        const foundMedia = mediaOf(e);
+        if (!foundMedia.length && !ownerPhotoSlots(e).length) return;
+        mates.push(e);
+        for (const s of foundMedia) pushSrc(s);
+        if (!mateQuote && other.quotedText) {
+          mateQuote = other.quotedText;
+          mateYou = !!other.youSent;
+          mateEntry = e;
+        }
+      };
+      const takeNode = node => {
+        if (!node || node.nodeType !== 1 || node === entry) return;
+        const entries = isUuidEntry(node) ? [node] : collectEntries(node);
+        if (entries.length) { entries.forEach(takeEntry); return; }
+        for (const img of safeAll(node, 'img')) {
+          if (!inOwnerPhoto(img) || isEmojiImg(img) || isExcluded(img)) continue;
+          pushSrc(imageSrc(img, true));
+        }
+      };
+      const chain = [entry];
+      let up = parentOf(entry);
+      for (let i = 0; i < 6 && up && up !== doc.body && collectEntries(up).length <= 1; i++, up = parentOf(up)) chain.push(up);
+      for (const node of chain) {
+        takeNode(node.previousElementSibling);
+        takeNode(node.nextElementSibling);
+      }
+      const all = allEntries();
+      const at = all.indexOf(entry);
+      if (at >= 0) { takeEntry(all[at - 1]); takeEntry(all[at + 1]); }
+      return { srcs, mates, mateQuote, mateYou, mateEntry };
+    }
+    function notePhotoHeld(entry, srcs) {
+      const list = (srcs || []).filter(Boolean).slice(0, 10);
+      if (!list.length || (entry && photoNoted.has(entry))) return;
+      if (entry) photoNoted.add(entry);
+      describeHeld(list).then(info => {
+        try { onStatus({ status: 'photo_held', count: info.count, bytes: info.bytes, kinds: info.kinds }); } catch (e) { /* ignore */ }
+      }).catch(() => {});
     }
     function flush() { try { flushInner(); } finally { flushCache = null; } }
     function flushInner() {
@@ -3503,9 +3602,12 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
 
       const all = allEntries();
       flushCache = all;
+      const seenNow = now();
+      for (const e of found) if (!firstSeen.has(e)) firstSeen.set(e, seenNow);
       const ordered = Array.from(found).sort((a, b) => all.indexOf(a) - all.indexOf(b));
       const topNewest = newestAtTop();
       for (const e of ordered) {
+        if (processed.has(e)) continue;   // v1.4.28: the text bubble already took this photo
         const a = analyze(e);
         let cardUrls = [];
         const rawText = a.text;
@@ -3516,6 +3618,30 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
         }
         let media = a.direction === 'outbound' ? mediaOf(e) : [];
         let quoteEntry = e;
+        // v1.4.28: X draws one send as two own bubbles, image then text. The text bubble reads the
+        // photo from the adjacent bubble (same message, or a neighbor that appeared within 2s).
+        // A name prefix with nothing after it ("Alex:") still takes that photo. A bare yes does not.
+        if (a.direction === 'outbound' && canPairText(a.text) && !baselineReason) {
+          const got = absorbMates(e, a.quotedText);
+          if (got.srcs.length) {
+            for (const src of got.srcs) if (media.indexOf(src) < 0) media.push(src);
+            for (const m of got.mates) {
+              processed.add(m);
+              try { const mk = analyze(m).key; if (mk) seenKeys.add(mk); } catch (err) { /* taken */ }
+            }
+            notePhotoHeld(got.mates[0] || e, got.srcs);
+            if (!a.quotedText && (got.mateQuote || (photoHold && got.mates.indexOf(photoHold.entry) >= 0 && photoHold.quotedText))) {
+              const fromHold = photoHold && got.mates.indexOf(photoHold.entry) >= 0 ? photoHold : null;
+              a.quotedText = got.mateQuote || (fromHold && fromHold.quotedText) || '';
+              if (got.mateYou || (fromHold && fromHold.youSent)) a.youSent = true;
+              quoteEntry = got.mateEntry || (fromHold && fromHold.entry) || quoteEntry;
+            }
+            if (photoHold && got.mates.indexOf(photoHold.entry) >= 0) {
+              if (photoHold.timer) win.clearTimeout(photoHold.timer);
+              photoHold = null;
+            }
+          }
+        }
         // v1.4.27: a photo with no caption rides on the next text to the same person. A bare yes/no
         // answers a prompt and must not take the photo. Differing quotes stay separate sends.
         if (photoHold && photoHold.entry !== e && a.direction === 'outbound' && canPairText(a.text) &&
@@ -3532,7 +3658,7 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
           processed.add(held.entry);
           if (held.key) seenKeys.add(held.key);
         }
-        if (!a.text && !media.length || (a.direction === 'outbound' && mediaShell(e))) {
+        if ((!a.text && !media.length) || (a.direction === 'outbound' && !media.length && mediaShell(e))) {
           const n = retryCounts.get(e) || 0;
           if (n < cfg.emptyTextRetries && !baselineReason) {
             retryCounts.set(e, n + 1);
@@ -4308,6 +4434,27 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
       }
       return '';
     }
+    // v1.4.28: size and kind for the photo_held log. The buffer is not kept.
+    const HELD_KIND = { 'image/jpeg': 'jpeg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heic' };
+    async function describeHeld(srcs) {
+      const kinds = [];
+      let bytes = 0;
+      const f = win.fetch;
+      if (typeof f === 'function') {
+        for (const src of srcs.slice(0, 10)) {
+          try {
+            const r = await f(src, { credentials: 'include' });
+            if (!r || !r.ok) continue;
+            const u8 = new Uint8Array(await r.arrayBuffer());
+            bytes += u8.length;
+            const k = HELD_KIND[sniffMime(u8)] || '';
+            if (k && kinds.indexOf(k) < 0) kinds.push(k);
+          } catch (e) { /* the send path reports a miss; this log stays counts-only */ }
+        }
+      }
+      kinds.sort();
+      return { count: Math.min(10, srcs.length), bytes, kinds };
+    }
     async function uiMediaInfo(uuid, index) {
       pruneMedia();
       const ref = mediaRefs.get(String(uuid).toLowerCase());
@@ -4638,11 +4785,11 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=a858c6adf4d455628eb5f0278f87793cd3f9e7cb251a4565c9445294e223ee28 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=4fd1e98f92ddf67d6edd526a2b554ebe3456141b9f7651963a88eedc9967dfc5 nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.27",
+  "version": "1.4.28",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -4856,7 +5003,7 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=9b3caff5efc4ce244f63eb75071f249575b35d90d16aa0f60fa067c424eb8f1c nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=8a713c485fe940927e294210a6477f3049a5f1e430996d97934a1920b8405a3a nl=1
 #!/usr/bin/python3
 """
 com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.24.
@@ -6265,6 +6412,10 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         if hint_norm and hint_norm != handle:
             return refuse('the routed recipient does not match the handle the extension reported', handle=handle)
         if not body.strip() and not atts:
+            # v1.4.28: "Alex:" with a photo that could not be read still says the photo did not send.
+            if skipped_n:
+                _warn_photo(contact.get('label', ''), cfg, poster, now)
+                return refuse('attachments could not be read', label=contact.get('label', ''), handle=handle)
             return refuse('empty text after the name prefix', label=contact.get('label', ''), handle=handle)
         if contact.get('kind') == 'group':
             # v1.4.5: a reply to a group (exact name or a quote of its message) is ALWAYS confirmed first.
@@ -6602,12 +6753,15 @@ def _quote_label(msg):
 
 # v1.4.24: the extension saw the owner's send and the host never answered. Exact line, via status detail.
 UNACKED_LINE = '\u26a0\ufe0f Didn\u2019t send. Reload X Chat and retype.'
-# v1.4.27: a photo was seen and did not go out. The label is the contact, or the word "name".
+# v1.4.28: a photo was seen and did not go out. With a person, name them. With no name, the short line.
 PHOTO_MISS = '\u26a0\ufe0f photo didn\u2019t send to %s, send it from Messages'
+PHOTO_MISS_BARE = '\u26a0\ufe0f photo didn\u2019t send'
 
 
 def photo_miss_line(label):
-    who = rc.clean_label(label) or 'name'
+    who = rc.clean_label(label)
+    if not who:
+        return PHOTO_MISS_BARE
     return PHOTO_MISS % who
 
 
@@ -6667,6 +6821,20 @@ def handle_signal(msg, cfg, now, poster):
         label = str(msg.get('label') or '').strip()
         rc.log_event('signal', status='guess_expired')
         notify(cfg, poster, {'type': 'guess_expired', 'label': label, 'at': rc.iso_utc(now())})
+        return {'ok': True}
+    if status == 'photo_held':
+        # v1.4.28: a lone photo was seen and is waiting for its caption. Counts only. No bytes, no text.
+        try:
+            count = int(msg.get('count') or 0)
+        except (TypeError, ValueError):
+            count = 0
+        try:
+            nbytes = int(msg.get('bytes') or 0)
+        except (TypeError, ValueError):
+            nbytes = 0
+        raw_kinds = msg.get('kinds') if isinstance(msg.get('kinds'), list) else []
+        kinds = sorted({k for k in raw_kinds if k in ('jpeg', 'png', 'gif', 'webp', 'heic')})
+        rc.log_event('photo_held', count=max(0, min(10, count)), bytes=max(0, min(250 * 1024 * 1024, nbytes)), kinds=kinds)
         return {'ok': True}
     if status == 'photo_miss':
         # v1.4.27: a photo was seen and never handed off (grab failed, or the short pairing window ended).
@@ -8399,7 +8567,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=535b73a886b498a871b68be97dfce961cd1e68c47d0034e8f5110d2879e10937 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=97a8e786eb78a9343cfed75d4db4681bdb70843cfa9dd1fe5d12b4561c3be34a nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -8425,8 +8593,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.27'
-EXTENSION_VERSION = '1.4.27'   # v1.4.27 changes the extension
+VERSION = '1.4.28'
+EXTENSION_VERSION = '1.4.28'   # v1.4.28 changes the extension
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -16879,7 +17047,7 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/js/media.test.js mode=644 sha256=e45d37efa65c883270f5e3906335e98da91de8e4c9f72bd82d0a1d515db8a90f nl=1
+@@@@ FILE tests/js/media.test.js mode=644 sha256=96c8d2af1f37b2b1cf6cd47a964d920f95d6623ce6cbd16d854c34a10c50f89d nl=1
 /* v1.4.6: his photos in X Chat go out as iMessage attachments. content.js finds images in HIS outbound
  * bubble only (not emoji, not the quoted message) and reads them in 512 KiB chunks; background.js streams
  * them to the Mac (attach_chunk), sends metadata only with the reply, and keeps them for a "yes".
@@ -16901,7 +17069,7 @@ async function test(name, fn) {
 const uuid = n => `df48633d-6588-4b18-bc77-${String(n).padStart(12, '0')}`;
 const FAST = { settleMs: 150, batchDelayMs: 20, dupWindowMs: 60, emptyRetryDelayMs: 40, urlPollMs: 50, photoPairMs: 50, ownerNames: ['OwnerAcct'], botNames: ['SenderBot'] };
 
-function setup(extra) {
+function setup(extra, beforeStart) {
   const dom = new JSDOM('<html><body><div data-testid="dm-conversation-panel"></div></body></html>', { url: 'https://x.com/i/chat/111-222', pretendToBeVisual: true });
   const { window } = dom;
   window.Element.prototype.getBoundingClientRect = function () {
@@ -16910,12 +17078,13 @@ function setup(extra) {
     const [l, t, w, h] = v.split(',').map(Number);
     return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h };
   };
-  const logs = [];
+  const logs = [], statuses = [];
+  if (beforeStart) beforeStart(window.document);
   out(window.document, 900, 'older history');      // already on the page at start: baselined, never sent
   const det = createRelayDetector({ window, document: window.document, config: Object.assign({}, FAST, extra || {}), getState: () => ({ paused: false, conversationFilter: '' }),
-    onEmit: i => logs.push(i), onStatus: () => {}, log: () => {}, onReaction: () => {}, seen: { has: () => false, add: () => {} } });
+    onEmit: i => logs.push(i), onStatus: s => statuses.push(s), log: () => {}, onReaction: () => {}, seen: { has: () => false, add: () => {} } });
   det.start();
-  return { window, doc: window.document, det, logs };
+  return { window, doc: window.document, det, logs, statuses };
 }
 function out(doc, n, text, imgs) {
   const e = doc.createElement('div');
@@ -17251,6 +17420,76 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
     const send = b.host.filter(m => m.type === 'send')[1];
     assert.ok(send.attachments && send.attachments.length === 1);
     assert.ok(!send.attachmentsSkipped);
+  });
+
+  const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  function splitSend(doc, n) {
+    const textId = uuid(n), imgId = uuid(n + 1);
+    const wrap = doc.createElement('div');
+    wrap.innerHTML =
+      '<div><div><div data-testid="message-' + textId + '" data-dm-message-row data-send-status="sent">' +
+        '<span hidden>You sent</span>' +
+        '<div><div><div><div role="group" tabindex="0">' +
+          '<div data-side="right"><div><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"></circle><path d="M0 0"></path></svg></div></div>' +
+          '<div role="article"><div data-testid="message-text-' + textId + '"><span>Jordan:</span></div></div>' +
+        '</div></div></div></div></div></div></div>' +
+      '<div><div data-testid="message-' + imgId + '" data-dm-message-row data-send-status="sent">' +
+        '<span hidden>You sent</span>' +
+        '<div data-testid="bubble-sent" data-fake-rect="780,0,220,80"><div data-side="right">' +
+          '<img alt="Image" src="blob:https://x.com/split' + n + '">' +
+        '</div></div></div></div>';
+    doc.querySelector('[data-testid="dm-conversation-panel"]').appendChild(wrap);
+  }
+
+  await test('content: the text bubble reads the photo X rendered next to it', async () => {
+    const s = setup({ photoPairMs: 800 });
+    s.window.fetch = async () => ({ ok: true, arrayBuffer: async () => PNG.buffer });
+    await sleep(200);
+    splitSend(s.doc, 40);
+    await sleep(200);
+    assert.strictEqual(s.logs.length, 1, JSON.stringify(s.logs.map(l => [l.text, l.mediaCount])));
+    assert.strictEqual(s.logs[0].text, 'Jordan:');
+    assert.strictEqual(s.logs[0].mediaCount, 1);
+    assert.ok(!s.logs[0].quotedText, 'the photo slot is not a reply quote');
+    assert.ok(!JSON.stringify(s.logs[0]).includes('blob:'));
+    await sleep(40);
+    const held = s.statuses.find(x => x.status === 'photo_held');
+    assert.ok(held, JSON.stringify(s.statuses));
+    assert.strictEqual(held.count, 1);
+    assert.strictEqual(held.bytes, PNG.length);
+    assert.deepStrictEqual(held.kinds, ['png']);
+    assert.ok(!s.statuses.some(x => x.status === 'photo_miss'));
+  });
+
+  await test('content: a name prefix does not take a photo that was already on the page', async () => {
+    const s = setup({ photoPairMs: 5000 });
+    await sleep(180);
+    photoRow(s.doc, 48, {});
+    await sleep(40);
+    s.det.rebaseline();
+    await sleep(180);   // settleMs is 150; a row added during settle with no clock is history
+    photoRow(s.doc, 49, { text: 'Jordan: hi', side: false });
+    await sleep(150);
+    const it = s.logs.find(l => l.text === 'Jordan: hi');
+    assert.ok(it, JSON.stringify(s.logs.map(l => [l.text, l.mediaCount])));
+    assert.ok(!it.mediaCount, 'history stays history');
+  });
+
+  await test('content: a lone photo is held and a later name prefix sends it with no caption', async () => {
+    const s = setup({ photoPairMs: 800 });
+    s.window.fetch = async () => ({ ok: true, arrayBuffer: async () => PNG.buffer });
+    await sleep(200);
+    photoRow(s.doc, 46, {});
+    await sleep(80);
+    assert.strictEqual(s.logs.length, 0, 'held');
+    photoRow(s.doc, 47, { text: 'Jordan:', side: false });
+    await sleep(150);
+    assert.strictEqual(s.logs.length, 1, JSON.stringify(s.logs.map(l => [l.text, l.mediaCount, l.quotedText || ''])));
+    assert.strictEqual(s.logs[0].text, 'Jordan:');
+    assert.strictEqual(s.logs[0].mediaCount, 1);
+    await sleep(40);
+    const held = s.statuses.find(x => x.status === 'photo_held');
+    assert.ok(held && held.count === 1 && held.kinds.indexOf('png') >= 0, JSON.stringify(held));
   });
 
   console.log(`${passed} passed, ${failed} failed (v1.4.6 attachments)`);
@@ -18174,7 +18413,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=570b473bb02cb9cf5754a92ab6ea96b27092be0cb773aa5bf30e5c5108fc2e5f nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=dcea40135f2870e5b57feffa69407627f4d60d9def0fea0d13daa4962508841a nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -18229,7 +18468,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.27');
+  assert.strictEqual(m.version, '1.4.28');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'scripting', 'storage']);
@@ -25576,7 +25815,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=f0f582d777a848aa289db639fe3f9510c0b5f698a4b1acf353ed693f07077f9f nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=43a80df1f491e23e1f3da013eba12e36518e7b444547392470d66bcc0d8d9977 nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -25705,7 +25944,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.27 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.28 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -25735,7 +25974,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.27 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.28 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -25819,7 +26058,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.27 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.28 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -27702,7 +27941,7 @@ class Cards(HostBase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v146_media.py mode=644 sha256=b0cd60723de7762491da5a9e52ff38acfc6ee2584fb66275263784f49efa8c7c nl=1
+@@@@ FILE tests/py/test_v146_media.py mode=644 sha256=6857e4e99ddd64cc21a5e947643ae132941058fd8dede00a5daaafbda8f32883 nl=1
 """v1.4.6: attachments both ways (1:1 photos in, his photos/files out). In-flight temp files only (mode
 600), deleted right after use or on error; logs carry counts, sizes and types only. Fictional names only."""
 import base64
@@ -27727,6 +27966,7 @@ ALLOWED = test_watch.ALLOWED
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==')
 OK = (0, '')
 PHOTO = '\u26a0\ufe0f photo didn\u2019t send to %s, send it from Messages'
+PHOTO_BARE = '\u26a0\ufe0f photo didn\u2019t send'
 
 
 def upload(m, data, uid='a' * 32):
@@ -27795,7 +28035,14 @@ class Outbound(HostBase):
         runner = FakeRunner([OK])
         r = self.req({'type': 'send', 'text': 'Jordan:', 'attachments': [att]}, runner=runner)
         self.assertTrue(r.get('sent'), r)
+        self.assertEqual(r.get('routedBy'), 'prefix')
         self.assertEqual(runner.count('/usr/bin/osascript'), 1)
+        osa = [c for c in runner.calls if c[0] == '/usr/bin/osascript']
+        self.assertEqual(osa[0][-2:], ['participant', 'file'])
+        self.assertNotIn('Jordan:', ' '.join(str(x) for x in osa[0]))
+        log = read_log()
+        self.assertNotIn('Jordan:', log)
+        self.assertIn('"kinds": ["png"]', log)
         r = self.req({'type': 'send', 'text': '', 'attachments': [upload(self.m, PNG + b'2', 'b' * 32)]}, runner=FakeRunner([OK]))
         self.assertTrue(r.get('sent'), 'a bare photo goes to the recent person like a bare text')
 
@@ -27863,8 +28110,8 @@ class Outbound(HostBase):
         self.assertFalse(r['ok'])
         self.assertEqual(runner.count('/usr/bin/osascript'), 0)
         self.assertEqual(self.posts[-1]['type'], 'status')
-        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
-        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'name')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO_BARE)
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO_BARE)
         self.posts.clear()
         r = self.req({'type': 'send', 'text': 'Jordan: hi', 'attachmentsSkipped': 1}, runner=FakeRunner([OK]))
         self.assertTrue(r['sent'])
@@ -27888,7 +28135,7 @@ class Outbound(HostBase):
         r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [att]}, runner=FakeRunner([]))
         self.assertFalse(r['ok'])
         self.assertEqual(r['error'], 'attachment type not allowed')
-        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO_BARE)
         stage = self.m.media.SEND_STAGE_DIR
         self.assertEqual([f for _, _, fs in os.walk(stage) for f in fs] if os.path.isdir(stage) else [], [])
         self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, att['uploadId'])))
@@ -27898,12 +28145,34 @@ class Outbound(HostBase):
         self.assertTrue(r.get('sent'), r)
         self.assertIn('"kinds": ["heic"]', read_log())
 
-    def test_photo_miss_signal_uses_the_word_name(self):
+    def test_prefix_only_unreadable_photo_names_the_person(self):
+        r = self.req({'type': 'send', 'text': 'Jordan:', 'attachmentsSkipped': 1}, runner=FakeRunner([]))
+        self.assertFalse(r['ok'])
+        self.assertEqual(r['error'], 'attachments could not be read')
+        self.assertEqual(self.posts[-1]['type'], 'status')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
+        self.assertNotIn('Jordan:', read_log())
+
+    def test_photo_held_logs_counts_only(self):
+        r = self.req({'type': 'signal', 'status': 'photo_held', 'count': 1, 'bytes': 12,
+                      'kinds': ['png', 'nope', 'jpeg']})
+        self.assertTrue(r.get('ok'), r)
+        self.assertEqual(self.posts, [])
+        log = read_log()
+        self.assertIn('"event": "photo_held"', log)
+        self.assertIn('"count": 1', log)
+        self.assertIn('"bytes": 12', log)
+        self.assertIn('"jpeg"', log)
+        self.assertIn('"png"', log)
+        self.assertNotIn('nope', log)
+        self.assertNotIn('photo didn', log)
+
+    def test_photo_miss_signal_has_no_name(self):
         r = self.req({'type': 'signal', 'status': 'photo_miss'})
         self.assertTrue(r.get('ok'), r)
         self.assertEqual(self.posts[-1]['type'], 'status')
-        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
-        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'name')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO_BARE)
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO_BARE)
         log = read_log()
         self.assertNotIn('photo didn', log)
         self.assertIn('"status": "photo_miss"', log)
@@ -28199,7 +28468,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=2e74cdf60c30b422bb5b8715fbb27b2b817cdf4604a5dbe630dc81166b142856 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=c4de462cf36bc4166a0edc19cb922eea2419c2b678e305c98a034db0bcf31819 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -28392,7 +28661,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.27')
+        self.assertEqual(m.rc.VERSION, '1.4.28')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

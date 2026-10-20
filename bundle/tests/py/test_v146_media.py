@@ -22,6 +22,7 @@ ALLOWED = test_watch.ALLOWED
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==')
 OK = (0, '')
 PHOTO = '\u26a0\ufe0f photo didn\u2019t send to %s, send it from Messages'
+PHOTO_BARE = '\u26a0\ufe0f photo didn\u2019t send'
 
 
 def upload(m, data, uid='a' * 32):
@@ -90,7 +91,14 @@ class Outbound(HostBase):
         runner = FakeRunner([OK])
         r = self.req({'type': 'send', 'text': 'Jordan:', 'attachments': [att]}, runner=runner)
         self.assertTrue(r.get('sent'), r)
+        self.assertEqual(r.get('routedBy'), 'prefix')
         self.assertEqual(runner.count('/usr/bin/osascript'), 1)
+        osa = [c for c in runner.calls if c[0] == '/usr/bin/osascript']
+        self.assertEqual(osa[0][-2:], ['participant', 'file'])
+        self.assertNotIn('Jordan:', ' '.join(str(x) for x in osa[0]))
+        log = read_log()
+        self.assertNotIn('Jordan:', log)
+        self.assertIn('"kinds": ["png"]', log)
         r = self.req({'type': 'send', 'text': '', 'attachments': [upload(self.m, PNG + b'2', 'b' * 32)]}, runner=FakeRunner([OK]))
         self.assertTrue(r.get('sent'), 'a bare photo goes to the recent person like a bare text')
 
@@ -158,8 +166,8 @@ class Outbound(HostBase):
         self.assertFalse(r['ok'])
         self.assertEqual(runner.count('/usr/bin/osascript'), 0)
         self.assertEqual(self.posts[-1]['type'], 'status')
-        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
-        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'name')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO_BARE)
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO_BARE)
         self.posts.clear()
         r = self.req({'type': 'send', 'text': 'Jordan: hi', 'attachmentsSkipped': 1}, runner=FakeRunner([OK]))
         self.assertTrue(r['sent'])
@@ -183,7 +191,7 @@ class Outbound(HostBase):
         r = self.req({'type': 'send', 'text': 'Jordan: look', 'attachments': [att]}, runner=FakeRunner([]))
         self.assertFalse(r['ok'])
         self.assertEqual(r['error'], 'attachment type not allowed')
-        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO_BARE)
         stage = self.m.media.SEND_STAGE_DIR
         self.assertEqual([f for _, _, fs in os.walk(stage) for f in fs] if os.path.isdir(stage) else [], [])
         self.assertFalse(os.path.exists(os.path.join(self.m.media.INFLIGHT_DIR, att['uploadId'])))
@@ -193,12 +201,34 @@ class Outbound(HostBase):
         self.assertTrue(r.get('sent'), r)
         self.assertIn('"kinds": ["heic"]', read_log())
 
-    def test_photo_miss_signal_uses_the_word_name(self):
+    def test_prefix_only_unreadable_photo_names_the_person(self):
+        r = self.req({'type': 'send', 'text': 'Jordan:', 'attachmentsSkipped': 1}, runner=FakeRunner([]))
+        self.assertFalse(r['ok'])
+        self.assertEqual(r['error'], 'attachments could not be read')
+        self.assertEqual(self.posts[-1]['type'], 'status')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
+        self.assertNotIn('Jordan:', read_log())
+
+    def test_photo_held_logs_counts_only(self):
+        r = self.req({'type': 'signal', 'status': 'photo_held', 'count': 1, 'bytes': 12,
+                      'kinds': ['png', 'nope', 'jpeg']})
+        self.assertTrue(r.get('ok'), r)
+        self.assertEqual(self.posts, [])
+        log = read_log()
+        self.assertIn('"event": "photo_held"', log)
+        self.assertIn('"count": 1', log)
+        self.assertIn('"bytes": 12', log)
+        self.assertIn('"jpeg"', log)
+        self.assertIn('"png"', log)
+        self.assertNotIn('nope', log)
+        self.assertNotIn('photo didn', log)
+
+    def test_photo_miss_signal_has_no_name(self):
         r = self.req({'type': 'signal', 'status': 'photo_miss'})
         self.assertTrue(r.get('ok'), r)
         self.assertEqual(self.posts[-1]['type'], 'status')
-        self.assertEqual(self.posts[-1]['detail'], PHOTO % 'name')
-        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO % 'name')
+        self.assertEqual(self.posts[-1]['detail'], PHOTO_BARE)
+        self.assertEqual(rp.format_event(self.posts[-1])['lines'][0]['text'], PHOTO_BARE)
         log = read_log()
         self.assertNotIn('photo didn', log)
         self.assertIn('"status": "photo_miss"', log)

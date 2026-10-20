@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.27)
+# iMessage Relay: operator reference (v1.4.28)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -693,10 +693,12 @@ bot's side afterwards: `RC set-drop --url https://<drop> --key-stdin < <put key 
 `RC set-drop --wrap-key-stdin < <wrap key file>`. `RC set-drop --off` clears all three. **Order on an
 upgrade to v1.4.8:** bot side first (relay_post.py + `wrap_key` in drop.json), then the Mac.
 
-### Your photos and files out to iMessage (v1.4.6, routing tightened in v1.4.27)
+### Your photos and files out to iMessage (v1.4.6, routing tightened in v1.4.27, split bubbles in v1.4.28)
 Photos the owner sends in the relay chat go out as iMessage attachments to the same person the text would
 go to (a native Reply, a name prefix, the usual prompts, or a recent guess after yes). A photo and its
-caption in the same bubble go together. A photo with no caption waits about 20 seconds for the next text
+caption in the same bubble go together. X Chat sometimes draws one send as two own bubbles, the image
+and then the text: those stay one message, and a name prefix with nothing after it ("Alex:") sends the
+photo with no caption. A photo with no caption waits about 20 seconds for the next text
 to that person; on its own it follows a Reply the way a lone emoji does. The extension reads the image
 X already shows (no X API call), streams it to the Mac in 512 KiB chunks (`attach_chunk`), and the host
 verifies size + sha256 before anything is sent. It writes a temp file (mode 600) under
@@ -704,6 +706,7 @@ verifies size + sha256 before anything is sent. It writes a temp file (mode 600)
 yes), and deletes the file once chat.db shows an attachment row and `is_delivered` (or on failure, or
 after the pending TTL). jpeg, png, heic, gif, and webp only, 25 MB and 10 attachments per message. If a
 photo cannot be read or sent, the chat says "⚠️ photo didn’t send to Alex, send it from Messages".
+When it does not know who the photo was for, the line is "⚠️ photo didn’t send".
 **Shared posts and links**: an X post (or a link card) shared into the chat is sent as its URL
 (`https://x.com/<user>/status/<id>`), after anything typed ("Jordan:" + a post → the link to Jordan). A
 card is never a reply quote and its thumbnail is never sent as a photo.
@@ -875,6 +878,7 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.28**: a photo X Chat draws as its own bubble is sent with the text from that same send (Chrome extension 1.4.28 + Mac helper; `relay_post.py` does not change). A name prefix with nothing after it ("Alex:") sends the photo and no caption. If the photo never goes out, the chat says "⚠️ photo didn’t send to Alex, send it from Messages", or "⚠️ photo didn’t send" when there is no name. **Reload the extension** (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off. The routine prompt in this document is unchanged.
 **v1.4.27**: a photo attached in the relay chat is sent to the same person as the text (Chrome extension 1.4.27 + Mac helper; `relay_post.py` does not change). A caption in the same bubble goes with the photo. A photo alone pairs with the next text within about 20 seconds, or follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says "⚠️ photo didn’t send to Alex, send it from Messages". **Reload the extension** (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off. The routine prompt in this document is unchanged.
 **v1.4.26**: a ✅ on your own sent message is placed from the hover tray (Chrome extension 1.4.26 + Mac helper; `relay_post.py` does not change). The "+" opens the emoji picker, and a twemoji chip counts as placed. A background or unfocused X Chat tab is injected again after the extension reloads, so a manual refresh of that tab is not required for the script to attach. If that script is not running, or a fresh self-send is not picked up, the chat posts the existing reload warning instead of staying silent. **Reload the extension** (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off. The routine prompt in this document is unchanged.
 **v1.4.25**: the test suite no longer clears Full Disk Access (Mac helper and installer only; the extension stays 1.4.24, so no reload; `relay_post.py` does not change). A test uninstall called `tccutil reset` for the live watcher bundle id, which drops that grant without restarting the watcher. A test install could also compile and sign a second applet with the same bundle id. Tests now use a test-only bundle id in a temp directory, or they skip the compile. `install.sh` will not rebuild or re-sign the live app unless `--rebuild-watcher-app` is set. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off. The routine prompt in this document is unchanged.
