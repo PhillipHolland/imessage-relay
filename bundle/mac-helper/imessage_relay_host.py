@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.19.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.20.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -39,6 +39,7 @@ import struct
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc  # noqa: E402
@@ -413,27 +414,35 @@ def handle_command(cmd, quoted, cfg, now, poster):
     return dict(base, ok=True, muted=False, label=tgt['label'], action='unblocked')
 
 
-# ---------- owner commands (item 2): /who /pause /resume /help /add /test, run even while paused ----------
+# ---------- owner commands (item 2): /who /pause /resume /help /add /test /status /snooze ----------
 # These act only in the relay conversation, which is the owner's own 1:1 with the sender account, so
 # reaching here already means the owner typed them. They are parsed BEFORE the paused check so the owner
 # can /resume. None of them ever sends an iMessage, so they are safe while paused.
-HELP_TEXT = ('Commands: /who (who a bare reply goes to) \u00b7 /pause and /resume relaying \u00b7 '
-             '/add <Name> (save the last unknown number as a contact) \u00b7 /block and /unblock <Name> '
-             '\u00b7 /test (check every step; /test send also texts your own number) '
-             '\u00b7 /help. To text someone, start with their name: "Sam: \u2026" or "text Sam \u2026".')
-_OWNER_CMD_RE = re.compile(r'^/(who|pause|resume|help|add|test)\b\s*(.*)$', re.I | re.S)
+HELP_TEXT = ('/status \u00b7 /who\n'
+             '/pause \u00b7 /resume \u00b7 /snooze\n'
+             '/block Name \u00b7 /unblock Name\n'
+             '/add Name\n'
+             'Sam: your message\n'
+             '/test \u00b7 /help')
+PAUSE_DETAIL = ('Paused. Texts that arrive while paused are not kept. '
+                '/resume turns relaying back on, or /snooze to hold them for a digest.')
+_OWNER_CMD_RE = re.compile(r'^/(who|pause|resume|help|add|test|status|snooze)\b\s*(.*)$', re.I | re.S)
 ADD_WINDOW_S = 120.0
 
 
 def parse_owner_command(text):
-    """Return {'cmd',...} for /who /pause /resume /help /add, else None. /add takes a name and an
-    optional 'yes' confirmation ("/add Kent", then "/add yes")."""
+    """Return {'cmd',...} for /who /pause /resume /help /add /status /snooze, else None. /add takes a
+    name and an optional 'yes' confirmation ("/add Kent", then "/add yes"). /snooze keeps its args."""
     s = (text or '').strip()
     m = _OWNER_CMD_RE.match(s)
     if not m:
         return None
     cmd = m.group(1).lower()
     rest = (m.group(2) or '').strip()
+    if cmd == 'snooze':
+        return {'cmd': 'snooze', 'rest': rest[:40]}
+    if cmd == 'status':
+        return {'cmd': 'status'}
     if cmd == 'add':
         confirm = False
         if rest.lower() == 'yes':
@@ -450,10 +459,16 @@ def parse_owner_command(text):
     return {'cmd': cmd}
 
 
-def set_paused(on):
+def set_run_state(paused, snooze_until):
+    """Pause drops inbound texts. A snooze holds them (quiet-hours path) and always clears pause.
+    snooze_until 0 removes the key."""
     def fn():
         raw = rc.read_raw_config() or {}
-        raw['paused'] = bool(on)
+        raw['paused'] = bool(paused)
+        if snooze_until:
+            raw['snoozeUntil'] = int(snooze_until)
+        else:
+            raw.pop('snoozeUntil', None)
         rc.write_json_atomic(rc.CONFIG_PATH, raw)
     _with_host_lock(fn)
 
@@ -477,6 +492,72 @@ def who_summary(cfg, now_t):
                      key=lambda e: -e['lastInboundAt'])[:5]
     recent = ', '.join('%s %s' % (e['label'], rc.ago(now_t - e['lastInboundAt'])) for e in recents) or 'none'
     return 'A bare reply goes to: %s. Recent texters: %s.' % (target, recent)
+
+
+def _parse_iso(s):
+    try:
+        return datetime.fromisoformat(str(s).replace('Z', '+00:00')).timestamp()
+    except Exception:
+        return None
+
+
+def _age_unit(seconds):
+    s = max(0, int(seconds))
+    if s < 60:
+        return s, 's'
+    if s < 3600:
+        return max(1, int(round(s / 60.0))), 'm'
+    if s < 86400:
+        return max(1, int(round(s / 3600.0))), 'h'
+    return max(1, int(round(s / 86400.0))), 'd'
+
+
+def bare_reply_name(cfg, now_t):
+    """Who a bare reply would go to right now: a label, 'unclear', or 'name someone'. No message text."""
+    d = rc.build_directory(cfg, rc.load_roster())
+    muted = set(cfg.get('mute') or ())
+    window = cfg['replyWindowMinutes'] * 60
+    live = sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] == 'contact'
+                   and e['handle'] not in muted and 0 <= now_t - e['lastInboundAt'] <= window],
+                  key=lambda e: -e['lastInboundAt'])
+    if not live:
+        return 'name someone'
+    if (len(live) > 1 and cfg['ambiguousSeconds']
+            and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']):
+        return 'unclear'
+    return live[0]['label']
+
+
+def status_line(cfg, now_t):
+    """One body-free line for /status. Ages and names only; the routine adds the ℹ️ prefix."""
+    st = rc.read_json(os.path.join(rc.APP_DIR, 'status.json'), {}) or {}
+    if cfg['paused']:
+        state = 'Paused'
+    elif rc.snoozing(cfg, now_t):
+        state = 'Snoozing until ' + rc.format_clock(rc.snooze_until(cfg, now_t))
+    else:
+        state = 'On'
+    if st.get('chatDb') == 'unavailable':
+        watcher = 'watcher blind'
+    else:
+        at = _parse_iso(st.get('lastTickAt'))
+        if at is None:
+            watcher = 'watcher unseen'
+        else:
+            n, u = _age_unit(now_t - at)
+            watcher = 'watcher %d%s ago' % (n, u)
+    mr = st.get('messagesRunning')
+    messages = 'Messages open' if mr is True else 'Messages closed' if mr is False else 'Messages not checked'
+    fwd = _parse_iso(st.get('lastForwardAt'))
+    if fwd is None:
+        last = 'no texts yet'
+    elif now_t - fwd < 45:
+        last = 'last text just now'
+    else:
+        n, u = _age_unit(now_t - fwd)
+        last = 'last text %d%s' % (n, u)
+    return '%s \u00b7 v%s \u00b7 %s \u00b7 %s \u00b7 %s \u00b7 bare reply \u2192 %s' % (
+        state, rc.VERSION, watcher, messages, last, bare_reply_name(cfg, now_t))
 
 
 def last_unknown_texter(cfg):
@@ -594,26 +675,40 @@ def handle_owner_command(oc, quoted, cfg, now, poster):
     base = {'dryRun': cfg['dryRun']}
     c = oc['cmd']
     if c == 'pause':
-        if not cfg['paused']:
-            set_paused(True)
+        set_run_state(True, None)          # also ends a snooze; pause does not keep texts
         rc.log_event('paused', via='command')
         notify(cfg, poster, {'type': 'status', 'status': 'paused',
-                             'detail': 'Paused. I won\u2019t relay texts or send replies until you say /resume.',
-                             'at': rc.iso_utc(now())})
+                             'detail': PAUSE_DETAIL, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='pause', paused=True)
     if c == 'resume':
-        if cfg['paused']:
-            set_paused(False)
+        if cfg['paused'] or cfg.get('snoozeUntil'):
+            set_run_state(False, None)
         rc.log_event('resumed', via='command')
         notify(cfg, poster, {'type': 'status', 'status': 'resumed',
                              'detail': 'Resumed. Relaying is back on.', 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='resume', paused=False)
+    if c == 'snooze':
+        until, err = rc.parse_snooze(oc.get('rest') or '', now())
+        if err:
+            notify(cfg, poster, {'type': 'status', 'detail': err, 'at': rc.iso_utc(now())})
+            return dict(base, ok=False, command='snooze', error=err)
+        until = int(round(float(until)))
+        set_run_state(False, until)        # hold like quiet hours; do not use the pause cursor
+        rc.log_event('snoozed', seconds=max(0, int(until - now())))
+        detail = 'Snoozing until %s. Tonight\u2019s texts arrive as one digest. /resume' % rc.format_clock(until)
+        notify(cfg, poster, {'type': 'status', 'status': 'snoozing', 'detail': detail, 'at': rc.iso_utc(now())})
+        return dict(base, ok=True, command='snooze', snoozeUntil=int(until))
     if c == 'help':
         notify(cfg, poster, {'type': 'status', 'detail': HELP_TEXT, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='help')
     if c == 'who':
         notify(cfg, poster, {'type': 'status', 'detail': who_summary(cfg, now()), 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='who')
+    if c == 'status':
+        rc.log_event('status_cmd')
+        notify(cfg, poster, {'type': 'status', 'status': 'status', 'detail': status_line(cfg, now()),
+                             'at': rc.iso_utc(now())})
+        return dict(base, ok=True, command='status')
     if c == 'add':
         return handle_add(oc, cfg, now, poster)
     return dict(base, ok=False, error='unknown command')
@@ -1152,7 +1247,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     quoted = rc.strip_trailing_chips(quoted)
     if len(text) > MAX_TEXT:
         return refuse('text too long', textLength=len(text))
-    oc = parse_owner_command(text)            # /who /pause /resume /help /add /test run even while paused (item 2)
+    oc = parse_owner_command(text)            # /who /pause /resume /help /add /test /status /snooze, even while paused
     if oc and oc['cmd'] == 'test':            # a pre-1.3.8 extension forwards "/test" as a reply: never route it
         return relay_test.run_test({'send': oc['send']}, cfg, runner, sleeper, now, poster, via='send-path')
     if oc:

@@ -257,8 +257,12 @@ class RelayPostTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     rp.format_event(g['payload'])
             else:
-                # v1.4.1: confirmation prompts now say "Reply yes" (a plain yes confirms); nothing else changed
-                want = json.loads(json.dumps(g['expect'], ensure_ascii=False).replace('Say /yes within 2 min.', 'Reply yes within 2 min.'))
+                # v1.4.1: confirmation prompts now say "Reply yes" (a plain yes confirms).
+                # v1.4.20: fda_missing renders the fix sentence (older Macs send no ⚠️ detail).
+                old_fda = ('\u26a0\ufe0f The watcher can\u2019t read Messages yet (Full Disk Access). '
+                           'New texts aren\u2019t coming through.')
+                want = json.loads(json.dumps(g['expect'], ensure_ascii=False).replace(
+                    'Say /yes within 2 min.', 'Reply yes within 2 min.').replace(old_fda, rp.FDA_LINE))
                 self.assertEqual(rp.format_event(g['payload']), want, g['payload']['type'])
 
     def test_relay_test_through_process_is_silent(self):

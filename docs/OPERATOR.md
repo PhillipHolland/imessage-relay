@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.19)
+# iMessage Relay: operator reference (v1.4.20)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -388,9 +388,9 @@ never builds them itself; it only hands the payload to relay_post.py):
   `status` line instead: `Cancelled. Nothing was sent to <label>.`
 - `{"type":"blocked","label"}` → `🚫 Muted <label>. Say "/unblock <label>" to undo.`
 - `{"type":"unblocked","label"}` → `✅ Unmuted <label>.`
-- `{"type":"status","status":"messages_not_running"|"fda_missing"|"catching_up"|"resynced",…}` → a short
-  plain line; `catching_up` = a burst relayed in batches (nothing dropped), `resynced` = a long gap
-  skipped. No body.
+- `{"type":"status","status":"messages_not_running"|"fda_missing"|"catching_up"|"resynced"|"recovered"|"chrome_away"|"chrome_back",…}` → a short
+  plain line (`ℹ️ ` plus `detail`, except `fda_missing`, which is the ⚠️ Full Disk Access sentence). `catching_up` = a burst relayed in batches (nothing dropped), `resynced` = a long gap
+  skipped. v1.4.20: `fda_missing` is posted again after 30 minutes and then hourly until chat.db opens, then one `recovered` line; `chrome_away` / `chrome_back` when Chrome has not checked in. Those four lines set `should_notify` true. `/status`, `/pause`, `/snooze` and `/help` stay silent. No body.
 - `{"type":"wrong_account"}` → `⚠️ The relay tab is signed in to the wrong X account …` (no body). Sent
   once when the extension's owner gate fails; cleared when the owner account is detected again.
 - `{"type":"refused","reason":"echo","label"}` → `⚠️ Didn't send that to <label> …` (no body). A reply
@@ -603,10 +603,12 @@ TV", "Block party?" and a bare "block" all send as messages.
 
 **Other commands from the relay chat (owner only, `/`-prefixed, never texted to anyone).** These are
 handled by the Mac before the paused check, so they work even while paused:
+- `/status` — one line: on, paused, or snoozing; version; watcher age; whether Messages is open; how long since a text; who a bare reply would reach. No message text.
 - `/who` — shows who an un-prefixed reply would go to right now, plus the recent senders with their
   labels and times (no message text).
-- `/pause` and `/resume` — stop or restart relaying in both directions.
-- `/help` — a short reminder of the commands and reply forms.
+- `/pause` and `/resume` — stop or restart relaying in both directions. Pause does not keep texts that arrive while it is on (the reply says so and points at `/snooze`). `/resume` also ends a snooze.
+- `/snooze` — hold inbound texts until the next 7:00 AM local, or `/snooze 8h`, or `/snooze until 7:00`. They arrive as one digest. Replies still send. `/resume` ends it.
+- `/help` — a few short lines listing the commands.
 - `/test` — an end-to-end check (extension → Mac helper → watcher and chat.db → Messages → webhook →
   routine), reported back as one `🧪 relay test` message, one line per step. Each step has a timeout,
   so a missing piece shows as ❌ instead of hanging. `/test send` also texts "🧪 relay test" to the
@@ -786,8 +788,9 @@ is removed right after it is read.
 ### Owner commands (run on the Mac)
 | Owner says | You run |
 |---|---|
-| pause / stop relaying | `RC pause` (stops both directions; new texts are skipped, not queued) |
-| resume | `RC resume` |
+| pause / stop relaying | `RC pause` (stops both directions; texts that arrive while paused are not kept). In the relay chat, `/pause` says that and points at `/snooze`. |
+| resume | `RC resume` (also ends a `/snooze`) |
+| snooze until morning | In the relay chat: `/snooze` (next 7:00 AM), `/snooze 8h`, or `/snooze until 7:00`. Inbound texts are held and delivered as one digest. `/resume` ends it. |
 | quiet hours 10pm–7am | `RC quiet-hours 22:00 07:00 --tz <Area/City>` (or `off`) |
 | add Sam | `RC recent-senders` → confirm → `RC add-contact --name … --handle … [--label …]` |
 | call Alex Jordan "Aunt K" | `RC label "Alex J." "Aunt K"` |
@@ -806,13 +809,13 @@ is removed right after it is read.
 | block a spammer from the chat | 🗑️ on their relayed text, then `yes` (or `RC mute <label>`) |
 | one webhook per text again | `RC set batchWebhooks off` (default on: texts waiting together share one) |
 | reply to people from longer ago | `RC set rosterDays 60` (1–365) |
-| is it working? | ask them to type `/test` in the relay chat; or `RC status` (read `problems`) and `RC test-result` |
+| is it working? | `/status` in the relay chat (one short line), or `/test`; or `RC status` (read `problems`) and `RC test-result` |
 | what's left to set up? | `RC setup` (no flags: changes nothing, prints the checklist) |
 | find my own numbers | `RC owner-handles detect` (add `--apply` to save them) |
 | footer on replies | `RC set footer "<text>"` (empty by default) |
 
 Quiet hours apply only to **inbound** forwarding. Messages are held in memory and delivered as
-one digest when quiet hours end. The owner's replies always send. Pause stops both directions.
+one digest when quiet hours end. `/snooze` uses that same hold. The owner's replies always send. Pause stops both directions and does not keep texts.
 Dry run affects only outbound sends.
 
 ## Troubleshooting
@@ -867,6 +870,7 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.20**: commands in the relay chat (Mac helper + routine relay_post.py; the extension stays 1.4.16, so no reload). `/status` is one short line (on, paused, or snoozing; version; watcher age; Messages open or not; how long since a text; who a bare reply would reach; no message text). If Full Disk Access for iMessage Relay Watcher is off, the chat says how to turn it back on, repeats while it stays off, and says "Watching Messages again." when reads work. If Chrome has not checked in, one line says replies from the phone will not send. `/pause` says texts during the pause are not kept and points at `/snooze`. `/snooze` (next 7:00 AM, or `8h`, or `until 7:00`) holds texts and delivers one digest; `/resume` ends a snooze too. `/help` is a few short lines. The routine prompt in this document is unchanged. **Update relay_post.py on your side** so the Full Disk Access line is the new sentence and those health lines notify. Then re-run `./install.sh` (the watcher app is not rebuilt).
 **v1.4.19**: speed on the current path (Mac helper + routine relay_post.py; the extension stays 1.4.16, so no reload). The watcher notices a chat.db change on the next 0.25 s step instead of ignoring the first second, which was ~1 s while Messages kept rewriting the database. The routine key cache lasts 24 h, so a warm run returns `send` on the first call; a failed encrypt still deletes the cache and asks for a fetch immediately. Direct post is unchanged and stays off. The undo window was already `undoSeconds` (default 5, range 0–10, `relayctl set undoSeconds N`). A shorter routine prompt is proposed at `docs/ROUTINE_PROMPT_FAST.md`; the template in this document is the live one and is not replaced. **Update relay_post.py on your side for the 24 h cache**, then re-run `./install.sh` (the watcher app is not rebuilt).
 **v1.4.18**: opt-in direct post (Mac helper + routine relay_post.py; the extension stays 1.4.16, so no
 reload from v1.4.16). Default off: until `relayctl xpost on`, inbound texts still take the webhook path.

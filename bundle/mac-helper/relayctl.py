@@ -823,7 +823,10 @@ def main(argv=None):
         if c == 'status':
             out = cmd_status()
         elif c in ('pause', 'resume'):
-            cfg = edit_config(lambda raw: raw.__setitem__('paused', c == 'pause'))
+            def _pr(raw):
+                raw['paused'] = c == 'pause'
+                raw.pop('snoozeUntil', None)   # pause does not keep texts; resume ends a snooze
+            cfg = edit_config(_pr)
             out = {'ok': True, 'paused': cfg['paused']}
         elif c == 'dry-run':
             if not parse_bool(args.value):

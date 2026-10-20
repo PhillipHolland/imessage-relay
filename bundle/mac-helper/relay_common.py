@@ -21,10 +21,10 @@ import sqlite3
 import subprocess
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.19'
-EXTENSION_VERSION = '1.4.16'   # v1.4.19 does not change the extension (status must not nag a reload)
+VERSION = '1.4.20'
+EXTENSION_VERSION = '1.4.16'   # v1.4.20 does not change the extension (status must not nag a reload)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -64,6 +64,7 @@ DEFAULT_CONFIG = {
     'paused': False,
     'dryRun': True,
     'quietHours': None,
+    'snoozeUntil': 0,              # v1.4.20: unix time; inbound is held (like quiet hours) until then. 0 = off
     'contacts': [],
     'relayConversationId': '',
     'replyWindowMinutes': 120,
@@ -268,6 +269,12 @@ def sanitize_config(user):
         else:
             qh = {'start': qh['start'], 'end': qh['end'], 'tz': tz}
     cfg['quietHours'] = qh
+    try:
+        cfg['snoozeUntil'] = float(cfg.get('snoozeUntil') or 0)
+    except (TypeError, ValueError):
+        cfg['snoozeUntil'] = 0
+    if cfg['snoozeUntil'] < 0:
+        cfg['snoozeUntil'] = 0
     contacts = []
     seen = set()
     for c in cfg.get('contacts') if isinstance(cfg.get('contacts'), list) else []:
@@ -1185,6 +1192,80 @@ def in_quiet_hours(qh, now=None):
     t = local_now(qh, now)
     m = t.hour * 60 + t.minute
     return s <= m < e if s < e else (m >= s or m < e)
+
+
+SNOOZE_MAX_S = 36 * 3600     # a hand-edited snoozeUntil further out than this is ignored
+SNOOZE_USAGE = 'Say /snooze, /snooze 8h, or /snooze until 7:00.'
+_SNOOZE_FOR = re.compile(r'^(\d+)\s*h$', re.I)
+_SNOOZE_AT = re.compile(r'^(?:until\s+)?(\d{1,2})(?::(\d{2}))?(?:\s*([ap])\.?m\.?)?$', re.I)
+
+
+def snooze_until(cfg, now=None):
+    """Active snooze end (unix), or 0. A time already past, or more than 36 h ahead, is off."""
+    now = time.time() if now is None else float(now)
+    try:
+        u = float((cfg or {}).get('snoozeUntil') or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if u <= now or u - now > SNOOZE_MAX_S:
+        return 0.0
+    return u
+
+
+def snoozing(cfg, now=None):
+    return snooze_until(cfg, now) > 0
+
+
+def holding_inbound(cfg, now=None):
+    """Quiet hours or an active /snooze: hold inbound texts in memory and digest them when both end."""
+    return in_quiet_hours((cfg or {}).get('quietHours'), now) or snoozing(cfg, now)
+
+
+def format_clock(ts):
+    """Local wall clock, '7:00 AM'. Locale-independent."""
+    dt = datetime.fromtimestamp(float(ts)).astimezone()
+    h = dt.hour % 12 or 12
+    return '%d:%02d %s' % (h, dt.minute, 'AM' if dt.hour < 12 else 'PM')
+
+
+def next_clock(hour, minute, now):
+    """Next local HH:MM strictly after `now` (today, or tomorrow if that time has passed)."""
+    now_dt = datetime.fromtimestamp(float(now)).astimezone()
+    target = now_dt.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+    if target <= now_dt:
+        target = target + timedelta(days=1)
+    return target.timestamp()
+
+
+def parse_snooze(rest, now):
+    """'/snooze' args → (unix end, None) or (None, usage). Default is the next local 7:00 AM.
+    Nh is 1–24 hours. 'until HH:MM' is the next time that clock shows (optional am/pm)."""
+    s = ' '.join(str(rest or '').split())
+    if not s:
+        return next_clock(7, 0, now), None
+    m = _SNOOZE_FOR.match(s)
+    if m:
+        hours = int(m.group(1))
+        if 1 <= hours <= 24:
+            return float(now) + hours * 3600, None
+        return None, SNOOZE_USAGE
+    m = _SNOOZE_AT.match(s)
+    if not m:
+        return None, SNOOZE_USAGE
+    hour, minute = int(m.group(1)), int(m.group(2) or 0)
+    ap = (m.group(3) or '').lower()
+    if minute > 59:
+        return None, SNOOZE_USAGE
+    if ap:
+        if not 1 <= hour <= 12:
+            return None, SNOOZE_USAGE
+        if ap == 'p' and hour != 12:
+            hour += 12
+        if ap == 'a' and hour == 12:
+            hour = 0
+    elif hour > 23:
+        return None, SNOOZE_USAGE
+    return next_clock(hour, minute, now), None
 
 
 # ---------- logging (counts + routing method only: never bodies, handles, names or labels) ----------

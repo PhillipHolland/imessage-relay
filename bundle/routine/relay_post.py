@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.19 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.20 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -64,7 +64,8 @@ STDOUT (one JSON object):
                              "should_notify":bool,"reply_to":null|"<x event id>"}],
    "encrypted":true, "posted_kind":"message"}
   Pass each send's should_notify and reply_to straight to send_chat_message: a relayed text notifies
-  the owner; every status/confirmation line is silent (should_notify:false) and threads under the
+  the owner; status and confirmation lines are silent (should_notify:false) except v1.4.20 health
+  (FDA loss, "Watching Messages again", Chrome away/back), which notify. Headers stay silent. Threads under the
   owner's reply when reply_to is set (item 1).
   {"action":"skip","reason":"duplicate id …"}
   v1.4.7 photos (1:1 inbound): a message/batch line may carry `media` (token, ext, size, sha256, url, key).
@@ -138,6 +139,11 @@ NEED_KEYS = ['conversation_key_events', 'signing_keys']
 
 HEADER_ICON = '\U0001f4ac'
 HEADER_STATE = 'header_state.json'
+# v1.4.20: shown when a status payload has no ⚠️ detail of its own (an older Mac). Keep in lockstep
+# with mac-helper/imessage_relay_watch.py FDA_DETAIL.
+FDA_LINE = ('\u26a0\ufe0f Texts stopped: Full Disk Access for iMessage Relay Watcher is off. '
+            'Drag that app into System Settings \u2192 Privacy & Security \u2192 Full Disk Access.')
+_HEALTH_KINDS = ('status:fda_missing', 'status:recovered', 'status:chrome_away', 'status:chrome_back')
 HEADER_GAP_DEFAULT_MIN = 30
 
 
@@ -799,7 +805,9 @@ def format_event(payload):
         elif status == 'spam_summary' and detail:
             line = detail[:300]               # v1.4.6: counts only ("\U0001f6ab 3 texts went to Messages \u203a Spam ...")
         elif status == 'fda_missing':
-            line = '\u26a0\ufe0f The watcher can\u2019t read Messages yet (Full Disk Access). New texts aren\u2019t coming through.'
+            # A v1.4.20 Mac sends the sentence in detail (it starts with ⚠️). Older detail is prose, so
+            # fall back to FDA_LINE. Either way the owner sees the fix, not "can't read Messages yet".
+            line = detail[:400] if detail.startswith('\u26a0') else FDA_LINE
         else:
             line = '\u2139\ufe0f ' + (detail or ('Status: ' + (status or 'unknown')))
         return {'kind': 'status:' + (status or 'unknown'), 'lines': [{'id': base_id, 'text': line, 'body': False}]}
@@ -1224,7 +1232,8 @@ def process(req, runner=None):
         for ln in lines:
             # body lines (relayed texts) notify and never thread; status/confirmation lines are silent
             # and thread under the owner's bubble when a reply_to was supplied.
-            notify = bool(ln.get('body'))
+            # v1.4.20: FDA / recovery / Chrome health lines notify so a phone actually buzzes.
+            notify = bool(ln.get('body') or ev['kind'] in _HEALTH_KINDS)
             rt = None if notify or ln.get('header') else reply_to
             entries = line_media.get(ln['id'])
             snd = encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner, reply_to=rt, should_notify=notify,

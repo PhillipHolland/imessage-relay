@@ -26,9 +26,10 @@ the roster to route a bare reply and to allow replies to recent non-contact send
     counts-only status file.
     Message bodies live in memory only. The log (~/Library/Logs/imessage-relay.log) has counts.
   - paused: nothing is forwarded; new rows are skipped (not queued) until resumed.
-  - quietHours: inbound messages are held IN MEMORY and sent as one "digest" POST when quiet
-    hours end. The committed ROWID stays behind held rows, so a restart re-reads them from
-    chat.db instead of losing them (nothing is written to disk).
+  - quietHours, and /snooze (config snoozeUntil): inbound messages are held IN MEMORY and sent
+    as one "digest" POST when the hold ends. The committed ROWID stays behind held rows, so a
+    restart re-reads them from chat.db instead of losing them (nothing is written to disk).
+    /pause is different: it skips new rows and does not keep them.
   - Messages.app must stay running. If it is not: with "autoReopenMessages": true the watcher
     starts it hidden (open -g -j -a Messages), at most once every 5 minutes, and logs it;
     otherwise it logs (at most every 5 minutes) and posts one body-free status heads-up.
@@ -100,13 +101,22 @@ SEND_CONFIRM_FALLBACK_S = 20  # item 6: if delivery is still unconfirmed after ~
 REOPEN_EVERY_S = 300
 NOT_RUNNING_LOG_EVERY_S = 300
 FDA_LOG_EVERY_S = 3600
+FDA_REMIND_S = 30 * 60       # v1.4.20: first reminder 30 min after the warning, then hourly
+FDA_REPEAT_S = 3600
+CHROME_STALE_S = 15 * 60     # ext_seen older than this (the host only rewrites it every 5 min)
+CHROME_ARM_S = 10 * 60       # watcher must see that stale stamp for this long first (sleep wakes don't nag)
+EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
 JOB_MAX_AGE_S = 600
 LOOP_STEP_S = 0.25           # v1.4.13: idle loop granularity (jobs, chat.db change check)
 GROUP_STYLE = 43          # chat.style: 43 = group, 45 = 1:1
 MESSAGES_NOT_RUNNING_DETAIL = ('Messages is not running on the Mac. New iMessages and replies may stall '
                                'until it is opened again.')
-FDA_DETAIL = ("The watcher cannot read chat.db. Full Disk Access is probably missing for the 'iMessage Relay Watcher' "
-              "app (~/Applications). Drag it into System Settings > Privacy & Security > Full Disk Access.")
+FDA_DETAIL = ("\u26a0\ufe0f Texts stopped: Full Disk Access for iMessage Relay Watcher is off. "
+              "Drag that app into System Settings \u2192 Privacy & Security \u2192 Full Disk Access.")
+RECOVERED_DETAIL = 'Watching Messages again.'
+CHROME_AWAY = ("Chrome hasn\u2019t checked in, so replies from your phone won\u2019t send. "
+               "Open Chrome on the Mac.")
+CHROME_BACK = 'Chrome is open again. Replies will send.'
 RESYNC_DETAIL = ('The watcher was offline for a while or Messages rebuilt its database, so a large backlog was '
                  'skipped to avoid replaying old messages. New messages from here on relay normally.')
 CATCHING_UP_DETAIL = ('A burst of messages is being relayed in batches to stay within rate limits. Nothing is '
@@ -301,7 +311,13 @@ class Watcher:
         self.last_not_running_log = -1e18
         self.not_running_notified = False
         self.last_fda_log = -1e18
-        self.fda_notified = False
+        self.fda_warned = False          # v1.4.20: a warning was delivered; clear only after the recovery line
+        self.fda_phase = 0               # 0 = next post is the first; then 30 min, then hourly
+        self.fda_next = 0
+        self.chrome_warned = False
+        self.chrome_phase = 0
+        self.chrome_next = 0
+        self.chrome_arm = None           # when a stale Chrome stamp was first seen this wake
         self.chat_db_ok_logged = False
         self.backoff_s = 0
         self.backoff_until = 0
@@ -331,7 +347,8 @@ class Watcher:
 
     def write_status(self, cfg, **extra):
         st = {'version': rc.VERSION, 'lastTickAt': rc.iso_utc(self.now()), 'paused': cfg['paused'],
-              'quiet': rc.in_quiet_hours(cfg['quietHours'], self.now()), 'held': len(self.held),
+              'quiet': rc.in_quiet_hours(cfg['quietHours'], self.now()),
+              'snooze': rc.snoozing(cfg, self.now()), 'held': len(self.held),
               'retry': len(self.retry), 'messagesRunning': self.messages_running,
               'autoReopenMessages': cfg['autoReopenMessages'], 'lastForwardAt': self.last_forward_at,
               'webhookConfigured': bool(cfg['webhookUrl']), 'contacts': len(cfg['contacts']),
@@ -450,7 +467,7 @@ class Watcher:
         ctx['cfg_drop'] = cfg
         ctx['stage_media'] = bool(cfg.get('relayAttachments', True) and cfg['webhookUrl'] and not cfg['paused']
                                   and relay_drop.configured(cfg)
-                                  and 'filename' in att_cols and not rc.in_quiet_hours(cfg['quietHours'], ctx['now']))
+                                  and 'filename' in att_cols and not rc.holding_inbound(cfg, ctx['now']))
         cursor = self.cursor
         out, capped, stop = [], False, False
         for _ in range(40):
@@ -997,6 +1014,65 @@ class Watcher:
             if counts['forwarded'] or counts['digested']:
                 self.last_forward_at = rc.iso_utc(t)
 
+    # ----- v1.4.20 health: FDA repeats, then recovers; Chrome too -----
+    def _health_mark(self, which, t):
+        """After a successful health post: first follow-up in 30 min, later ones hourly."""
+        phase = getattr(self, which + '_phase')
+        if phase == 0:
+            setattr(self, which + '_next', t + FDA_REMIND_S)
+            setattr(self, which + '_phase', 1)
+        else:
+            setattr(self, which + '_next', t + FDA_REPEAT_S)
+            setattr(self, which + '_phase', 2)
+        setattr(self, which + '_warned', True)
+
+    def note_fda(self, cfg, t):
+        if cfg['paused'] or not cfg.get('webhookUrl'):
+            return
+        if self.fda_next and t < self.fda_next:
+            return
+        if self.post_status(cfg, 'fda_missing', FDA_DETAIL):
+            self._health_mark('fda', t)
+
+    def note_fda_ok(self, cfg, t):
+        if not self.fda_warned:
+            return
+        if cfg.get('webhookUrl') and not self.post_status(cfg, 'recovered', RECOVERED_DETAIL):
+            return
+        self.fda_warned = False
+        self.fda_phase = 0
+        self.fda_next = 0
+
+    def note_chrome(self, cfg, t):
+        """Chrome's extension rewrites ext_seen.json about every 5 min. Warn only after the stamp has
+        been stale for 15 min AND this process has been ticking for another 10 min, so a wake from
+        sleep does not announce a dead browser before Chrome has had a chance to check in."""
+        if not cfg.get('webhookUrl'):
+            return
+        seen = rc.read_json(EXT_SEEN_PATH, {}) or {}
+        try:
+            at = float(seen.get('at') or 0)
+        except (TypeError, ValueError):
+            at = 0
+        fresh = at > 0 and (t - at) < CHROME_STALE_S
+        if at <= 0 or fresh:
+            self.chrome_arm = None
+            if fresh and self.chrome_warned and self.post_status(cfg, 'chrome_back', CHROME_BACK):
+                self.chrome_warned = False
+                self.chrome_phase = 0
+                self.chrome_next = 0
+            return
+        if cfg['paused']:
+            return
+        if self.chrome_arm is None:
+            self.chrome_arm = t
+        if t - self.chrome_arm < CHROME_ARM_S:
+            return
+        if self.chrome_next and t < self.chrome_next:
+            return
+        if self.post_status(cfg, 'chrome_away', CHROME_AWAY):
+            self._health_mark('chrome', t)
+
     # ----- one cycle -----
     def tick(self):
         cfg = self.load_config()
@@ -1012,6 +1088,7 @@ class Watcher:
         except Exception:
             pass
         t = self.now()
+        self.note_chrome(cfg, t)
         try:
             con = rc.open_chat_db(self.db_path)
         except rc.ChatDbBusy as e:
@@ -1026,11 +1103,10 @@ class Watcher:
                 self.last_fda_log = t
                 rc.log_event('chat_db_unavailable', error=str(e)[:200])
             self.chat_db_ok_logged = False
-            if not self.fda_notified and not cfg['paused'] and cfg['webhookUrl']:
-                self.fda_notified = self.post_status(cfg, 'fda_missing', FDA_DETAIL)
+            self.note_fda(cfg, t)
             self.write_status(cfg, chatDb='unavailable', chatDbError=str(e)[:200])
             return counts
-        self.fda_notified = False
+        self.note_fda_ok(cfg, t)
         if not self.chat_db_ok_logged:
             self.chat_db_ok_logged = True        # once per start / recovery: relayctl status reads it
             self.last_fda_log = -1e18            # so a later failure is logged at once, too
@@ -1071,14 +1147,14 @@ class Watcher:
         finally:
             con.close()
         if not cfg['paused']:
-            if rc.in_quiet_hours(cfg['quietHours'], t):
+            if rc.holding_inbound(cfg, t):
                 self.held = sorted(self.held + self.retry + new, key=lambda m: m['rowid'])
                 self.retry = []
                 counts['held'] = len(new)
             else:
                 self.retry.extend(new)
                 self.flush(cfg, counts)
-            if capped and not self._backpressure_notified and cfg['webhookUrl'] and not rc.in_quiet_hours(cfg['quietHours'], t):
+            if capped and not self._backpressure_notified and cfg['webhookUrl'] and not rc.holding_inbound(cfg, t):
                 self._backpressure_notified = self.post_status(cfg, 'catching_up', CATCHING_UP_DETAIL)
             if not self.retry and not self.held:
                 self._backpressure_notified = False
@@ -1294,7 +1370,7 @@ class Watcher:
             self._spam_summary_at = t
         if not self._spam_held or cfg['paused'] or not cfg['webhookUrl']:
             return
-        if t - self._spam_summary_at < SPAM_SUMMARY_EVERY_S or rc.in_quiet_hours(cfg['quietHours'], t):
+        if t - self._spam_summary_at < SPAM_SUMMARY_EVERY_S or rc.holding_inbound(cfg, t):
             return
         n = self._spam_held
         detail = ('\U0001f6ab %d text%s went to Messages \u203a Spam in the last hour (not relayed; open Messages to review).'

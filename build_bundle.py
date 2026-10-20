@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.19, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.20, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=74812268dff7fe4a160df980c78a199d83d4ee534831c8a63d463ddea731b681 nl=1
-# iMessage Relay v1.4.19
+@@@@ FILE README.md mode=644 sha256=34468d18b8385ba6269acf525f0c56441d870d4e53fb3d04b51eaebe8148e8cf nl=1
+# iMessage Relay v1.4.20
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.20 (Mac helper + routine relay_post.py; extension stays 1.4.16): `/status` is one short line in the relay chat. A lost Full Disk Access grant repeats, with the fix, and one line says when Messages is readable again. Chrome not checking in gets a line too. `/pause` says texts during the pause are not kept. `/snooze` holds them for one digest (default the next 7:00 AM). `/help` is a few short lines. Replace `relay_post.py` on the bot so health lines notify, then re-run `./install.sh` (the watcher app is not rebuilt; no extension reload).
 - v1.4.19 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new text is noticed on the
   next 0.25 s step. v1.4.13 ignored the first second after each tick, and Messages rewrites chat.db
   often enough that the wait was ~1 s. The routine key cache now lasts 24 h, so a warm `relay_post.py`
@@ -179,11 +180,13 @@ v1.4.6 makes the relay feel native in X Chat:
   text). Replies can go to anyone on it who texted within `rosterDays` (30), never to a number
   that has never texted in unless you add it as a contact.
 - Message bodies are never written to disk by the relay (memory only; logs have counts).
-- Dry run is on until you turn it off. Pause stops both directions. Quiet hours hold inbound
-  messages and deliver a digest when they end; your replies always send.
+- Dry run is on until you turn it off. Pause stops both directions and does not keep texts that arrive meanwhile. Quiet hours and `/snooze` hold inbound
+  messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.19)
+## Limits (v1.4.20)
+- `/snooze` holds inbound texts the same way quiet hours do, then delivers one digest. A command can set at most 24 hours; a hand-edited time more than 36 hours ahead is ignored. `/pause` does not keep texts.
+- "Chrome hasn't checked in" means the extension has not talked to the Mac. Closing the chat tab while Chrome stays open does not raise it.
 - Direct post is opt-in and text-only. Photos, reactions, and quiet-hours digests stay on the webhook.
   It is off until `relayctl xpost on`.
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
@@ -306,7 +309,7 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 - `{"type":"digest","count","quietHours","messages":[...],"untrusted":true}`
 - `{"type":"sent","label","contactName","dryRun","delivered","routedBy","at"}` (host, after a reply; no body)
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
-- `{"type":"status","status":"messages_not_running"|"fda_missing","detail","at"}` (no message body)
+- `{"type":"status","status":"messages_not_running"|"fda_missing"|"recovered"|"chrome_away"|"chrome_back","detail","at"}` (no message body; the four health lines notify)
 @@@@ END
 @@@@ FILE install.sh mode=755 sha256=9545c65a328f70b6975a278e5673b4498abbcb315030912f4828cece66653563 nl=1
 #!/bin/bash
@@ -3931,10 +3934,10 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=3286ccc204c73344a4bf6a367c3364d97f1f6dc5fc1e830969e79fc4779c5467 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=f0eeb2ce9a79c084061a15789937f31d6390862c40329bf5f7f272182c0ef712 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.19.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.20.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -3973,6 +3976,7 @@ import struct
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc  # noqa: E402
@@ -4347,27 +4351,35 @@ def handle_command(cmd, quoted, cfg, now, poster):
     return dict(base, ok=True, muted=False, label=tgt['label'], action='unblocked')
 
 
-# ---------- owner commands (item 2): /who /pause /resume /help /add /test, run even while paused ----------
+# ---------- owner commands (item 2): /who /pause /resume /help /add /test /status /snooze ----------
 # These act only in the relay conversation, which is the owner's own 1:1 with the sender account, so
 # reaching here already means the owner typed them. They are parsed BEFORE the paused check so the owner
 # can /resume. None of them ever sends an iMessage, so they are safe while paused.
-HELP_TEXT = ('Commands: /who (who a bare reply goes to) \u00b7 /pause and /resume relaying \u00b7 '
-             '/add <Name> (save the last unknown number as a contact) \u00b7 /block and /unblock <Name> '
-             '\u00b7 /test (check every step; /test send also texts your own number) '
-             '\u00b7 /help. To text someone, start with their name: "Sam: \u2026" or "text Sam \u2026".')
-_OWNER_CMD_RE = re.compile(r'^/(who|pause|resume|help|add|test)\b\s*(.*)$', re.I | re.S)
+HELP_TEXT = ('/status \u00b7 /who\n'
+             '/pause \u00b7 /resume \u00b7 /snooze\n'
+             '/block Name \u00b7 /unblock Name\n'
+             '/add Name\n'
+             'Sam: your message\n'
+             '/test \u00b7 /help')
+PAUSE_DETAIL = ('Paused. Texts that arrive while paused are not kept. '
+                '/resume turns relaying back on, or /snooze to hold them for a digest.')
+_OWNER_CMD_RE = re.compile(r'^/(who|pause|resume|help|add|test|status|snooze)\b\s*(.*)$', re.I | re.S)
 ADD_WINDOW_S = 120.0
 
 
 def parse_owner_command(text):
-    """Return {'cmd',...} for /who /pause /resume /help /add, else None. /add takes a name and an
-    optional 'yes' confirmation ("/add Kent", then "/add yes")."""
+    """Return {'cmd',...} for /who /pause /resume /help /add /status /snooze, else None. /add takes a
+    name and an optional 'yes' confirmation ("/add Kent", then "/add yes"). /snooze keeps its args."""
     s = (text or '').strip()
     m = _OWNER_CMD_RE.match(s)
     if not m:
         return None
     cmd = m.group(1).lower()
     rest = (m.group(2) or '').strip()
+    if cmd == 'snooze':
+        return {'cmd': 'snooze', 'rest': rest[:40]}
+    if cmd == 'status':
+        return {'cmd': 'status'}
     if cmd == 'add':
         confirm = False
         if rest.lower() == 'yes':
@@ -4384,10 +4396,16 @@ def parse_owner_command(text):
     return {'cmd': cmd}
 
 
-def set_paused(on):
+def set_run_state(paused, snooze_until):
+    """Pause drops inbound texts. A snooze holds them (quiet-hours path) and always clears pause.
+    snooze_until 0 removes the key."""
     def fn():
         raw = rc.read_raw_config() or {}
-        raw['paused'] = bool(on)
+        raw['paused'] = bool(paused)
+        if snooze_until:
+            raw['snoozeUntil'] = int(snooze_until)
+        else:
+            raw.pop('snoozeUntil', None)
         rc.write_json_atomic(rc.CONFIG_PATH, raw)
     _with_host_lock(fn)
 
@@ -4411,6 +4429,72 @@ def who_summary(cfg, now_t):
                      key=lambda e: -e['lastInboundAt'])[:5]
     recent = ', '.join('%s %s' % (e['label'], rc.ago(now_t - e['lastInboundAt'])) for e in recents) or 'none'
     return 'A bare reply goes to: %s. Recent texters: %s.' % (target, recent)
+
+
+def _parse_iso(s):
+    try:
+        return datetime.fromisoformat(str(s).replace('Z', '+00:00')).timestamp()
+    except Exception:
+        return None
+
+
+def _age_unit(seconds):
+    s = max(0, int(seconds))
+    if s < 60:
+        return s, 's'
+    if s < 3600:
+        return max(1, int(round(s / 60.0))), 'm'
+    if s < 86400:
+        return max(1, int(round(s / 3600.0))), 'h'
+    return max(1, int(round(s / 86400.0))), 'd'
+
+
+def bare_reply_name(cfg, now_t):
+    """Who a bare reply would go to right now: a label, 'unclear', or 'name someone'. No message text."""
+    d = rc.build_directory(cfg, rc.load_roster())
+    muted = set(cfg.get('mute') or ())
+    window = cfg['replyWindowMinutes'] * 60
+    live = sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] == 'contact'
+                   and e['handle'] not in muted and 0 <= now_t - e['lastInboundAt'] <= window],
+                  key=lambda e: -e['lastInboundAt'])
+    if not live:
+        return 'name someone'
+    if (len(live) > 1 and cfg['ambiguousSeconds']
+            and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']):
+        return 'unclear'
+    return live[0]['label']
+
+
+def status_line(cfg, now_t):
+    """One body-free line for /status. Ages and names only; the routine adds the ℹ️ prefix."""
+    st = rc.read_json(os.path.join(rc.APP_DIR, 'status.json'), {}) or {}
+    if cfg['paused']:
+        state = 'Paused'
+    elif rc.snoozing(cfg, now_t):
+        state = 'Snoozing until ' + rc.format_clock(rc.snooze_until(cfg, now_t))
+    else:
+        state = 'On'
+    if st.get('chatDb') == 'unavailable':
+        watcher = 'watcher blind'
+    else:
+        at = _parse_iso(st.get('lastTickAt'))
+        if at is None:
+            watcher = 'watcher unseen'
+        else:
+            n, u = _age_unit(now_t - at)
+            watcher = 'watcher %d%s ago' % (n, u)
+    mr = st.get('messagesRunning')
+    messages = 'Messages open' if mr is True else 'Messages closed' if mr is False else 'Messages not checked'
+    fwd = _parse_iso(st.get('lastForwardAt'))
+    if fwd is None:
+        last = 'no texts yet'
+    elif now_t - fwd < 45:
+        last = 'last text just now'
+    else:
+        n, u = _age_unit(now_t - fwd)
+        last = 'last text %d%s' % (n, u)
+    return '%s \u00b7 v%s \u00b7 %s \u00b7 %s \u00b7 %s \u00b7 bare reply \u2192 %s' % (
+        state, rc.VERSION, watcher, messages, last, bare_reply_name(cfg, now_t))
 
 
 def last_unknown_texter(cfg):
@@ -4528,26 +4612,40 @@ def handle_owner_command(oc, quoted, cfg, now, poster):
     base = {'dryRun': cfg['dryRun']}
     c = oc['cmd']
     if c == 'pause':
-        if not cfg['paused']:
-            set_paused(True)
+        set_run_state(True, None)          # also ends a snooze; pause does not keep texts
         rc.log_event('paused', via='command')
         notify(cfg, poster, {'type': 'status', 'status': 'paused',
-                             'detail': 'Paused. I won\u2019t relay texts or send replies until you say /resume.',
-                             'at': rc.iso_utc(now())})
+                             'detail': PAUSE_DETAIL, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='pause', paused=True)
     if c == 'resume':
-        if cfg['paused']:
-            set_paused(False)
+        if cfg['paused'] or cfg.get('snoozeUntil'):
+            set_run_state(False, None)
         rc.log_event('resumed', via='command')
         notify(cfg, poster, {'type': 'status', 'status': 'resumed',
                              'detail': 'Resumed. Relaying is back on.', 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='resume', paused=False)
+    if c == 'snooze':
+        until, err = rc.parse_snooze(oc.get('rest') or '', now())
+        if err:
+            notify(cfg, poster, {'type': 'status', 'detail': err, 'at': rc.iso_utc(now())})
+            return dict(base, ok=False, command='snooze', error=err)
+        until = int(round(float(until)))
+        set_run_state(False, until)        # hold like quiet hours; do not use the pause cursor
+        rc.log_event('snoozed', seconds=max(0, int(until - now())))
+        detail = 'Snoozing until %s. Tonight\u2019s texts arrive as one digest. /resume' % rc.format_clock(until)
+        notify(cfg, poster, {'type': 'status', 'status': 'snoozing', 'detail': detail, 'at': rc.iso_utc(now())})
+        return dict(base, ok=True, command='snooze', snoozeUntil=int(until))
     if c == 'help':
         notify(cfg, poster, {'type': 'status', 'detail': HELP_TEXT, 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='help')
     if c == 'who':
         notify(cfg, poster, {'type': 'status', 'detail': who_summary(cfg, now()), 'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='who')
+    if c == 'status':
+        rc.log_event('status_cmd')
+        notify(cfg, poster, {'type': 'status', 'status': 'status', 'detail': status_line(cfg, now()),
+                             'at': rc.iso_utc(now())})
+        return dict(base, ok=True, command='status')
     if c == 'add':
         return handle_add(oc, cfg, now, poster)
     return dict(base, ok=False, error='unknown command')
@@ -5086,7 +5184,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     quoted = rc.strip_trailing_chips(quoted)
     if len(text) > MAX_TEXT:
         return refuse('text too long', textLength=len(text))
-    oc = parse_owner_command(text)            # /who /pause /resume /help /add /test run even while paused (item 2)
+    oc = parse_owner_command(text)            # /who /pause /resume /help /add /test /status /snooze, even while paused
     if oc and oc['cmd'] == 'test':            # a pre-1.3.8 extension forwards "/test" as a reply: never route it
         return relay_test.run_test({'send': oc['send']}, cfg, runner, sleeper, now, poster, via='send-path')
     if oc:
@@ -5670,7 +5768,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=82494d016e09be5869b4c4dc4078c4cdbd13f676cd563f49a1680a2ac0aff01d nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=f62f55325962aab8150af7fa265fd86285618b299dd4c9b3f2ca2e35d50dc38d nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -5699,9 +5797,10 @@ the roster to route a bare reply and to allow replies to recent non-contact send
     counts-only status file.
     Message bodies live in memory only. The log (~/Library/Logs/imessage-relay.log) has counts.
   - paused: nothing is forwarded; new rows are skipped (not queued) until resumed.
-  - quietHours: inbound messages are held IN MEMORY and sent as one "digest" POST when quiet
-    hours end. The committed ROWID stays behind held rows, so a restart re-reads them from
-    chat.db instead of losing them (nothing is written to disk).
+  - quietHours, and /snooze (config snoozeUntil): inbound messages are held IN MEMORY and sent
+    as one "digest" POST when the hold ends. The committed ROWID stays behind held rows, so a
+    restart re-reads them from chat.db instead of losing them (nothing is written to disk).
+    /pause is different: it skips new rows and does not keep them.
   - Messages.app must stay running. If it is not: with "autoReopenMessages": true the watcher
     starts it hidden (open -g -j -a Messages), at most once every 5 minutes, and logs it;
     otherwise it logs (at most every 5 minutes) and posts one body-free status heads-up.
@@ -5773,13 +5872,22 @@ SEND_CONFIRM_FALLBACK_S = 20  # item 6: if delivery is still unconfirmed after ~
 REOPEN_EVERY_S = 300
 NOT_RUNNING_LOG_EVERY_S = 300
 FDA_LOG_EVERY_S = 3600
+FDA_REMIND_S = 30 * 60       # v1.4.20: first reminder 30 min after the warning, then hourly
+FDA_REPEAT_S = 3600
+CHROME_STALE_S = 15 * 60     # ext_seen older than this (the host only rewrites it every 5 min)
+CHROME_ARM_S = 10 * 60       # watcher must see that stale stamp for this long first (sleep wakes don't nag)
+EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
 JOB_MAX_AGE_S = 600
 LOOP_STEP_S = 0.25           # v1.4.13: idle loop granularity (jobs, chat.db change check)
 GROUP_STYLE = 43          # chat.style: 43 = group, 45 = 1:1
 MESSAGES_NOT_RUNNING_DETAIL = ('Messages is not running on the Mac. New iMessages and replies may stall '
                                'until it is opened again.')
-FDA_DETAIL = ("The watcher cannot read chat.db. Full Disk Access is probably missing for the 'iMessage Relay Watcher' "
-              "app (~/Applications). Drag it into System Settings > Privacy & Security > Full Disk Access.")
+FDA_DETAIL = ("\u26a0\ufe0f Texts stopped: Full Disk Access for iMessage Relay Watcher is off. "
+              "Drag that app into System Settings \u2192 Privacy & Security \u2192 Full Disk Access.")
+RECOVERED_DETAIL = 'Watching Messages again.'
+CHROME_AWAY = ("Chrome hasn\u2019t checked in, so replies from your phone won\u2019t send. "
+               "Open Chrome on the Mac.")
+CHROME_BACK = 'Chrome is open again. Replies will send.'
 RESYNC_DETAIL = ('The watcher was offline for a while or Messages rebuilt its database, so a large backlog was '
                  'skipped to avoid replaying old messages. New messages from here on relay normally.')
 CATCHING_UP_DETAIL = ('A burst of messages is being relayed in batches to stay within rate limits. Nothing is '
@@ -5974,7 +6082,13 @@ class Watcher:
         self.last_not_running_log = -1e18
         self.not_running_notified = False
         self.last_fda_log = -1e18
-        self.fda_notified = False
+        self.fda_warned = False          # v1.4.20: a warning was delivered; clear only after the recovery line
+        self.fda_phase = 0               # 0 = next post is the first; then 30 min, then hourly
+        self.fda_next = 0
+        self.chrome_warned = False
+        self.chrome_phase = 0
+        self.chrome_next = 0
+        self.chrome_arm = None           # when a stale Chrome stamp was first seen this wake
         self.chat_db_ok_logged = False
         self.backoff_s = 0
         self.backoff_until = 0
@@ -6004,7 +6118,8 @@ class Watcher:
 
     def write_status(self, cfg, **extra):
         st = {'version': rc.VERSION, 'lastTickAt': rc.iso_utc(self.now()), 'paused': cfg['paused'],
-              'quiet': rc.in_quiet_hours(cfg['quietHours'], self.now()), 'held': len(self.held),
+              'quiet': rc.in_quiet_hours(cfg['quietHours'], self.now()),
+              'snooze': rc.snoozing(cfg, self.now()), 'held': len(self.held),
               'retry': len(self.retry), 'messagesRunning': self.messages_running,
               'autoReopenMessages': cfg['autoReopenMessages'], 'lastForwardAt': self.last_forward_at,
               'webhookConfigured': bool(cfg['webhookUrl']), 'contacts': len(cfg['contacts']),
@@ -6123,7 +6238,7 @@ class Watcher:
         ctx['cfg_drop'] = cfg
         ctx['stage_media'] = bool(cfg.get('relayAttachments', True) and cfg['webhookUrl'] and not cfg['paused']
                                   and relay_drop.configured(cfg)
-                                  and 'filename' in att_cols and not rc.in_quiet_hours(cfg['quietHours'], ctx['now']))
+                                  and 'filename' in att_cols and not rc.holding_inbound(cfg, ctx['now']))
         cursor = self.cursor
         out, capped, stop = [], False, False
         for _ in range(40):
@@ -6670,6 +6785,65 @@ class Watcher:
             if counts['forwarded'] or counts['digested']:
                 self.last_forward_at = rc.iso_utc(t)
 
+    # ----- v1.4.20 health: FDA repeats, then recovers; Chrome too -----
+    def _health_mark(self, which, t):
+        """After a successful health post: first follow-up in 30 min, later ones hourly."""
+        phase = getattr(self, which + '_phase')
+        if phase == 0:
+            setattr(self, which + '_next', t + FDA_REMIND_S)
+            setattr(self, which + '_phase', 1)
+        else:
+            setattr(self, which + '_next', t + FDA_REPEAT_S)
+            setattr(self, which + '_phase', 2)
+        setattr(self, which + '_warned', True)
+
+    def note_fda(self, cfg, t):
+        if cfg['paused'] or not cfg.get('webhookUrl'):
+            return
+        if self.fda_next and t < self.fda_next:
+            return
+        if self.post_status(cfg, 'fda_missing', FDA_DETAIL):
+            self._health_mark('fda', t)
+
+    def note_fda_ok(self, cfg, t):
+        if not self.fda_warned:
+            return
+        if cfg.get('webhookUrl') and not self.post_status(cfg, 'recovered', RECOVERED_DETAIL):
+            return
+        self.fda_warned = False
+        self.fda_phase = 0
+        self.fda_next = 0
+
+    def note_chrome(self, cfg, t):
+        """Chrome's extension rewrites ext_seen.json about every 5 min. Warn only after the stamp has
+        been stale for 15 min AND this process has been ticking for another 10 min, so a wake from
+        sleep does not announce a dead browser before Chrome has had a chance to check in."""
+        if not cfg.get('webhookUrl'):
+            return
+        seen = rc.read_json(EXT_SEEN_PATH, {}) or {}
+        try:
+            at = float(seen.get('at') or 0)
+        except (TypeError, ValueError):
+            at = 0
+        fresh = at > 0 and (t - at) < CHROME_STALE_S
+        if at <= 0 or fresh:
+            self.chrome_arm = None
+            if fresh and self.chrome_warned and self.post_status(cfg, 'chrome_back', CHROME_BACK):
+                self.chrome_warned = False
+                self.chrome_phase = 0
+                self.chrome_next = 0
+            return
+        if cfg['paused']:
+            return
+        if self.chrome_arm is None:
+            self.chrome_arm = t
+        if t - self.chrome_arm < CHROME_ARM_S:
+            return
+        if self.chrome_next and t < self.chrome_next:
+            return
+        if self.post_status(cfg, 'chrome_away', CHROME_AWAY):
+            self._health_mark('chrome', t)
+
     # ----- one cycle -----
     def tick(self):
         cfg = self.load_config()
@@ -6685,6 +6859,7 @@ class Watcher:
         except Exception:
             pass
         t = self.now()
+        self.note_chrome(cfg, t)
         try:
             con = rc.open_chat_db(self.db_path)
         except rc.ChatDbBusy as e:
@@ -6699,11 +6874,10 @@ class Watcher:
                 self.last_fda_log = t
                 rc.log_event('chat_db_unavailable', error=str(e)[:200])
             self.chat_db_ok_logged = False
-            if not self.fda_notified and not cfg['paused'] and cfg['webhookUrl']:
-                self.fda_notified = self.post_status(cfg, 'fda_missing', FDA_DETAIL)
+            self.note_fda(cfg, t)
             self.write_status(cfg, chatDb='unavailable', chatDbError=str(e)[:200])
             return counts
-        self.fda_notified = False
+        self.note_fda_ok(cfg, t)
         if not self.chat_db_ok_logged:
             self.chat_db_ok_logged = True        # once per start / recovery: relayctl status reads it
             self.last_fda_log = -1e18            # so a later failure is logged at once, too
@@ -6744,14 +6918,14 @@ class Watcher:
         finally:
             con.close()
         if not cfg['paused']:
-            if rc.in_quiet_hours(cfg['quietHours'], t):
+            if rc.holding_inbound(cfg, t):
                 self.held = sorted(self.held + self.retry + new, key=lambda m: m['rowid'])
                 self.retry = []
                 counts['held'] = len(new)
             else:
                 self.retry.extend(new)
                 self.flush(cfg, counts)
-            if capped and not self._backpressure_notified and cfg['webhookUrl'] and not rc.in_quiet_hours(cfg['quietHours'], t):
+            if capped and not self._backpressure_notified and cfg['webhookUrl'] and not rc.holding_inbound(cfg, t):
                 self._backpressure_notified = self.post_status(cfg, 'catching_up', CATCHING_UP_DETAIL)
             if not self.retry and not self.held:
                 self._backpressure_notified = False
@@ -6967,7 +7141,7 @@ class Watcher:
             self._spam_summary_at = t
         if not self._spam_held or cfg['paused'] or not cfg['webhookUrl']:
             return
-        if t - self._spam_summary_at < SPAM_SUMMARY_EVERY_S or rc.in_quiet_hours(cfg['quietHours'], t):
+        if t - self._spam_summary_at < SPAM_SUMMARY_EVERY_S or rc.holding_inbound(cfg, t):
             return
         n = self._spam_held
         detail = ('\U0001f6ab %d text%s went to Messages \u203a Spam in the last hour (not relayed; open Messages to review).'
@@ -7179,7 +7353,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=42ded33eaa0bd77b2ad0860b49af0803f48efef8ccae9f396cc72ff471f6b103 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=44c0f770310c8757569e082d4afb8c0da08fbc6ea4be2aead47f24c8e97ec317 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7203,10 +7377,10 @@ import sqlite3
 import subprocess
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.19'
-EXTENSION_VERSION = '1.4.16'   # v1.4.19 does not change the extension (status must not nag a reload)
+VERSION = '1.4.20'
+EXTENSION_VERSION = '1.4.16'   # v1.4.20 does not change the extension (status must not nag a reload)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -7246,6 +7420,7 @@ DEFAULT_CONFIG = {
     'paused': False,
     'dryRun': True,
     'quietHours': None,
+    'snoozeUntil': 0,              # v1.4.20: unix time; inbound is held (like quiet hours) until then. 0 = off
     'contacts': [],
     'relayConversationId': '',
     'replyWindowMinutes': 120,
@@ -7450,6 +7625,12 @@ def sanitize_config(user):
         else:
             qh = {'start': qh['start'], 'end': qh['end'], 'tz': tz}
     cfg['quietHours'] = qh
+    try:
+        cfg['snoozeUntil'] = float(cfg.get('snoozeUntil') or 0)
+    except (TypeError, ValueError):
+        cfg['snoozeUntil'] = 0
+    if cfg['snoozeUntil'] < 0:
+        cfg['snoozeUntil'] = 0
     contacts = []
     seen = set()
     for c in cfg.get('contacts') if isinstance(cfg.get('contacts'), list) else []:
@@ -8367,6 +8548,80 @@ def in_quiet_hours(qh, now=None):
     t = local_now(qh, now)
     m = t.hour * 60 + t.minute
     return s <= m < e if s < e else (m >= s or m < e)
+
+
+SNOOZE_MAX_S = 36 * 3600     # a hand-edited snoozeUntil further out than this is ignored
+SNOOZE_USAGE = 'Say /snooze, /snooze 8h, or /snooze until 7:00.'
+_SNOOZE_FOR = re.compile(r'^(\d+)\s*h$', re.I)
+_SNOOZE_AT = re.compile(r'^(?:until\s+)?(\d{1,2})(?::(\d{2}))?(?:\s*([ap])\.?m\.?)?$', re.I)
+
+
+def snooze_until(cfg, now=None):
+    """Active snooze end (unix), or 0. A time already past, or more than 36 h ahead, is off."""
+    now = time.time() if now is None else float(now)
+    try:
+        u = float((cfg or {}).get('snoozeUntil') or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if u <= now or u - now > SNOOZE_MAX_S:
+        return 0.0
+    return u
+
+
+def snoozing(cfg, now=None):
+    return snooze_until(cfg, now) > 0
+
+
+def holding_inbound(cfg, now=None):
+    """Quiet hours or an active /snooze: hold inbound texts in memory and digest them when both end."""
+    return in_quiet_hours((cfg or {}).get('quietHours'), now) or snoozing(cfg, now)
+
+
+def format_clock(ts):
+    """Local wall clock, '7:00 AM'. Locale-independent."""
+    dt = datetime.fromtimestamp(float(ts)).astimezone()
+    h = dt.hour % 12 or 12
+    return '%d:%02d %s' % (h, dt.minute, 'AM' if dt.hour < 12 else 'PM')
+
+
+def next_clock(hour, minute, now):
+    """Next local HH:MM strictly after `now` (today, or tomorrow if that time has passed)."""
+    now_dt = datetime.fromtimestamp(float(now)).astimezone()
+    target = now_dt.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+    if target <= now_dt:
+        target = target + timedelta(days=1)
+    return target.timestamp()
+
+
+def parse_snooze(rest, now):
+    """'/snooze' args → (unix end, None) or (None, usage). Default is the next local 7:00 AM.
+    Nh is 1–24 hours. 'until HH:MM' is the next time that clock shows (optional am/pm)."""
+    s = ' '.join(str(rest or '').split())
+    if not s:
+        return next_clock(7, 0, now), None
+    m = _SNOOZE_FOR.match(s)
+    if m:
+        hours = int(m.group(1))
+        if 1 <= hours <= 24:
+            return float(now) + hours * 3600, None
+        return None, SNOOZE_USAGE
+    m = _SNOOZE_AT.match(s)
+    if not m:
+        return None, SNOOZE_USAGE
+    hour, minute = int(m.group(1)), int(m.group(2) or 0)
+    ap = (m.group(3) or '').lower()
+    if minute > 59:
+        return None, SNOOZE_USAGE
+    if ap:
+        if not 1 <= hour <= 12:
+            return None, SNOOZE_USAGE
+        if ap == 'p' and hour != 12:
+            hour += 12
+        if ap == 'a' and hour == 12:
+            hour = 0
+    elif hour > 23:
+        return None, SNOOZE_USAGE
+    return next_clock(hour, minute, now), None
 
 
 # ---------- logging (counts + routing method only: never bodies, handles, names or labels) ----------
@@ -11755,7 +12010,7 @@ def main(argv=None, stdin=None):
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/relayctl.py mode=755 sha256=6e5a90478503f6f8f51ad809f8f3fe54358bcd45bf8f32c516d16987e6cb1670 nl=1
+@@@@ FILE mac-helper/relayctl.py mode=755 sha256=367a51b501e92d34fe111dcded44c5441aa2272d82ac53625c30b50072a66978 nl=1
 #!/usr/bin/python3
 """
 relayctl: the one command the bot (or you) uses to operate iMessage Relay on the Mac.
@@ -12581,7 +12836,10 @@ def main(argv=None):
         if c == 'status':
             out = cmd_status()
         elif c in ('pause', 'resume'):
-            cfg = edit_config(lambda raw: raw.__setitem__('paused', c == 'pause'))
+            def _pr(raw):
+                raw['paused'] = c == 'pause'
+                raw.pop('snoozeUntil', None)   # pause does not keep texts; resume ends a snooze
+            cfg = edit_config(_pr)
             out = {'ok': True, 'paused': cfg['paused']}
         elif c == 'dry-run':
             if not parse_bool(args.value):
@@ -12844,9 +13102,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=008d223c28d1641e5abbfe0b915deb78c9aa0542332b11e9a5dcb0c08d68a4b7 nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=e40d9005ff747a268ced8ea84ec72657344da9ae82afb8f52d4936fe2f826c21 nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.19 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.20 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -12911,7 +13169,8 @@ STDOUT (one JSON object):
                              "should_notify":bool,"reply_to":null|"<x event id>"}],
    "encrypted":true, "posted_kind":"message"}
   Pass each send's should_notify and reply_to straight to send_chat_message: a relayed text notifies
-  the owner; every status/confirmation line is silent (should_notify:false) and threads under the
+  the owner; status and confirmation lines are silent (should_notify:false) except v1.4.20 health
+  (FDA loss, "Watching Messages again", Chrome away/back), which notify. Headers stay silent. Threads under the
   owner's reply when reply_to is set (item 1).
   {"action":"skip","reason":"duplicate id …"}
   v1.4.7 photos (1:1 inbound): a message/batch line may carry `media` (token, ext, size, sha256, url, key).
@@ -12985,6 +13244,11 @@ NEED_KEYS = ['conversation_key_events', 'signing_keys']
 
 HEADER_ICON = '\U0001f4ac'
 HEADER_STATE = 'header_state.json'
+# v1.4.20: shown when a status payload has no ⚠️ detail of its own (an older Mac). Keep in lockstep
+# with mac-helper/imessage_relay_watch.py FDA_DETAIL.
+FDA_LINE = ('\u26a0\ufe0f Texts stopped: Full Disk Access for iMessage Relay Watcher is off. '
+            'Drag that app into System Settings \u2192 Privacy & Security \u2192 Full Disk Access.')
+_HEALTH_KINDS = ('status:fda_missing', 'status:recovered', 'status:chrome_away', 'status:chrome_back')
 HEADER_GAP_DEFAULT_MIN = 30
 
 
@@ -13646,7 +13910,9 @@ def format_event(payload):
         elif status == 'spam_summary' and detail:
             line = detail[:300]               # v1.4.6: counts only ("\U0001f6ab 3 texts went to Messages \u203a Spam ...")
         elif status == 'fda_missing':
-            line = '\u26a0\ufe0f The watcher can\u2019t read Messages yet (Full Disk Access). New texts aren\u2019t coming through.'
+            # A v1.4.20 Mac sends the sentence in detail (it starts with ⚠️). Older detail is prose, so
+            # fall back to FDA_LINE. Either way the owner sees the fix, not "can't read Messages yet".
+            line = detail[:400] if detail.startswith('\u26a0') else FDA_LINE
         else:
             line = '\u2139\ufe0f ' + (detail or ('Status: ' + (status or 'unknown')))
         return {'kind': 'status:' + (status or 'unknown'), 'lines': [{'id': base_id, 'text': line, 'body': False}]}
@@ -14071,7 +14337,8 @@ def process(req, runner=None):
         for ln in lines:
             # body lines (relayed texts) notify and never thread; status/confirmation lines are silent
             # and thread under the owner's bubble when a reply_to was supplied.
-            notify = bool(ln.get('body'))
+            # v1.4.20: FDA / recovery / Chrome health lines notify so a phone actually buzzes.
+            notify = bool(ln.get('body') or ev['kind'] in _HEALTH_KINDS)
             rt = None if notify or ln.get('header') else reply_to
             entries = line_media.get(ln['id'])
             snd = encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner, reply_to=rt, should_notify=notify,
@@ -21193,7 +21460,7 @@ class TapbackLastSenderW(_WatchBase):
         self.assertEqual(after.get(self.ALLOWED), before_at.get(self.ALLOWED),
                          'a tapback must not advance the last-inbound time')
 @@@@ END
-@@@@ FILE tests/py/test_v138.py mode=644 sha256=886c6a2d29aec2aee44f1d3e961cfb9676c0fcab25002ff9d4e716271310db62 nl=1
+@@@@ FILE tests/py/test_v138.py mode=644 sha256=da224739237cab8382889b22fd2c295fb5c8c39d2189e3cda358ae29a0b60fb4 nl=1
 """v1.3.8: the /test end-to-end check (host, watcher probe, relay_post rendering, never texts a
 contact, every step time-boxed) and the guided setup helpers (owner-handle detection from chat.db,
 relayctl setup / test-result, relay-all pending until the owner's handles are known)."""
@@ -21453,8 +21720,12 @@ class RelayPostTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     rp.format_event(g['payload'])
             else:
-                # v1.4.1: confirmation prompts now say "Reply yes" (a plain yes confirms); nothing else changed
-                want = json.loads(json.dumps(g['expect'], ensure_ascii=False).replace('Say /yes within 2 min.', 'Reply yes within 2 min.'))
+                # v1.4.1: confirmation prompts now say "Reply yes" (a plain yes confirms).
+                # v1.4.20: fda_missing renders the fix sentence (older Macs send no ⚠️ detail).
+                old_fda = ('\u26a0\ufe0f The watcher can\u2019t read Messages yet (Full Disk Access). '
+                           'New texts aren\u2019t coming through.')
+                want = json.loads(json.dumps(g['expect'], ensure_ascii=False).replace(
+                    'Say /yes within 2 min.', 'Reply yes within 2 min.').replace(old_fda, rp.FDA_LINE))
                 self.assertEqual(rp.format_event(g['payload']), want, g['payload']['type'])
 
     def test_relay_test_through_process_is_silent(self):
@@ -23083,6 +23354,540 @@ class Routine(Base):
         self.assertIn('Jordan Rivera \u2713 (new contact, \u2022\u2022\u20220188)', out)
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
+@@@@ END
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=c98fc542e1d0c769aed0de571a435224abaee3478ab2bffc3447d8dcb51b75f0 nl=1
+"""v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
+import contextlib
+import io
+import json
+import os
+import sqlite3
+import sys
+import unittest
+from datetime import datetime, timedelta, timezone
+
+from helpers import ChatDb, FakeRunner, fresh, read_log, tmpdir
+from test_watch import ALLOWED, Base as WatchBase
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'routine'))
+import relay_post as rp  # noqa: E402
+
+ALEX = '+15555550188'
+SAM = '+15555550124'
+OWNER = '+15550000001'
+CONV = '1111-2222'
+
+
+def _local(y, mo, d, h, mi=0, s=0):
+    return datetime(y, mo, d, h, mi, s).timestamp()
+
+
+class Parse(unittest.TestCase):
+    def setUp(self):
+        self.rc = fresh(tmpdir()).rc
+        self.now = _local(2026, 6, 15, 10, 0)
+
+    def test_default_hours_and_clock(self):
+        early = _local(2026, 6, 15, 6, 30)
+        u, err = self.rc.parse_snooze('', early)
+        self.assertIsNone(err)
+        self.assertEqual(u, self.rc.next_clock(7, 0, early))
+        self.assertEqual(datetime.fromtimestamp(u).date(), datetime.fromtimestamp(early).date())
+        self.assertEqual(self.rc.format_clock(u), '7:00 AM')
+        seven = _local(2026, 6, 15, 7, 0)
+        u, err = self.rc.parse_snooze('', seven)
+        self.assertEqual(datetime.fromtimestamp(u).date(), datetime.fromtimestamp(seven).date() + timedelta(days=1))
+        self.assertEqual(self.rc.format_clock(u), '7:00 AM')
+        u, err = self.rc.parse_snooze('8h', self.now)
+        self.assertEqual((u, err), (self.now + 8 * 3600, None))
+        u, err = self.rc.parse_snooze('until 19:30', self.now)
+        self.assertIsNone(err)
+        self.assertEqual(self.rc.format_clock(u), '7:30 PM')
+        u, err = self.rc.parse_snooze('7pm', self.now)
+        self.assertEqual(datetime.fromtimestamp(u).hour, 19)
+        u, err = self.rc.parse_snooze('until 12:00 AM', self.now)
+        self.assertEqual(datetime.fromtimestamp(u).hour, 0)
+        u, err = self.rc.parse_snooze('until 12:00 PM', self.now)
+        self.assertEqual(datetime.fromtimestamp(u).hour, 12)
+        u, err = self.rc.parse_snooze('until 7:00 AM', self.now)
+        self.assertEqual(self.rc.format_clock(u), '7:00 AM')
+        self.assertGreater(u, self.now)
+
+    def test_bad_args_and_cap(self):
+        for bad in ('0h', '25h', 'tomorrow', 'until 25:00', 'until 7:99'):
+            u, err = self.rc.parse_snooze(bad, self.now)
+            self.assertIsNone(u, bad)
+            self.assertEqual(err, self.rc.SNOOZE_USAGE)
+        now = 1_700_000_000.0
+        self.assertTrue(self.rc.snoozing({'snoozeUntil': now + 36 * 3600}, now))
+        self.assertFalse(self.rc.snoozing({'snoozeUntil': now + 36 * 3600 + 1}, now))
+        self.assertFalse(self.rc.snoozing({'snoozeUntil': now - 1}, now))
+        self.assertFalse(self.rc.holding_inbound({'quietHours': None, 'snoozeUntil': 0}, now))
+        self.assertEqual(self.rc.sanitize_config({'snoozeUntil': now - 100})['snoozeUntil'], now - 100)
+        self.assertEqual(self.rc.sanitize_config({'snoozeUntil': 'nope'})['snoozeUntil'], 0)
+        self.assertEqual(self.rc.sanitize_config({'snoozeUntil': -3})['snoozeUntil'], 0)
+        qh = self.rc.sanitize_config({'quietHours': {'start': '00:00', 'end': '23:59', 'tz': 'UTC'}, 'snoozeUntil': 0})
+        noon = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc).timestamp()
+        self.assertTrue(self.rc.holding_inbound(qh, noon))
+
+
+class Host(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tmpdir()
+        self.m = fresh(self.tmp)
+        self.h, self.rc = self.m.host, self.m.rc
+        self.cfgd = {
+            'contacts': [{'name': 'Alex', 'handle': ALEX}, {'name': 'Sam', 'handle': SAM}],
+            'relayConversationId': CONV, 'webhookUrl': 'https://x.invalid/h', 'webhookToken': 't',
+            'ownerHandle': OWNER, 'ownerHandles': [OWNER], 'quietHours': None, 'dryRun': False,
+        }
+        self.rc.write_json_atomic(self.rc.CONFIG_PATH, self.cfgd)
+        self.posts = []
+        self.runner = FakeRunner([(0, '')] * 20)
+        self.t = _local(2026, 6, 15, 22, 15)
+
+    def send(self, text, t=None):
+        if t is not None:
+            self.t = t
+        return self.h.handle_request(
+            {'type': 'send', 'text': text, 'conversationId': CONV, 'ts': ''},
+            cfg=self.rc.load_config(), runner=self.runner, sleeper=lambda x: None, now=lambda: self.t,
+            poster=lambda u, p, token='', timeout=4: self.posts.append(p) or True)
+
+    def osa(self):
+        return [c for c in self.runner.calls if c[0] == '/usr/bin/osascript']
+
+    def write_status(self, **over):
+        st = {
+            'lastTickAt': self.rc.iso_utc(self.t - 4), 'chatDb': 'ok', 'messagesRunning': True,
+            'lastForwardAt': self.rc.iso_utc(self.t - 120),
+        }
+        st.update(over)
+        if over.get('lastForwardAt', 1) is None:
+            st.pop('lastForwardAt', None)
+        self.rc.write_json_atomic(os.path.join(self.rc.APP_DIR, 'status.json'), st)
+
+    def test_parser_rejects_testing(self):
+        p = self.h.parse_owner_command
+        self.assertIsNone(p('/testing 123'))
+        self.assertEqual(p('/SNOOZE'), {'cmd': 'snooze', 'rest': ''})
+        self.assertEqual(p('/snooze until 7:00 AM'), {'cmd': 'snooze', 'rest': 'until 7:00 AM'})
+        self.assertEqual(p('/status'), {'cmd': 'status'})
+
+    def test_status_line_has_no_message_text(self):
+        self.write_status()
+        self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
+        n = len(self.osa())
+        r = self.send('/status')
+        self.assertEqual(r.get('command'), 'status')
+        self.assertEqual(len(self.osa()), n)
+        detail = self.posts[-1]['detail']
+        self.assertEqual(
+            detail,
+            'On \u00b7 v1.4.20 \u00b7 watcher 4s ago \u00b7 Messages open \u00b7 last text 2m \u00b7 bare reply \u2192 Alex')
+        self.assertNotIn('text', self.posts[-1])
+        self.assertNotIn('bare reply', read_log())
+        self.assertIn('status_cmd', read_log())
+
+    def test_status_variants_and_paused(self):
+        self.write_status(chatDb='unavailable')
+        self.send('/status')
+        self.assertIn('watcher blind', self.posts[-1]['detail'])
+        self.assertNotIn('4s ago', self.posts[-1]['detail'])
+        os.unlink(os.path.join(self.rc.APP_DIR, 'status.json'))
+        self.send('/status')
+        d = self.posts[-1]['detail']
+        self.assertIn('watcher unseen', d)
+        self.assertIn('Messages not checked', d)
+        self.assertIn('no texts yet', d)
+        self.assertIn('bare reply \u2192 name someone', d)
+        self.write_status(messagesRunning=False, lastForwardAt=self.rc.iso_utc(self.t - 10))
+        self.send('/status')
+        self.assertIn('Messages closed', self.posts[-1]['detail'])
+        self.assertIn('last text just now', self.posts[-1]['detail'])
+        self.rc.record_inbound(ALEX, self.t - 20, label='Alex')
+        self.rc.record_inbound(SAM, self.t - 40, label='Sam')
+        self.write_status()
+        self.send('/status')
+        self.assertIn('bare reply \u2192 unclear', self.posts[-1]['detail'])
+        self.send('/pause')
+        r = self.send('/status')
+        self.assertEqual(r.get('command'), 'status')
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.20 \u00b7'))
+        self.assertEqual(self.send('ok').get('error'), 'paused')
+        self.assertEqual(self.osa(), [])
+
+    def test_help_and_pause_wording(self):
+        self.assertEqual(self.h.HELP_TEXT, (
+            '/status \u00b7 /who\n'
+            '/pause \u00b7 /resume \u00b7 /snooze\n'
+            '/block Name \u00b7 /unblock Name\n'
+            '/add Name\n'
+            'Sam: your message\n'
+            '/test \u00b7 /help'))
+        n = len(self.osa())
+        self.send('/help')
+        self.assertEqual(self.posts[-1]['detail'], self.h.HELP_TEXT)
+        self.assertIn('\n', self.posts[-1]['detail'])
+        self.send('/pause')
+        self.assertEqual(self.posts[-1]['detail'], self.h.PAUSE_DETAIL)
+        self.assertIn('not kept', self.posts[-1]['detail'])
+        self.assertIn('/snooze', self.posts[-1]['detail'])
+        self.assertEqual(len(self.osa()), n)
+        self.assertTrue(self.rc.load_config()['paused'])
+
+    def test_snooze_holds_config_and_resume_clears_it(self):
+        n = len(self.osa())
+        r = self.send('/snooze')
+        self.assertTrue(r.get('ok'))
+        self.assertEqual(r.get('command'), 'snooze')
+        self.assertEqual(len(self.osa()), n)
+        cfg = self.rc.load_config()
+        want = int(round(self.rc.next_clock(7, 0, self.t)))
+        self.assertFalse(cfg['paused'])
+        self.assertEqual(cfg['snoozeUntil'], want)
+        self.assertEqual(self.rc.format_clock(want), '7:00 AM')
+        detail = 'Snoozing until 7:00 AM. Tonight\u2019s texts arrive as one digest. /resume'
+        self.assertEqual(self.posts[-1]['detail'], detail)
+        self.assertNotIn('text', self.posts[-1])
+        log = read_log()
+        self.assertIn('"event": "snoozed"', log)
+        self.assertIn('"seconds":', log)
+        self.assertNotIn('Tonight', log)
+        self.send('/resume')
+        self.assertEqual(self.posts[-1]['detail'], 'Resumed. Relaying is back on.')
+        self.assertNotIn('snoozeUntil', self.rc.read_raw_config())
+        self.assertFalse(self.rc.load_config()['paused'])
+
+    def test_snooze_8h_until_bad_and_pause_clears(self):
+        self.send('/snooze 8h')
+        stored = self.rc.load_config()['snoozeUntil']
+        self.assertEqual(stored, int(round(self.t + 8 * 3600)))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Snoozing until %s.' % self.rc.format_clock(stored)))
+        self.assertIn('Tonight\u2019s texts arrive as one digest. /resume', self.posts[-1]['detail'])
+        before = json.dumps(self.rc.read_raw_config(), sort_keys=True)
+        r = self.send('/snooze tomorrow')
+        self.assertFalse(r.get('ok'))
+        self.assertEqual(self.posts[-1]['detail'], self.rc.SNOOZE_USAGE)
+        self.assertEqual(json.dumps(self.rc.read_raw_config(), sort_keys=True), before)
+        self.send('/pause')
+        self.assertTrue(self.rc.load_config()['paused'])
+        self.assertNotIn('snoozeUntil', self.rc.read_raw_config())
+        self.assertEqual(self.posts[-1]['detail'], self.h.PAUSE_DETAIL)
+
+    def test_snooze_until_and_dry_run_still_writes(self):
+        morning = _local(2026, 6, 15, 10, 0)
+        self.send('/snooze until 7:00 AM', t=morning)
+        self.assertEqual(self.rc.format_clock(self.rc.load_config()['snoozeUntil']), '7:00 AM')
+        self.assertGreater(self.rc.load_config()['snoozeUntil'] - morning, 12 * 3600)
+        raw = self.rc.read_raw_config()
+        raw['dryRun'] = True
+        raw['paused'] = True
+        self.rc.write_json_atomic(self.rc.CONFIG_PATH, raw)
+        self.send('/snooze 8h')
+        got = self.rc.read_raw_config()
+        self.assertFalse(got['paused'])
+        self.assertTrue(got['dryRun'])
+        self.assertGreater(got['snoozeUntil'], self.t)
+        self.assertEqual(self.osa(), [])
+
+    def test_snoozing_status_and_relayctl_clears(self):
+        self.send('/snooze')
+        self.write_status()
+        self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
+        self.send('/status')
+        self.assertTrue(self.posts[-1]['detail'].startswith(
+            'Snoozing until 7:00 AM \u00b7 v1.4.20 \u00b7 watcher 4s ago \u00b7'))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.m.ctl.main(['pause']), 0)
+        raw = self.rc.read_raw_config()
+        self.assertTrue(raw['paused'])
+        self.assertNotIn('snoozeUntil', raw)
+        raw['paused'] = False
+        raw['snoozeUntil'] = int(self.t + 3600)
+        self.rc.write_json_atomic(self.rc.CONFIG_PATH, raw)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.m.ctl.main(['resume']), 0)
+        raw = self.rc.read_raw_config()
+        self.assertFalse(raw['paused'])
+        self.assertNotIn('snoozeUntil', raw)
+
+
+class SnoozeHold(WatchBase):
+    def test_snooze_holds_then_digests(self):
+        self.w.tick()
+        self.cfg['snoozeUntil'] = self.now + 3600
+        a = self.db.add(ALLOWED, text='held-one')
+        self.db.add(ALLOWED, text='held-two')
+        c = self.w.tick()
+        self.assertEqual((self.poster.calls, c['held']), ([], 2))
+        self.assertEqual(self.state()['lastRowid'], a - 1)
+        self.assert_no_bodies_on_disk('held-one', 'held-two')
+        self.assertNotIn('held-one', read_log())
+        st = self.m.rc.read_json(self.m.watch.STATUS_PATH)
+        self.assertTrue(st['snooze'])
+        self.assertFalse(st['quiet'])
+        self.now = self.cfg['snoozeUntil'] + 5
+        self.db.add(ALLOWED, text='after-snooze')
+        self.w.tick()
+        self.assertEqual(self.poster.types(), ['digest', 'message'])
+        d = self.poster.calls[0][1]
+        self.assertEqual((d['count'], [x['text'] for x in d['messages']]), (2, ['held-one', 'held-two']))
+        self.assertEqual(self.poster.calls[1][1]['text'], 'after-snooze')
+        self.assertFalse(self.m.rc.read_json(self.m.watch.STATUS_PATH)['snooze'])
+        self.assert_no_bodies_on_disk('held-one', 'held-two', 'after-snooze')
+
+    def test_pause_drops_a_snooze_hold(self):
+        self.w.tick()
+        self.cfg['snoozeUntil'] = self.now + 3600
+        self.db.add(ALLOWED, text='held-one')
+        self.w.tick()
+        self.cfg['paused'] = True
+        self.cfg['snoozeUntil'] = 0
+        self.w.tick()
+        self.cfg['paused'] = False
+        self.now += 7200
+        self.w.tick()
+        self.assertEqual(self.poster.calls, [])
+        self.assert_no_bodies_on_disk('held-one')
+
+    def test_overlap_waits_for_both(self):
+        self.w.tick()
+        self.now = datetime(2026, 10, 18, 3, 0, tzinfo=timezone.utc).timestamp()
+        self.cfg['quietHours'] = {'start': '00:00', 'end': '06:00', 'tz': 'UTC'}
+        self.cfg['snoozeUntil'] = self.now + 8 * 3600
+        self.db.add(ALLOWED, text='held-one')
+        self.w.tick()
+        self.now = datetime(2026, 10, 18, 7, 0, tzinfo=timezone.utc).timestamp()
+        self.w.tick()
+        self.assertEqual(self.poster.calls, [])
+        self.now = self.cfg['snoozeUntil'] + 5
+        self.w.tick()
+        self.assertEqual(self.poster.types(), ['digest'])
+        self.assert_no_bodies_on_disk('held-one')
+
+    def test_snooze_ending_inside_quiet_hours_stays_held(self):
+        self.w.tick()
+        self.now = datetime(2026, 10, 18, 3, 0, tzinfo=timezone.utc).timestamp()
+        self.cfg['quietHours'] = {'start': '00:00', 'end': '06:00', 'tz': 'UTC'}
+        self.cfg['snoozeUntil'] = self.now + 3600
+        self.db.add(ALLOWED, text='held-one')
+        self.w.tick()
+        self.now = datetime(2026, 10, 18, 5, 0, tzinfo=timezone.utc).timestamp()
+        self.w.tick()
+        self.assertEqual(self.poster.calls, [])
+        self.now = datetime(2026, 10, 18, 6, 0, tzinfo=timezone.utc).timestamp()
+        self.w.tick()
+        self.assertEqual(self.poster.types(), ['digest'])
+
+    def test_far_future_snooze_does_not_hold(self):
+        self.w.tick()
+        self.cfg['snoozeUntil'] = self.now + 40 * 3600
+        self.db.add(ALLOWED, text='held-one')
+        self.w.tick()
+        self.assertEqual(self.poster.types(), ['message'])
+        self.assertNotIn('held-one', read_log())
+        self.assert_no_bodies_on_disk('held-one')
+
+
+class Health(WatchBase):
+    def statuses(self):
+        return [p for _, p, _ in self.poster.calls if p.get('type') == 'status']
+
+    def seen(self, at):
+        self.m.rc.write_json_atomic(self.m.watch.EXT_SEEN_PATH, {'extVersion': '1.4.16', 'at': at})
+
+    def test_fda_repeats_then_recovers(self):
+        self.w.tick()
+        t0 = self.now
+        os.unlink(self.db.path)
+        self.w.tick()
+        self.w.tick()
+        fda = [p for p in self.statuses() if p.get('status') == 'fda_missing']
+        self.assertEqual(len(fda), 1)
+        self.assertEqual(fda[0]['detail'], self.m.watch.FDA_DETAIL)
+        self.assertNotIn('text', fda[0])
+        self.now = t0 + 29 * 60
+        self.w.tick()
+        self.assertEqual(len([p for p in self.statuses() if p.get('status') == 'fda_missing']), 1)
+        self.now = t0 + 30 * 60
+        self.w.tick()
+        self.assertEqual(len([p for p in self.statuses() if p.get('status') == 'fda_missing']), 2)
+        self.now = t0 + 30 * 60 + 3600
+        self.w.tick()
+        self.assertEqual(len([p for p in self.statuses() if p.get('status') == 'fda_missing']), 3)
+        ChatDb(self.db.path)
+        self.w.tick()
+        self.assertEqual([p['detail'] for p in self.statuses() if p.get('status') == 'recovered'],
+                         ['Watching Messages again.'])
+        self.assertFalse(self.w.fda_warned)
+        self.w.tick()
+        self.assertEqual(len([p for p in self.statuses() if p.get('status') == 'recovered']), 1)
+
+    def test_busy_is_not_fda_or_recovery(self):
+        os.unlink(self.db.path)
+        self.w.tick()
+        self.assertTrue(self.w.fda_warned)
+        ChatDb(self.db.path)
+        lk = sqlite3.connect(self.db.path, timeout=0)
+        lk.execute('PRAGMA locking_mode=EXCLUSIVE')
+        lk.execute('BEGIN EXCLUSIVE')
+        try:
+            counts = self.w.tick()
+        finally:
+            lk.rollback()
+            lk.close()
+        self.assertGreaterEqual(counts.get('dbBusy', 0), 1)
+        self.assertTrue(self.w.fda_warned)
+        self.assertNotIn('recovered', [p.get('status') for p in self.statuses()])
+        self.assertEqual(len([p for p in self.statuses() if p.get('status') == 'fda_missing']), 1)
+        self.w.tick()
+        self.assertEqual([p['detail'] for p in self.statuses() if p.get('status') == 'recovered'],
+                         ['Watching Messages again.'])
+
+    def test_paused_posts_no_fda(self):
+        self.cfg['paused'] = True
+        os.unlink(self.db.path)
+        self.w.tick()
+        self.now += 4000
+        self.w.tick()
+        self.assertEqual(self.statuses(), [])
+        self.assertFalse(self.w.fda_warned)
+
+    def test_failed_fda_post_does_not_advance(self):
+        os.unlink(self.db.path)
+        self.poster.ok = False
+        self.w.tick()
+        self.assertFalse(self.w.fda_warned)
+        self.assertEqual(self.w.fda_phase, 0)
+        self.poster.ok = True
+        self.w.tick()
+        self.assertEqual(self.w.fda_phase, 1)
+        self.assertTrue(self.w.fda_warned)
+
+    def test_chrome_arms_warns_and_recovers(self):
+        self.seen(0)
+        self.now += 7200
+        self.w.tick()
+        self.assertEqual(self.statuses(), [])
+        self.seen(self.now - 30)
+        self.w.tick()
+        self.assertEqual(self.statuses(), [])
+        self.seen(self.now - self.m.watch.CHROME_STALE_S - 5)
+        self.w.tick()
+        self.assertEqual(self.statuses(), [])
+        self.now = self.w.chrome_arm + self.m.watch.CHROME_ARM_S - 1
+        self.seen(self.now - self.m.watch.CHROME_STALE_S - 5)
+        self.w.tick()
+        self.assertEqual(self.statuses(), [])
+        self.now = self.w.chrome_arm + self.m.watch.CHROME_ARM_S
+        self.seen(self.now - self.m.watch.CHROME_STALE_S - 5)
+        self.w.tick()
+        self.assertEqual([p['status'] for p in self.statuses()], ['chrome_away'])
+        self.assertEqual(self.statuses()[0]['detail'], self.m.watch.CHROME_AWAY)
+        warned = self.now
+        self.now = warned + 29 * 60
+        self.seen(self.now - self.m.watch.CHROME_STALE_S - 5)
+        self.w.tick()
+        self.assertEqual(len(self.statuses()), 1)
+        self.now = warned + 30 * 60
+        self.seen(self.now - self.m.watch.CHROME_STALE_S - 5)
+        self.w.tick()
+        self.assertEqual(len([p for p in self.statuses() if p['status'] == 'chrome_away']), 2)
+        self.seen(self.now)
+        self.w.tick()
+        self.assertEqual(self.statuses()[-1]['detail'], self.m.watch.CHROME_BACK)
+        n = len(self.statuses())
+        self.w.tick()
+        self.assertEqual(len(self.statuses()), n)
+        self.assertFalse(self.w.chrome_warned)
+
+    def test_chrome_opening_during_the_arm_stays_quiet(self):
+        self.seen(self.now - self.m.watch.CHROME_STALE_S - 5)
+        self.w.tick()
+        self.seen(self.now)
+        self.now += self.m.watch.CHROME_ARM_S + 50
+        self.seen(self.now - 20)
+        self.w.tick()
+        self.assertEqual(self.statuses(), [])
+
+    def test_paused_skips_a_new_chrome_warning(self):
+        self.cfg['paused'] = True
+        self.seen(self.now - 99999)
+        self.w.tick()
+        self.now += 3600
+        self.w.tick()
+        self.assertEqual(self.statuses(), [])
+        self.assertFalse(self.w.chrome_warned)
+
+
+class Routine(unittest.TestCase):
+    def line(self, payload):
+        ev = rp.format_event(payload)
+        self.assertEqual(set(ev['lines'][0]), {'id', 'text', 'body'})
+        return ev['lines'][0]['text']
+
+    def _post(self, payload):
+        class P:
+            returncode, stderr = 0, b''
+            stdout = json.dumps({'message_id': 'm', 'encoded_message_create_event': 'E',
+                                 'encoded_message_event_signature': 'S'}).encode()
+
+        def runner(argv, input=b''):
+            return P()
+
+        d = tmpdir()
+        # A named helper skips the on-disk xchat_lite search; the fake runner never executes it.
+        return rp.process({'payload': payload, 'conversation_id': 'C',
+                           'xchat': {'events': [], 'conversation_key_events': ['K'], 'signing_keys': ['S']},
+                           'helper': {'python': sys.executable, 'script': os.path.join(d, 'xchat_lite.py')},
+                           'dedupe_path': os.path.join(d, 's.json')}, runner=runner)
+
+    def test_wording_and_notify(self):
+        m = fresh(tmpdir())
+        self.assertEqual(m.watch.FDA_DETAIL, rp.FDA_LINE)
+        self.assertEqual(m.watch.RECOVERED_DETAIL, 'Watching Messages again.')
+        self.assertEqual(m.watch.CHROME_BACK, 'Chrome is open again. Replies will send.')
+        self.assertEqual(
+            m.watch.CHROME_AWAY,
+            'Chrome hasn\u2019t checked in, so replies from your phone won\u2019t send. Open Chrome on the Mac.')
+        self.assertEqual(self.line({'type': 'status', 'status': 'fda_missing', 'id': 'a'}), rp.FDA_LINE)
+        custom = '\u26a0\ufe0f Texts stopped: custom.'
+        self.assertEqual(self.line({'type': 'status', 'status': 'fda_missing', 'detail': custom, 'id': 'b'}), custom)
+        self.assertEqual(self.line({'type': 'status', 'status': 'fda_missing', 'detail': 'plain prose', 'id': 'c'}),
+                         rp.FDA_LINE)
+        self.assertEqual(self.line({'type': 'status', 'status': 'recovered', 'detail': 'Watching Messages again.', 'id': 'd'}),
+                         '\u2139\ufe0f Watching Messages again.')
+        away = self.line({'type': 'status', 'status': 'chrome_away', 'detail': m.watch.CHROME_AWAY, 'id': 'e'})
+        self.assertEqual(away, '\u2139\ufe0f ' + m.watch.CHROME_AWAY)
+        self.assertNotIn('\u26a0\ufe0f\u26a0', away)
+        self.assertEqual(self.line({'type': 'status', 'status': 'chrome_back', 'detail': m.watch.CHROME_BACK, 'id': 'f'}),
+                         '\u2139\ufe0f Chrome is open again. Replies will send.')
+        self.assertEqual(self.line({'type': 'status', 'detail': m.host.HELP_TEXT, 'id': 'h'}),
+                         '\u2139\ufe0f ' + m.host.HELP_TEXT)
+        self.assertGreaterEqual(m.host.HELP_TEXT.count('\n'), 5)
+        self.assertEqual(self.line({'type': 'status', 'status': 'paused', 'detail': m.host.PAUSE_DETAIL, 'id': 'p'}),
+                         '\u2139\ufe0f ' + m.host.PAUSE_DETAIL)
+        snooze = 'Snoozing until 7:00 AM. Tonight\u2019s texts arrive as one digest. /resume'
+        self.assertEqual(self.line({'type': 'status', 'status': 'snoozing', 'detail': snooze, 'id': 's'}),
+                         '\u2139\ufe0f ' + snooze)
+        fda = self._post({'type': 'status', 'status': 'fda_missing', 'id': 'fda1'})
+        self.assertTrue(fda['sends'][0]['should_notify'])
+        self.assertIsNone(fda['sends'][0]['reply_to'])
+        self.assertFalse(self._post({'type': 'status', 'status': 'paused', 'id': 'p1',
+                                   'detail': m.host.PAUSE_DETAIL})['sends'][0]['should_notify'])
+        self.assertTrue(self._post({'type': 'status', 'status': 'recovered', 'id': 'r1',
+                                  'detail': 'Watching Messages again.'})['sends'][0]['should_notify'])
+        self.assertTrue(self._post({'type': 'status', 'status': 'chrome_away', 'id': 'c1',
+                                  'detail': m.watch.CHROME_AWAY})['sends'][0]['should_notify'])
+        self.assertTrue(self._post({'type': 'status', 'status': 'chrome_back', 'id': 'c2',
+                                  'detail': m.watch.CHROME_BACK})['sends'][0]['should_notify'])
+        self.assertFalse(self._post({'type': 'status', 'status': 'status', 'id': 'st1',
+                                   'detail': 'On \u00b7 v1.4.20'})['sends'][0]['should_notify'])
+
+
+if __name__ == '__main__':
+    unittest.main()
 @@@@ END
 @@@@ FILE tests/py/test_v142_names.py mode=644 sha256=0f51c4d623671344ddc53984632ffd49d9aa4e699279755e0a1a5894760d5a00 nl=1
 """v1.4.2: smart name recognition (any case; a name only when the relay list or Contacts know it, close
@@ -25035,7 +25840,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=52521efd506140e70cdefcdebd6dfc14f69d0b7cc7ed875f1a0001487fe6eeba nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=5b939e6bd33f2d96980ea3468896d5c244b356dacc4e9a2ccb9f5851d9e66d79 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -25228,7 +26033,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.19')
+        self.assertEqual(m.rc.VERSION, '1.4.20')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)
