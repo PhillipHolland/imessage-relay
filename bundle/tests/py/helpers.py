@@ -38,6 +38,10 @@ def fresh(tmp):
     import relay_media
     m.media = importlib.reload(relay_media)       # v1.4.6 attachments (outbox / inflight / send stage)
     m.host = importlib.reload(imessage_relay_host)
+    import relay_header, relay_keychain, relay_direct
+    m.header = importlib.reload(relay_header)
+    m.keychain = importlib.reload(relay_keychain)
+    m.direct = importlib.reload(relay_direct)
     m.watch = importlib.reload(imessage_relay_watch)
     m.ctl = importlib.reload(relayctl)
     os.makedirs(os.environ['IMESSAGE_RELAY_HOME'], exist_ok=True)

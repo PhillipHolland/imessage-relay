@@ -55,6 +55,13 @@ done
 if command -v tccutil >/dev/null 2>&1; then
   tccutil reset SystemPolicyAllFiles "$WATCHER_BUNDLE_ID" >/dev/null 2>&1 || true
 fi
+# v1.4.18: direct-post secrets live in the login keychain, not in config.json. Delete them even
+# with --keep-config. Tests set IMESSAGE_RELAY_ALLOW_NON_MAC=1 and must not touch a real keychain.
+if [[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" != "1" ]]; then
+  security delete-generic-password -a refresh-token -s com.imessage-relay.xpost >/dev/null 2>&1 || true
+  security delete-generic-password -a client-secret -s com.imessage-relay.xpost >/dev/null 2>&1 || true
+  security delete-generic-password -a private-key -s com.imessage-relay.xpost >/dev/null 2>&1 || true
+fi
 if [[ $KEEP_CONFIG -eq 1 && -f "$APP/config.json" ]]; then
   find "$APP" -mindepth 1 -maxdepth 1 ! -name config.json -exec rm -rf {} +
   echo "Removed iMessage Relay; kept $APP/config.json (and its webhook key)"

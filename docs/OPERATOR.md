@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.17)
+# iMessage Relay: operator reference (v1.4.18)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -22,6 +22,28 @@ Owner's reply in the relay chat (seen in Chrome on the Mac)
 All contacts share one X conversation, the **relay chat**. Every relayed message starts with
 the contact's short **label**, and the owner's reply goes to the contact it names, or else to
 whoever wrote last (see "Replying" below).
+
+**Direct post (v1.4.18, opt-in, default off).** With it off, the path above is unchanged. With
+`relayctl xpost on`, the Mac encrypts inbound 1:1 and group **text** and posts it to the relay chat
+as the sender in about 1–2 seconds. The routine stays the fallback: a clear failure before the send
+lands still webhooks the same id. Photos, reactions, and quiet-hours digests always use the webhook.
+Update `relay_post.py` to this version **before** turning it on (an older helper treats the body-free
+`type: direct` marker as an unknown event and posts an error for each one). Owner steps:
+
+1. An X developer app on pay-per-use, with a user token (not app-only). Redirect
+   `http://127.0.0.1:53682/cb`. Scopes: `dm.read` `dm.write` `tweet.read` `users.read` `offline.access`.
+2. `brew install python@3.12` if the Mac does not have it, then re-run `./install.sh`. That creates
+   `~/.imessage-relay/xpost-venv` and installs `chatxdk`. It does not rebuild the watcher app.
+3. Replace the bot's `relay_post.py` with this version.
+4. `relayctl xpost setup`: browser login as the **sender**, then the X Chat PIN (the prompt is hidden).
+   The refresh token, client secret, and private key go to the Keychain. This does not turn direct post on.
+5. `relayctl xpost on`.
+
+`relayctl xpost off` returns to the webhook path. `relayctl xpost status` prints booleans only (no
+token, no client id, no user id). `relayctl xpost forget` deletes the three Keychain items and the
+key cache and turns direct post off. `relayctl set directPost` is refused. The Mac and the routine
+share one header state (a key hash and a time), so a conversation gets one "💬 Alex · 7:20 PM" line,
+not two.
 
 The whole Mac-side package is in **build_bundle.py**, a release asset of the public repo
 github.com/PhillipHolland/imessage-relay. It is one Python file that writes every file (extension,
@@ -844,6 +866,13 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.18**: opt-in direct post (Mac helper + routine relay_post.py; the extension stays 1.4.16, so no
+reload from v1.4.16). Default off: until `relayctl xpost on`, inbound texts still take the webhook path.
+When it is on, the Mac posts text straight to the relay chat; photos, reactions, and quiet-hours digests
+still use the webhook. **Update relay_post.py on your side to v1.4.18 before `relayctl xpost on`.** An
+older helper treats `type: direct` as unknown and posts a helper error for every marker. The Mac also
+needs Python 3.12 (`brew install python@3.12`, then re-run `./install.sh`; the watcher app is not
+rebuilt) and `relayctl xpost setup` (sender login, then the Chat PIN). See "Direct post" above.
 **v1.4.17**: v1.4.17 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new conversation is easy to spot. Before a relayed text from a different person than the last one, or the same person after 30 min (`RC set headerGapMinutes N`, 0 = off), a separate silent line "💬 Alex · 7:20 PM" (label + your local time, no text) is posted; groups use the group label. "Name: text" lines are unchanged. Quote-replying to a header asks "Send to Alex?" first; a typed header line is refused. The routine keeps only a key hash and a time (header_state.json).
 
 **v1.4.16**: he ✅ after a send lands again: v1.4.15 typed the picker search word into X Chat's chat-list Search box (it existed before the picker opened), so the full picker never showed ✅ ('no-emoji'). Only a search box that appears with the picker is used; quick row, full picker and search are tried in one 40 ms poll (no fixed 1.2 s waits); twemoji images match by codepoint. Prompts show at once: during the undo window the extension asks the host (preflight, never sends) and a pick / Contacts / "reply to …?" prompt no longer waits out undoSeconds; a reply that would go out still waits the full window and a 🗑️ still cancels it.
@@ -896,7 +925,7 @@ skips the fetches whenever the cache is fresh.
 
 ## Uninstall
 `cd ~/imessage-relay-src && ./uninstall.sh` (add `--keep-config` to keep contacts and the webhook key, `--keep-logs` to keep the log). It also
-removes the watcher app. Then the owner removes the extension in chrome://extensions, the
+removes the watcher app and the direct-post Keychain items (refresh token, client secret, Chat private key), even with `--keep-config`. Then the owner removes the extension in chrome://extensions, the
 "iMessage Relay Watcher" entry in Full Disk Access, and the Automation entry. On your side, run `xchat_lite.py forget` under each XDG_CONFIG_HOME and delete the
 webhook routine.
 
@@ -906,9 +935,13 @@ webhook routine.
   contacts[{name,handle,label?}], replyWindowMinutes (120), ambiguousSeconds (60),
   confirmSends (true), confirmGuessed ("risky"; "always"/"off"), redactCodes (true), rosterDays (30), mute [handles], skipShortCodes (true), footer, deliveryCheck,
   maxSendsPerMinute, webhookUrl, webhookToken, ownerHandle, ownerXHandle, senderXHandle,
-  autoReopenMessages, pollSeconds, defaultCountryCode, ownerXUserId, ownerHandles[], and
+  autoReopenMessages, pollSeconds, defaultCountryCode, ownerXUserId, ownerHandles[],
+  headerGapMinutes (30), directPost (false; `relayctl xpost on|off` only, not `relayctl set`),
+  xpostClientId, xpostUserId, xpostKeyVersion, xpostRedirectPort (53682), and
   relayAllPending (set by `RC setup --relay-all on` before the owner's handles are known; the watcher
   turns relay-all on and clears it once it detects them).
+  Direct-post secrets are not config keys: the refresh token, client secret, and Chat private key are
+  Keychain items (`com.imessage-relay.xpost`). `relayctl xpost status` reports only whether each is set.
 - /test and setup files (body-free): `~/.imessage-relay/selftest/test-last.json` (the last `/test` steps),
   `~/.imessage-relay/ext_seen.json` (when the extension last connected and its version), and
   `~/.imessage-relay/jobs/` (watcher probe jobs, removed after each answer).

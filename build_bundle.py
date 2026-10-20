@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.17, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.18, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=4d5442227fa1ed734ba67522e5c2cb500bd725d3b87f6d84b31d39265f0b6f8a nl=1
-# iMessage Relay v1.4.17
+@@@@ FILE README.md mode=644 sha256=a5119a908fd5e1d0f32513972534198edef2acd48fb7f49d6e3859347cafd151 nl=1
+# iMessage Relay v1.4.18
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,15 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.18 (Mac helper + routine relay_post.py; extension stays 1.4.16): opt-in direct post. With
+  `relayctl xpost on`, the Mac encrypts inbound text and posts it to the relay chat in about 1–2 seconds.
+  The routine stays the fallback. Default off, so an existing install behaves as v1.4.17 until the owner
+  opts in. Photos, reactions, and quiet-hours digests still use the webhook. Needs Python 3.12
+  (`brew install python@3.12`, then re-run install.sh; the watcher app is not rebuilt) and relay_post.py
+  v1.4.18 on the bot **before** `relayctl xpost on`. Setup: an X app (pay-per-use, user token) with
+  redirect `http://127.0.0.1:53682/cb` and scopes `dm.read` `dm.write` `tweet.read` `users.read`
+  `offline.access`, then `relayctl xpost setup` (browser login as the sender, then the hidden Chat PIN),
+  then `relayctl xpost on`.
 - v1.4.17 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new conversation is easy to spot. Before a
   relayed text from a different person than the last one, or the same person after 30 min (`RC set headerGapMinutes N`,
   0 = off), a separate silent line "💬 Alex · 7:20 PM" (label + your local time, no text) is posted; groups use the
@@ -166,7 +175,9 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.17)
+## Limits (v1.4.18)
+- Direct post is opt-in and text-only. Photos, reactions, and quiet-hours digests stay on the webhook.
+  It is off until `relayctl xpost on`.
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -187,7 +198,9 @@ v1.4.6 makes the relay feel native in X Chat:
   key, so the ID is always `gpnjllicnleeogdmgpjekgflakdiifee`.
 - `mac-helper/`: `imessage_relay_host.py` (native host `com.imessage_relay.host`),
   `imessage_relay_watch.py` (watcher), `watch_launcher.py` (run by the watcher app), `typedstream.py` (attributedBody decoder),
-  `relayctl.py` (operations), `relay_common.py`, `relay_ui.py` (v1.4.6 reaction queue + id map),
+  `relayctl.py` (operations), `relay_common.py`, `relay_header.py`, `relay_direct.py`, `relay_keychain.py`,
+  `relay_xpost.py` (v1.4.18 direct poster; runs under `~/.imessage-relay/xpost-venv`, Python 3.12),
+  `relay_ui.py` (v1.4.6 reaction queue + id map),
   `relay_media.py` (v1.4.6 in-flight attachments), `relay_drop.py` (v1.4.7 photo encryption + drop upload; v1.4.8 key wrap), `relay_echo.py`, `send_imessage.applescript`, templates,
   `config.example.json`.
 - `drop/`: the v1.4.7 encrypted photo drop (`core.mjs` shared; `api/` + `vercel.json` for Vercel,
@@ -235,6 +248,7 @@ relayctl add-contact … | label … | remove-contact … | contacts | recent-se
 relayctl setup … | test-result | owner-handles detect [--apply]
 relayctl set-drop --url https://… --key-stdin | set-drop --off      # v1.4.7 photo drop (key on stdin only)
 relayctl set-drop --wrap-key-stdin                                  # v1.4.8 photo-key wrap key (stdin only)
+relayctl xpost setup | on | off | status | forget                   # v1.4.18 direct post (default off)
 ```
 In the relay chat: `/test` (end-to-end check), `/test send` (also texts your own number), `/help`.
 
@@ -286,7 +300,7 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing","detail","at"}` (no message body)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=72956590d73b307f1c51399d69585e61a9bade7e0c6a63f901089f9d06eb6721 nl=1
+@@@@ FILE install.sh mode=755 sha256=9545c65a328f70b6975a278e5673b4498abbcb315030912f4828cece66653563 nl=1
 #!/bin/bash
 # iMessage Relay v1.4.8 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
@@ -410,6 +424,49 @@ rm -rf "$EXT_DIR"; mkdir -p "$EXT_DIR"
 for f in manifest.json content.js background.js popup.html popup.js popup.css; do cp "$SRC/extension/$f" "$EXT_DIR/$f"; done
 printf '#!/bin/bash\nexec %q %q "$@"\n' "$PY" "$BIN/relayctl.py" > "$APP/relayctl"   # %q: safe even if a path has spaces
 chmod 755 "$APP/relayctl"
+
+# v1.4.18: optional Python 3.12 venv for the direct poster. Never rebuilds or re-signs the watcher
+# app. A missing interpreter does not fail the install: direct post stays off until the owner opts in.
+xpost_venv() {
+  if [[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" == "1" ]]; then
+    return 0
+  fi
+  local py="" cand
+  if [[ -n "${IMESSAGE_RELAY_PYTHON312:-}" && -x "${IMESSAGE_RELAY_PYTHON312}" ]]; then
+    py="${IMESSAGE_RELAY_PYTHON312}"
+  else
+    for cand in \
+      /opt/homebrew/bin/python3.12 \
+      /usr/local/bin/python3.12 \
+      /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+    do
+      if [[ -x "$cand" ]]; then
+        py="$cand"
+        break
+      fi
+    done
+    if [[ -z "$py" ]]; then
+      py="$(command -v python3.12 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -z "$py" || ! -x "$py" ]]; then
+    echo "xpost:     python3.12 not found. Direct post stays off until: brew install python@3.12"
+    echo "xpost:     then re-run install.sh (the watcher app is not rebuilt)"
+    return 0
+  fi
+  local venv="$APP/xpost-venv"
+  if ! "$py" -m venv "$venv"; then
+    echo "xpost:     could not create the venv (direct post stays off). Re-run install.sh after: brew install python@3.12"
+    return 0
+  fi
+  if ! "$venv/bin/python" -m pip install --disable-pip-version-check -q 'chatxdk<0.6'; then
+    echo "xpost:     chatxdk did not install (direct post stays off). Re-run install.sh when the network is up."
+    return 0
+  fi
+  echo "xpost:     venv ready (chatxdk). Opt in later with: relayctl xpost setup"
+}
+xpost_venv
+
 echo "files:     $BIN"
 echo "extension: $EXT_DIR"
 
@@ -748,7 +805,7 @@ fi
 [[ $fail -eq 0 ]] && echo "ALL TESTS PASSED" || echo "SOME TESTS FAILED"
 exit $fail
 @@@@ END
-@@@@ FILE uninstall.sh mode=755 sha256=522249dcab2ce26afc750d53b78b508a285425ce4ad79db9dc352df5ba9e9f1a nl=1
+@@@@ FILE uninstall.sh mode=755 sha256=33640d32489f398053af985e0e82d48c16ea7c4577665d9cf43b980ab0c5e5fc nl=1
 #!/bin/bash
 # iMessage Relay uninstaller. Idempotent. Usage: ./uninstall.sh [--keep-config] [--keep-logs]
 # Removes the LaunchAgent, the watcher app (~/Applications/iMessage Relay Watcher.app), the native
@@ -805,6 +862,13 @@ done
 # Reset the watcher's Full Disk Access grant so a fresh install re-prompts cleanly.
 if command -v tccutil >/dev/null 2>&1; then
   tccutil reset SystemPolicyAllFiles "$WATCHER_BUNDLE_ID" >/dev/null 2>&1 || true
+fi
+# v1.4.18: direct-post secrets live in the login keychain, not in config.json. Delete them even
+# with --keep-config. Tests set IMESSAGE_RELAY_ALLOW_NON_MAC=1 and must not touch a real keychain.
+if [[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" != "1" ]]; then
+  security delete-generic-password -a refresh-token -s com.imessage-relay.xpost >/dev/null 2>&1 || true
+  security delete-generic-password -a client-secret -s com.imessage-relay.xpost >/dev/null 2>&1 || true
+  security delete-generic-password -a private-key -s com.imessage-relay.xpost >/dev/null 2>&1 || true
 fi
 if [[ $KEEP_CONFIG -eq 1 && -f "$APP/config.json" ]]; then
   find "$APP" -mindepth 1 -maxdepth 1 ! -name config.json -exec rm -rf {} +
@@ -3826,7 +3890,7 @@ __PROGRAM_ARGUMENTS__
   "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
 }
 @@@@ END
-@@@@ FILE mac-helper/config.example.json mode=644 sha256=8b6beddb8aa6323b9b6fbefcd67674a92ccc82e00dd9d5d5d9b9fc9d948a2575 nl=1
+@@@@ FILE mac-helper/config.example.json mode=644 sha256=1a13401c597e4fe18a9416fb0fdf08cdde48ef2328e825774329e80dd36ed863 nl=1
 {
   "paused": false,
   "dryRun": true,
@@ -3855,13 +3919,14 @@ __PROGRAM_ARGUMENTS__
   "senderXHandle": "",
   "autoReopenMessages": false,
   "pollSeconds": 10,
-  "defaultCountryCode": "1"
+  "defaultCountryCode": "1",
+  "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=f4548ecfb7984cf04a9958b5aeab8c57f0bf00679448d3d2ce2cca658092f26d nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=bf3886b2ee656008ab91b57a63f31c6221534f32962a2d276b39f931d1d08a78 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.17.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.18.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -5597,7 +5662,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=9abb7c1b82ff457d546b1a869ec5fea56bc7c00f5b950ce9c5b868aa86dc7bd1 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=4791b5b0d3d9a568cc06d17bdc753eadc32dfb1c00bbec0ec595d216287cf862 nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -5652,6 +5717,7 @@ import relay_drop  # noqa: E402  (v1.4.7: the encrypted photo drop)
 import relay_ui
 import relay_setup  # noqa: E402
 import relay_contacts  # noqa: E402  (v1.4.0: replies to someone new)
+import relay_direct  # noqa: E402  (v1.4.18: opt-in direct poster; stdlib client, chatxdk stays in the venv)
 from typedstream import message_text  # noqa: E402
 
 STATE_PATH = os.path.join(rc.APP_DIR, 'watch_state.json')
@@ -6414,6 +6480,90 @@ class Watcher:
             except Exception:
                 pass
 
+    def _direct_one(self, cfg, counts, t):
+        """One eligible text through the direct poster. False means the fallback webhook failed."""
+        m = self.retry[0]
+        self._quiet(m, cfg, t)
+        d = relay_direct.send(cfg, self.public(m), runner=self.runner, now=t)
+        code = relay_direct.sanitize_code(d.get('code'))
+        action = d.get('action')
+        if action == 'posted':
+            self.retry.pop(0)
+            counts['directPosted'] += 1
+            counts['forwarded'] += 1
+            self._after_post(m, t)
+            self._bookkeep(m, t, counts)
+            marker = d.get('marker')
+            if marker is not None and not self.post(cfg, marker):
+                counts['directPostMarkerFailed'] += 1
+                rc.log_event('direct_post', code='marker_failed', n=1)
+            return True
+        if action == 'timeout':
+            self.retry.pop(0)
+            counts['directPostTimeout'] += 1
+            rc.log_event('direct_post', code='timeout', n=1)
+            self._after_post(m, t)
+            self._bookkeep(m, t, counts)
+            return True
+        counts['directPostFallback'] += 1
+        if code:
+            rc.log_event('direct_post', code=code, n=1)
+        payload = dict(type='message', untrusted=True, headerGapMinutes=cfg.get('headerGapMinutes', 30), **self.public(m))
+        payload.update(d.get('stamp') or {})
+        if not self.post(cfg, payload):
+            return False
+        self.retry.pop(0)
+        counts['forwarded'] += 1
+        if d.get('save_after_on_webhook'):
+            relay_direct.save_after(d.get('header_after'))
+        self._after_post(m, t)
+        self._bookkeep(m, t, counts)
+        return True
+
+    def _flush_ineligible(self, cfg, counts, t):
+        """While directPost is on, webhook only a leading run of photos/reactions. Texts stay for _direct_one.
+        The same header snapshot goes with the webhook so the routine and the Mac share one state."""
+        chunk = []
+        for m in self.retry:
+            if relay_direct.eligible(cfg, m):
+                break
+            chunk.append(m)
+            if len(chunk) >= BATCH_MAX:
+                break
+        saved = (self._last_route, self._last_route_at)
+        for m in chunk:
+            self._quiet(m, cfg, t)
+            self._last_route, self._last_route_at = m.get('route'), t
+        self._last_route, self._last_route_at = saved
+        pubs = [self.public(m) for m in chunk]
+        _before, after = relay_direct.plan_state(pubs, cfg.get('headerGapMinutes', 30), t)
+        stamp = {'headerState': relay_direct.rh.public_state(_before)}
+        if len(chunk) >= 2 and cfg.get('batchWebhooks', True):
+            payload = {'type': 'batch', 'count': len(chunk), 'messages': pubs, 'untrusted': True,
+                       'headerGapMinutes': cfg.get('headerGapMinutes', 30)}
+            payload.update(stamp)
+            if not self.post(cfg, payload):
+                return False
+            self.retry = self.retry[len(chunk):]
+            counts['forwarded'] += len(chunk)
+            counts['batched'] += len(chunk)
+            relay_direct.save_after(after)
+            for m in chunk:
+                self._after_post(m, t)
+                self._bookkeep(m, t, counts)
+            return True
+        m = chunk[0]
+        payload = dict(type='message', untrusted=True, headerGapMinutes=cfg.get('headerGapMinutes', 30), **pubs[0])
+        payload.update(stamp)
+        if not self.post(cfg, payload):
+            return False
+        self.retry.pop(0)
+        counts['forwarded'] += 1
+        relay_direct.save_after(after)
+        self._after_post(m, t)
+        self._bookkeep(m, t, counts)
+        return True
+
     def flush(self, cfg, counts):
         waiting = self._resolve_mirrors(counts)
         try:
@@ -6455,6 +6605,18 @@ class Watcher:
                 for m in chunk:
                     self._bookkeep(m, t, counts)
         while not failed and self.retry and posts < MAX_POSTS_PER_TICK:
+            if cfg.get('directPost'):
+                if relay_direct.eligible(cfg, self.retry[0]):
+                    if not self._direct_one(cfg, counts, t):
+                        failed = True
+                        break
+                    posts += 1
+                    continue
+                if not self._flush_ineligible(cfg, counts, t):
+                    failed = True
+                    break
+                posts += 1
+                continue
             if len(self.retry) >= 2 and cfg.get('batchWebhooks', True):
                 # v1.4.5 speed: several texts waiting -> ONE webhook (one routine run on the box), still
                 # one X message per text there. Same retry rules: nothing is dropped, a 2xx is never re-sent.
@@ -6506,7 +6668,8 @@ class Watcher:
         counts = dict.fromkeys(('taggedUnknown', 'batched', 'scanned', 'notAllowlisted', 'group', 'groupMessages', 'own', 'muted', 'shortCode', 'noHandle',
                                 'reactionsOrEvents', 'empty', 'deferredEmpty', 'tooOld', 'rowErrors', 'rosterWriteErrors',
                                 'new', 'held', 'forwarded', 'digested', 'webhookFailures', 'droppedPaused',
-                                'backpressure', 'rateLimited', 'rebaselined', 'dbBusy', 'mirrored', 'spamHeld', 'tagged'), 0)
+                                'backpressure', 'rateLimited', 'rebaselined', 'dbBusy', 'mirrored', 'spamHeld', 'tagged',
+                                'directPosted', 'directPostFallback', 'directPostTimeout', 'directPostMarkerFailed'), 0)
         self.process_jobs(cfg)
         self.retry_notifications(cfg)
         try:
@@ -7007,7 +7170,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=7f03ec9c13ff7ad400d4aa4a7b9cbf9c14eca0e0362ba8d6b4d3f848c763267d nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=33880c3beaeb6fc581de725a48108ebbe40b248ccd0c789fcaa87c3f67b27289 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7033,8 +7196,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.17'
-EXTENSION_VERSION = '1.4.17'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
+VERSION = '1.4.18'
+EXTENSION_VERSION = '1.4.16'   # v1.4.18 does not change the extension (status must not nag a reload)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -7092,6 +7255,11 @@ DEFAULT_CONFIG = {
     'mirrorTapbacks': True,        # v1.4.6: their tapback on a relayed reply -> that reaction on HIS X message
     'quietNamesSeconds': 600,      # v1.4.6: "Name:" only when the sender changes within this window (0 = always)
     'headerGapMinutes': 30,        # v1.4.17: 💬 header before a new person / same person after this gap (0 = off)
+    'directPost': False,           # v1.4.18: opt-in. Mac posts text straight to X Chat; routine stays the fallback
+    'xpostClientId': '',           # v1.4.18: X app client id (not a secret). Secret stays in the Keychain
+    'xpostUserId': '',             # v1.4.18: sender numeric user id, set by `relayctl xpost setup`
+    'xpostKeyVersion': '',         # v1.4.18: sender public_key_version from setup
+    'xpostRedirectPort': 53682,    # v1.4.18: loopback PKCE redirect http://127.0.0.1:<port>/cb
     'undoSeconds': 5,              # v1.4.6: \U0001f5d1\ufe0f on his own reply within this cancels it (0-10; 0 = off)
     'stripOptOut': True,           # v1.4.6: drop "Reply STOP to opt out" footers on texts tagged spam / unknown
     'relayAttachments': True,      # v1.4.6: 1:1 photos both ways (in-flight temp files only, never stored)
@@ -7305,6 +7473,13 @@ def sanitize_config(user):
     cfg['quietNamesSeconds'] = _clamp_int(cfg.get('quietNamesSeconds'), 600, 0, 3600)
     cfg['undoSeconds'] = _clamp_int(cfg.get('undoSeconds'), 5, 0, 10)
     cfg['headerGapMinutes'] = _clamp_int(cfg.get('headerGapMinutes'), 30, 0, 1440)
+    cfg['directPost'] = truthy(cfg.get('directPost'), False)
+    cid = str(cfg.get('xpostClientId') or '')
+    cfg['xpostClientId'] = cid if re.match(r'^[A-Za-z0-9_-]{1,200}$', cid) else ''
+    cfg['xpostUserId'] = re.sub(r'[^0-9]', '', str(cfg.get('xpostUserId') or ''))[:30]
+    kv = str(cfg.get('xpostKeyVersion') or '')
+    cfg['xpostKeyVersion'] = kv if re.match(r'^[A-Za-z0-9._:-]{1,40}$', kv) else ''
+    cfg['xpostRedirectPort'] = _clamp_int(cfg.get('xpostRedirectPort'), 53682, 1, 65535)
     cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
     sm = str(cfg.get('spamMode') or 'follow-messages').strip().lower()
@@ -8453,6 +8628,174 @@ def lookup(name, cfg, globs=None, people=None, fuzzy=False):
             break
     return {'ok': True, 'matches': out}
 @@@@ END
+@@@@ FILE mac-helper/relay_direct.py mode=644 sha256=67c0221a372b14245e6957369f5d86fc017cca531227ef112c4a22f95364c1ac nl=1
+#!/usr/bin/python3
+"""v1.4.18: watcher-side client for the direct poster. Stdlib. Does not import chatxdk.
+
+The 3.12 venv runs relay_xpost.py. This module decides eligibility, plans the silent header, and
+turns one JSON result line into posted / fallback / timeout. Message text goes to the child on
+stdin only. It is never written to disk here and never placed in argv.
+"""
+import json
+import os
+import re
+import subprocess
+import time
+
+import relay_common as rc
+import relay_header as rh
+
+POST_TIMEOUT_S = 8
+
+
+def sanitize_code(code):
+    return re.sub(r'[^a-z0-9_]', '', str(code or '').lower())[:40]
+
+
+def venv_python():
+    override = os.environ.get('IMESSAGE_RELAY_XPOST_PYTHON') or ''
+    if override:
+        return override
+    return os.path.join(rc.APP_DIR, 'xpost-venv', 'bin', 'python')
+
+
+def script_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'relay_xpost.py')
+
+
+def eligible(cfg, m):
+    """1:1 or group TEXT with no photo metadata and no reaction. Digests never reach this."""
+    if not cfg or not cfg.get('directPost'):
+        return False
+    if not m or m.get('media') or m.get('reaction'):
+        return False
+    return bool(m.get('text'))
+
+
+def plan_state(messages, gap, now=None):
+    before = rh.load_state()
+    _lines, after = rh.plan(messages, gap, before, now=now)
+    return before, after
+
+
+def save_after(after):
+    if after:
+        rh.save_state(after)
+
+
+def _now(now):
+    if callable(now):
+        return now()
+    if now is None:
+        return time.time()
+    return now
+
+
+def _parse_out(out):
+    if out is None:
+        return None
+    if isinstance(out, bytes):
+        out = out.decode('utf-8', 'replace')
+    line = ''
+    for ln in str(out).splitlines():
+        s = ln.strip()
+        if s.startswith('{') and s.endswith('}'):
+            line = s
+    if not line:
+        return None
+    try:
+        obj = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict) or 'ok' not in obj:
+        return None
+    return obj
+
+
+def _marker(message_id, header_planned, after):
+    ids = [str(message_id)]
+    if header_planned:
+        ids.append(str(message_id) + '#hdr')
+    marker = {'type': 'direct', 'ids': ids, 'headerState': rh.public_state(after)}
+    return marker
+
+
+def _decision(action, code, stamp=None, marker=None, header_after=None, save_after_on_webhook=False):
+    return {
+        'action': action,
+        'code': code or '',
+        'stamp': stamp,
+        'marker': marker,
+        'header_after': header_after,
+        'save_after_on_webhook': bool(save_after_on_webhook),
+    }
+
+
+def _fallback(code, before, after, skip_header=False, already_saved=False):
+    stamp = {'headerState': rh.public_state(before)}
+    if skip_header:
+        stamp['skipHeader'] = True
+        stamp['headerStateAfter'] = rh.public_state(after)
+    return _decision('fallback', code, stamp=stamp, header_after=after,
+                     save_after_on_webhook=not skip_header and not already_saved)
+
+
+def _timeout(after):
+    rh.save_state(after)
+    return _decision('timeout', 'timeout', header_after=after, save_after_on_webhook=False)
+
+
+def _from_outcome(obj, message_id, before, after, header_planned):
+    if obj.get('ok'):
+        rh.save_state(after)
+        return _decision('posted', 'ok', marker=_marker(message_id, header_planned, after),
+                         header_after=after)
+    if obj.get('retryable'):
+        skip = bool(obj.get('header_sent'))
+        if skip:
+            rh.save_state(after)
+        return _fallback(obj.get('code') or 'failed', before, after, skip_header=skip, already_saved=skip)
+    rh.save_state(after)
+    return _decision('timeout', obj.get('code') or 'timeout', header_after=after)
+
+
+def send(cfg, message, runner=None, now=None):
+    """Post one public() message. Returns a decision dict and never logs the text.
+
+    posted: header state already saved; `marker` is a body-free webhook.
+    fallback: clear failure before a successful message POST (or header already sent). Caller
+    webhooks the same id and saves `header_after` only after HTTP 2xx, unless the header was
+    already saved (`save_after_on_webhook` false).
+    timeout: the POST may have landed. No webhook, no retry. Header state already advanced.
+    """
+    t = _now(now)
+    gap = cfg.get('headerGapMinutes', 30) if cfg else 30
+    before = rh.load_state()
+    lines, after = rh.plan([message], gap, before, now=t)
+    header_planned = any(ln.get('header') for ln in lines)
+    message_id = str((message or {}).get('id') or '')
+    py = venv_python()
+    if not os.path.isfile(py):
+        return _fallback('no_venv', before, after)
+    texts = [{'text': ln.get('text') or '', 'header': bool(ln.get('header')), 'notify': not bool(ln.get('header'))}
+             for ln in lines]
+    argv = [py, script_path(), 'post']
+    data = json.dumps({'texts': texts}).encode('utf-8')
+    run = runner or subprocess.run
+    try:
+        proc = run(argv, input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=POST_TIMEOUT_S)
+    except subprocess.TimeoutExpired as e:
+        parsed = _parse_out(getattr(e, 'stdout', None) or getattr(e, 'output', None))
+        if parsed is None:
+            return _timeout(after)
+        return _from_outcome(parsed, message_id, before, after, header_planned)
+    except OSError:
+        return _fallback('spawn_failed', before, after)
+    parsed = _parse_out(getattr(proc, 'stdout', '') or '')
+    if parsed is None:
+        return _timeout(after)
+    return _from_outcome(parsed, message_id, before, after, header_planned)
+@@@@ END
 @@@@ FILE mac-helper/relay_directive.py mode=644 sha256=3903b47c098ad7f02f8a0df2d7658511631580ef6891c4688365ec2b574a056b nl=1
 """iMessage Relay v1.4.8 -- conversational addressing (directive parsing).
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through
@@ -8985,6 +9328,353 @@ def lookup_quote(quoted, cfg=None, at=None, path=None):
         if hits:
             return hits
     return set()
+@@@@ END
+@@@@ FILE mac-helper/relay_header.py mode=644 sha256=1e136200dff45ded59ff4418c69f1b766ffda4d8b940a9f5dc7756c06e5095e7 nl=1
+#!/usr/bin/python3
+"""v1.4.18: conversation headers on the Mac. Same algorithm as routine/relay_post.py.
+
+The watcher is stdlib Python 3.9 and must not import the bot helper. Keep _hdr_meta, header_text,
+add_headers and _message_line in lockstep with relay_post.py (tests compare them). State on disk is
+only {"k": sha256("imr-hdr:"+who)[:24], "at": epoch}. Never a name and never message text.
+"""
+import hashlib
+import json
+import os
+import re
+import time
+
+import relay_common as rc
+
+GROUP_SEP = ' \u00b7 '
+UNKNOWN_TAG = '\u26a0\ufe0f Unknown \u00b7 '
+TAGS = {'spam': '\U0001f6ab Spam \u00b7 ', 'promotion': '\U0001f3f7\ufe0f Promo \u00b7 ',
+        'transaction': '\U0001f9fe '}
+HEADER_ICON = '\U0001f4ac'
+HEADER_GAP_DEFAULT_MIN = 30
+_PHOTO_PLACEHOLDER = re.compile(r'\U0001f4f7 (?:Photo|\d+ photos)$')
+
+
+def state_path():
+    return os.path.join(rc.APP_DIR, 'header_state.json')
+
+
+def _label(p, default='someone'):
+    return str(p.get('label') or p.get('contactName') or default).strip() or default
+
+
+def _hdr_meta(m):
+    """Body-free facts for a conversation header: who (group label, else handle/label), when."""
+    g = m.get('group') or {}
+    gl = str(g.get('label') or g.get('name') or '').strip()
+    who = ('g:' + gl) if gl else ('h:' + str(m.get('handle') or _label(m)))
+    try:
+        import datetime as _dt
+        at = _dt.datetime.fromisoformat(str(m.get('receivedAt') or '').replace('Z', '+00:00')).timestamp()
+    except Exception:
+        at = None
+    t = re.sub(r'[^0-9: APM]', '', str(m.get('localTime') or ''))[:8].strip()
+    return {'key': who, 'label': gl or _label(m), 'at': at, 'time': t, 'reaction': bool(m.get('reaction'))}
+
+
+def header_text(meta):
+    return HEADER_ICON + ' ' + meta['label'] + ((GROUP_SEP + meta['time']) if meta['time'] else '')
+
+
+def _hkey(who):
+    return hashlib.sha256(('imr-hdr:' + who).encode('utf-8')).hexdigest()[:24]
+
+
+def add_headers(lines, gap_min, state, now=None):
+    """Insert a silent header line before a relayed text from a different person than the previous one,
+    or from the same person after gap_min minutes (0 = off). `state` is {"k": key hash, "at": epoch}
+    (no names, no text); returns (lines, new_state)."""
+    try:
+        gap = max(0.0, float(gap_min)) * 60.0
+    except (TypeError, ValueError):
+        gap = HEADER_GAP_DEFAULT_MIN * 60.0
+    if not gap:
+        return lines, state
+    now = time.time() if now is None else now
+    st = dict(state or {})
+    out = []
+    for ln in lines:
+        meta = ln.get('hdr')
+        if meta and not meta['reaction']:
+            k, at = _hkey(meta['key']), meta['at'] or now
+            if st.get('k') != k or at - float(st.get('at') or 0) >= gap:
+                out.append({'id': ln['id'] + '#hdr', 'text': header_text(meta), 'body': False, 'header': True})
+            st = {'k': k, 'at': at}
+        out.append(ln)
+    return out, st
+
+
+def _message_line(m):
+    """`<label>: <text>` or `<group.label> · <label>: <text>`. A tapback joins with a space, not a colon."""
+    label = _label(m)
+    text = str(m.get('text') or '')
+    g = m.get('group') or {}
+    gl = str(g.get('label') or g.get('name') or '').strip()
+    head = (gl + GROUP_SEP if gl else '') + label
+    tag = TAGS.get(str(m.get('tag') or '')) if not gl else None
+    if tag:
+        head = tag + head
+    elif m.get('unknown') and not gl:
+        head = UNKNOWN_TAG + head
+    if (m.get('quiet') and not gl and not m.get('reaction') and not tag and not m.get('unknown')
+            and not m.get('media') and not _PHOTO_PLACEHOLDER.fullmatch(text.strip())):
+        return text
+    sep = ' ' if m.get('reaction') else ': '
+    if not text.strip() and not m.get('reaction'):
+        return head + ':'
+    return head + sep + text
+
+
+def plan(messages, gap_min, state, now=None):
+    """One header decision for the messages the routine would see. Returns (lines, new_state)."""
+    lines = []
+    for i, m in enumerate(messages or []):
+        mid = str(m.get('id') or ('m#%d' % i))
+        lines.append({'id': mid, 'text': _message_line(m), 'body': True, 'hdr': _hdr_meta(m)})
+    return add_headers(lines, gap_min, state, now=now)
+
+
+def public_state(st):
+    """The webhook snapshot: a key hash and a time, or {} when there is no header yet."""
+    if not isinstance(st, dict) or not st.get('k'):
+        return {}
+    return {'k': st.get('k'), 'at': st.get('at')}
+
+
+def load_state(path=None):
+    path = path or state_path()
+    try:
+        with open(path, encoding='utf-8') as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(d, dict) or not d.get('k'):
+        return {}
+    return {'k': d.get('k'), 'at': d.get('at')}
+
+
+def save_state(st, path=None):
+    """Monotonic on `at`: a late older snapshot does not rewind a newer one. Mode 600. Only k and at."""
+    if not isinstance(st, dict) or not st.get('k'):
+        return False
+    try:
+        new_at = float(st.get('at') or 0)
+    except (TypeError, ValueError):
+        return False
+    path = path or state_path()
+    cur = load_state(path)
+    try:
+        cur_at = float(cur.get('at') or 0) if cur.get('k') else None
+    except (TypeError, ValueError):
+        cur_at = None
+    if cur.get('k') and cur_at is not None and cur_at > new_at:
+        return False
+    folder = os.path.dirname(path)
+    tmp = path + '.tmp'
+    try:
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            json.dump({'k': st.get('k'), 'at': st.get('at')}, fh)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+@@@@ END
+@@@@ FILE mac-helper/relay_keychain.py mode=644 sha256=a50498504bf2437041090ca21a3954722b4286b7fa853256d01d7fe256088e1d nl=1
+#!/usr/bin/python3
+"""v1.4.18: Keychain items for the direct poster. Stdlib only.
+
+The `security` CLI has to receive some password on `-w` (it will not read stdin), so the item is
+created with a non-secret placeholder and an ACL. The real secret is written afterwards with
+SecItemUpdate and never appears in argv. Logs must not include it either.
+
+Service: com.imessage-relay.xpost
+Accounts: refresh-token, client-secret, private-key
+"""
+import os
+import subprocess
+import sys
+
+SERVICE = 'com.imessage-relay.xpost'
+ACCOUNTS = ('refresh-token', 'client-secret', 'private-key')
+PLACEHOLDER = 'imr-placeholder'
+
+
+class KeychainError(Exception):
+    pass
+
+
+def _run(runner, argv, **kw):
+    return runner(argv, **kw)
+
+
+def _check_secret(secret):
+    if not isinstance(secret, str) or not secret or '\n' in secret or '\r' in secret:
+        raise ValueError('secret must be one line')
+
+
+def trusted_bins(extra=()):
+    """Executables allowed to read the item. `security` itself stays trusted so find -w works."""
+    paths = [sys.executable, '/usr/bin/security']
+    paths.extend(list(extra or ()))
+    out = []
+    for p in paths:
+        if not p or not isinstance(p, str):
+            continue
+        for cand in (p,):
+            if cand and cand not in out:
+                out.append(cand)
+        try:
+            real = os.path.realpath(p)
+        except OSError:
+            real = ''
+        if real and real not in out:
+            out.append(real)
+    return out
+
+
+def store(account, secret, trusted=(), runner=subprocess.run, write_secret=None):
+    """Create or replace one item. `secret` is passed only to write_secret, never to argv."""
+    if account not in ACCOUNTS:
+        raise ValueError('unknown account')
+    _check_secret(secret)
+    argv = ['security', 'add-generic-password', '-a', account, '-s', SERVICE, '-U']
+    for p in trusted_bins(trusted):
+        argv.extend(['-T', p])
+    argv.extend(['-w', PLACEHOLDER])
+    proc = _run(runner, argv)
+    if getattr(proc, 'returncode', 1) != 0:
+        raise KeychainError('keychain_add_failed')
+    writer = write_secret or secitem_update
+    try:
+        writer(account, secret)
+    except Exception:
+        delete(account, runner=runner)
+        raise
+    return True
+
+
+def exists(account, runner=subprocess.run):
+    """True when the item exists. Does not print or return the secret."""
+    proc = _run(runner, ['security', 'find-generic-password', '-a', account, '-s', SERVICE])
+    return getattr(proc, 'returncode', 1) == 0
+
+
+def load(account, runner=subprocess.run):
+    """Return the secret, or None. Caller must not log the result. Strips one trailing newline."""
+    proc = _run(runner, ['security', 'find-generic-password', '-a', account, '-s', SERVICE, '-w'],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    if getattr(proc, 'returncode', 1) != 0:
+        return None
+    out = proc.stdout or ''
+    if isinstance(out, bytes):
+        out = out.decode('utf-8', 'replace')
+    if out.endswith('\n'):
+        out = out[:-1]
+    return out or None
+
+
+def delete(account, runner=subprocess.run):
+    _run(runner, ['security', 'delete-generic-password', '-a', account, '-s', SERVICE],
+         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
+
+
+def delete_all(runner=subprocess.run):
+    for account in ACCOUNTS:
+        try:
+            delete(account, runner=runner)
+        except Exception:
+            pass
+
+
+def secitem_update(account, secret):
+    """Write the real secret into an item the security CLI just created. Darwin only."""
+    _check_secret(secret)
+    if sys.platform != 'darwin':
+        raise KeychainError('keychain_unavailable')
+    try:
+        import ctypes
+        cf = ctypes.cdll.LoadLibrary('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
+        sec = ctypes.cdll.LoadLibrary('/System/Library/Frameworks/Security.framework/Security')
+    except OSError:
+        raise KeychainError('keychain_unavailable')
+    utf8 = 0x08000100
+    cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+    cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+    cf.CFDataCreate.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+    cf.CFDataCreate.restype = ctypes.c_void_p
+    cf.CFDictionaryCreate.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p]
+    cf.CFDictionaryCreate.restype = ctypes.c_void_p
+    cf.CFRelease.argtypes = [ctypes.c_void_p]
+    cf.CFRelease.restype = None
+    sec.SecItemUpdate.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    sec.SecItemUpdate.restype = ctypes.c_int32
+    try:
+        key_cb = ctypes.c_void_p.in_dll(cf, 'kCFTypeDictionaryKeyCallBacks')
+        val_cb = ctypes.c_void_p.in_dll(cf, 'kCFTypeDictionaryValueCallBacks')
+    except ValueError:
+        raise KeychainError('keychain_unavailable')
+
+    def cstr(s):
+        ref = cf.CFStringCreateWithCString(None, s.encode('utf-8'), utf8)
+        if not ref:
+            raise KeychainError('keychain_unavailable')
+        return ref
+
+    owned = []
+    buf = None
+    try:
+        qk = [cstr('class'), cstr('svce'), cstr('acct')]
+        qv = [cstr('genp'), cstr(SERVICE), cstr(account)]
+        owned.extend(qk + qv)
+        raw = secret.encode('utf-8')
+        buf = ctypes.create_string_buffer(raw)
+        data = cf.CFDataCreate(None, ctypes.cast(buf, ctypes.c_void_p), len(raw))
+        if not data:
+            raise KeychainError('keychain_unavailable')
+        owned.append(data)
+        ak = [cstr('v_Data')]
+        owned.extend(ak)
+
+        def cfdict(keys, vals):
+            n = len(keys)
+            ka = (ctypes.c_void_p * n)(*keys)
+            va = (ctypes.c_void_p * n)(*vals)
+            ref = cf.CFDictionaryCreate(None, ka, va, n, ctypes.cast(key_cb, ctypes.c_void_p), ctypes.cast(val_cb, ctypes.c_void_p))
+            if not ref:
+                raise KeychainError('keychain_unavailable')
+            owned.append(ref)
+            return ref
+
+        query = cfdict(qk, qv)
+        attrs = cfdict(ak, [data])
+        status = sec.SecItemUpdate(query, attrs)
+        if status != 0:
+            raise KeychainError('keychain_update_failed')
+    finally:
+        if buf is not None:
+            for i in range(len(buf)):
+                buf[i] = b'\x00'
+        for ref in owned:
+            try:
+                cf.CFRelease(ref)
+            except Exception:
+                pass
 @@@@ END
 @@@@ FILE mac-helper/relay_media.py mode=644 sha256=64c5ac38b2ad36114a510d8e5c024430b97ee6b1944b4fbdc56b2d6d1d48a0c0 nl=1
 """iMessage Relay v1.4.8 -- attachment byte paths on the Mac (both directions; 1:1 chats only).
@@ -10218,7 +10908,845 @@ def map_unread(path=None, now=None, max_age_s=86400):
     return [(g, v) for g, v in sorted(ent.items(), key=lambda kv: -kv[1]['at'])
             if v.get('dm') and not v.get('read') and v.get('rowid') is not None and now - v['at'] < max_age_s]
 @@@@ END
-@@@@ FILE mac-helper/relayctl.py mode=755 sha256=53490f0559f2cd710487deea84bfe7d3dd724918743fdf3b1cc2ab4b6e879b9f nl=1
+@@@@ FILE mac-helper/relay_xpost.py mode=644 sha256=b7d2a422c3940604540b8789798e5f1d820b63a74d6dc7afc71419df24552938 nl=1
+#!/usr/bin/env python3
+"""v1.4.18 direct poster. Runs under ~/.imessage-relay/xpost-venv (Python 3.12, chatxdk<0.6).
+
+The watcher (Python 3.9) spawns `relay_xpost.py post` and writes one JSON object on stdin:
+  {"texts":[{"text","header","notify"}]}
+This process prints exactly one JSON line on stdout and exits 0 even on failure:
+  {"ok":true,"message_id":"...","header_sent":bool}
+  {"ok":false,"retryable":bool,"code":"...","header_sent":bool}
+
+chatxdk is imported lazily so this file still imports on Python 3.9 (unit tests).
+Message text is never logged, never put in argv, and never written to disk.
+Secrets (refresh token, client secret, Chat private key, PIN, auth code) stay in the Keychain
+or in process memory. The access token is memory only.
+"""
+import base64
+import hashlib
+import json
+import os
+import secrets
+import socket
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import relay_common as rc  # noqa: E402
+import relay_keychain as rk  # noqa: E402
+
+API = 'https://api.x.com'
+AUTHORIZE = 'https://x.com/i/oauth2/authorize'
+SCOPES = 'dm.write dm.read tweet.read users.read offline.access'
+CONV_PATH_RE = __import__('re').compile(r'^([0-9]{1,19}|[0-9]{1,19}-[0-9]{1,19}|g[0-9]{1,19})$')
+KEY_CACHE_TTL_S = 6 * 3600
+KEY_CACHE_MAX_BYTES = 512 * 1024
+HTTP_TIMEOUT_S = 5
+SETUP_TIMEOUT_S = 180
+
+
+class NetError(Exception):
+    pass
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(_public_outcome(obj), separators=(',', ':')) + '\n')
+    sys.stdout.flush()
+
+
+def _public_outcome(obj):
+    if not isinstance(obj, dict):
+        return {'ok': False, 'retryable': True, 'code': 'internal'}
+    keep = ('ok', 'retryable', 'code', 'message_id', 'header_sent', 'message_ids',
+            'userIdSet', 'keySaved', 'redirect', 'guessesRemaining')
+    out = {}
+    for k in keep:
+        if k in obj:
+            out[k] = obj[k]
+    if 'ok' not in out:
+        out['ok'] = False
+    return out
+
+
+def pkce_pair():
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode('ascii')).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode('ascii').rstrip('=')
+    return verifier, challenge
+
+
+def authorize_url(client_id, redirect_uri, state, challenge):
+    q = urllib.parse.urlencode({
+        'response_type': 'code',
+        'client_id': client_id,
+        'redirect_uri': redirect_uri,
+        'scope': SCOPES,
+        'state': state,
+        'code_challenge': challenge,
+        'code_challenge_method': 'S256',
+    })
+    return AUTHORIZE + '?' + q
+
+
+def callback_error(expected_state, got):
+    if not got:
+        return 'timeout'
+    if got.get('error'):
+        return 'denied'
+    if got.get('state') != expected_state:
+        return 'state_mismatch'
+    if not got.get('code'):
+        return 'no_code'
+    return ''
+
+
+def conv_path(conv):
+    c = str(conv or '').strip().replace(':', '-')
+    if not CONV_PATH_RE.match(c):
+        return ''
+    if not rc.CONV_RE.match(c):
+        return ''
+    return c
+
+
+def parse_token(data):
+    if not isinstance(data, dict):
+        return None
+    access = data.get('access_token')
+    if not access or not isinstance(access, str):
+        return None
+    refresh = data.get('refresh_token') if isinstance(data.get('refresh_token'), str) else ''
+    return {'access_token': access, 'refresh_token': refresh}
+
+
+def basic_auth(client_id, client_secret):
+    raw = ('%s:%s' % (client_id, client_secret)).encode('utf-8')
+    return 'Basic ' + base64.b64encode(raw).decode('ascii')
+
+
+def _as_list(raw):
+    if isinstance(raw, dict):
+        data = raw.get('data', raw)
+    else:
+        data = raw
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def map_signing(raw, user_id):
+    """API public-key rows -> chatxdk SigningKeyEntry dicts. Drop rows with no identity key."""
+    out = []
+    for ent in _as_list(raw):
+        if not isinstance(ent, dict):
+            continue
+        identity = ent.get('public_key') or ent.get('identity_public_key')
+        signing = ent.get('signing_public_key')
+        if not identity or not signing or ent.get('public_key_version') is None:
+            continue
+        item = {
+            'public_key_version': str(ent.get('public_key_version')),
+            'public_key': str(signing),
+            'identity_public_key': str(identity),
+            'user_id': str(ent.get('user_id') or user_id or ''),
+        }
+        sig = ent.get('identity_public_key_signature')
+        if sig:
+            item['identity_public_key_signature'] = str(sig)
+        out.append(item)
+    return out
+
+
+def latest_public_key(raw):
+    """The highest public_key_version row from a public_keys response, or None."""
+    best, best_n = None, None
+    for ent in _as_list(raw):
+        if not isinstance(ent, dict):
+            continue
+        try:
+            n = int(ent.get('public_key_version'))
+        except (TypeError, ValueError):
+            continue
+        if best_n is None or n >= best_n:
+            best, best_n = ent, n
+    return best
+
+
+def key_events_from(resp):
+    if not isinstance(resp, dict):
+        return []
+    meta = resp.get('meta') if isinstance(resp.get('meta'), dict) else {}
+    ev = meta.get('conversation_key_events') or []
+    if not isinstance(ev, list):
+        return []
+    return [str(x) for x in ev if isinstance(x, str) and x]
+
+
+def participant_ids(conv, user_id):
+    c = conv_path(conv)
+    ids = []
+    if not c:
+        ids.append(user_id)
+    elif c.startswith('g'):
+        ids.append(user_id)
+    elif '-' in c:
+        ids.extend(c.split('-'))
+    else:
+        ids.append(c)
+        if user_id:
+            ids.append(user_id)
+    out = []
+    for i in ids:
+        i = __import__('re').sub(r'[^0-9]', '', str(i or ''))
+        if i and i not in out:
+            out.append(i)
+    return out
+
+
+def pick_conversation_key(extracted):
+    if not isinstance(extracted, dict):
+        return None, None
+    keys = extracted.get('keys')
+    if not isinstance(keys, dict) or not keys:
+        return None, None
+    latest = extracted.get('latest_version')
+    if latest is not None and (latest in keys or str(latest) in keys):
+        key = keys.get(latest)
+        if key is None:
+            key = keys.get(str(latest))
+        if key:
+            return key, str(latest)
+    best_n, best = None, None
+    for ver, key in keys.items():
+        if not key:
+            continue
+        try:
+            n = int(ver)
+        except (TypeError, ValueError):
+            n = -1
+        if best_n is None or n >= best_n:
+            best_n, best = n, (str(ver), key)
+    if not best:
+        return None, None
+    return best[1], best[0]
+
+
+def message_id_of(payload):
+    if isinstance(payload, dict):
+        return str(payload.get('message_id') or '')
+    return str(getattr(payload, 'message_id', '') or '')
+
+
+def send_body(payload):
+    """Map a chatxdk SendPayload (object or dict) onto the X send-message JSON."""
+    if isinstance(payload, dict):
+        mid = payload.get('message_id')
+        enc = payload.get('encrypted_content') or payload.get('encoded_message_create_event')
+        sig = payload.get('encoded_event_signature') or payload.get('encoded_message_event_signature')
+    else:
+        mid = getattr(payload, 'message_id', None)
+        enc = getattr(payload, 'encrypted_content', None)
+        sig = getattr(payload, 'encoded_event_signature', None)
+    return {
+        'message_id': mid,
+        'encoded_message_create_event': enc,
+        'encoded_message_event_signature': sig,
+    }
+
+
+def post_payloads(items, http):
+    """Send already-encrypted payloads in order. `http(body) -> (status, obj)` or raises NetError.
+
+    A network error during send is ambiguous (the bytes may have left): retryable false, code timeout.
+    200/201 is success. 408/429/5xx and other 4xx are retryable (X did not accept the message).
+    """
+    header_sent = False
+    sent = []
+    for meta, payload in items:
+        body = send_body(payload)
+        try:
+            status, _resp = http(body)
+        except NetError:
+            return {'ok': False, 'retryable': False, 'code': 'timeout', 'header_sent': header_sent,
+                    'message_id': sent[-1] if sent else ''}
+        if status in (200, 201):
+            mid = message_id_of(payload)
+            if mid:
+                sent.append(mid)
+            if meta.get('header'):
+                header_sent = True
+            continue
+        retryable = isinstance(status, int) and (status in (408, 429) or status >= 400)
+        code = ('http_%s' % status) if status else 'timeout'
+        return {'ok': False, 'retryable': bool(retryable), 'code': code, 'header_sent': header_sent,
+                'message_id': sent[-1] if sent else ''}
+    return {'ok': True, 'retryable': False, 'code': 'ok', 'header_sent': header_sent,
+            'message_id': sent[-1] if sent else '', 'message_ids': sent}
+
+
+def post_prepared(texts, http, encrypt):
+    """Encrypt every line first (still before send), then POST. Encrypt failure is retryable."""
+    try:
+        items = []
+        for t in texts:
+            items.append((t, encrypt(t.get('text') or '', bool(t.get('notify')))))
+    except Exception:
+        return {'ok': False, 'retryable': True, 'code': 'encrypt_failed', 'header_sent': False}
+    return post_payloads(items, http)
+
+
+class KeyCache:
+    """conversation_key_events + signing_keys only. Never message events, bodies, or juicebox tokens."""
+
+    def __init__(self, path=None, ttl=KEY_CACHE_TTL_S, now=time.time):
+        self.path = path or os.path.join(rc.APP_DIR, 'xchat_keys.json')
+        self.ttl = ttl
+        self.now = now
+
+    def load(self, conv):
+        try:
+            if os.path.getsize(self.path) > KEY_CACHE_MAX_BYTES:
+                return None
+            with open(self.path, encoding='utf-8') as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(d, dict) or d.get('conversation_id') != conv:
+            return None
+        try:
+            age = self.now() - float(d.get('savedAt') or 0)
+        except (TypeError, ValueError):
+            return None
+        if not (0 <= age <= self.ttl):
+            return None
+        cke, sk = d.get('conversation_key_events'), d.get('signing_keys')
+        if not cke or not sk or not isinstance(cke, list) or not isinstance(sk, list):
+            return None
+        return {'conversation_key_events': cke, 'signing_keys': sk}
+
+    def save(self, conv, cke, sk):
+        d = {'v': 1, 'conversation_id': conv, 'savedAt': self.now(),
+             'conversation_key_events': cke, 'signing_keys': sk}
+        data = json.dumps(d)
+        if len(data) > KEY_CACHE_MAX_BYTES:
+            return False
+        folder = os.path.dirname(self.path)
+        try:
+            if folder:
+                os.makedirs(folder, mode=0o700, exist_ok=True)
+            tmp = self.path + '.tmp'
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                fh.write(data)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
+        except OSError:
+            return False
+        return True
+
+    def clear(self):
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
+
+
+def cache_age(path=None, now=None):
+    path = path or os.path.join(rc.APP_DIR, 'xchat_keys.json')
+    try:
+        with open(path, encoding='utf-8') as fh:
+            d = json.load(fh)
+        saved = float(d.get('savedAt') or 0)
+    except (OSError, ValueError, TypeError):
+        return None
+    if saved <= 0:
+        return None
+    t = time.time() if now is None else now
+    return max(0, int(t - saved))
+
+
+class _Auth:
+    """One refresh for the whole post. A second 401 stays a failure."""
+
+    def __init__(self, refresh):
+        self.refresh = refresh
+        self.used = 0
+
+    def call(self, fn):
+        status, body = fn()
+        if status == 401 and not self.used:
+            self.used += 1
+            if self.refresh():
+                status, body = fn()
+        return status, body
+
+
+def _fail(code, retryable=True):
+    return {'ok': False, 'retryable': bool(retryable), 'code': code, 'header_sent': False}
+
+
+def perform_post(texts, conv, user_id, key_version, private_key, chat, http, cache=None, _refetch=True):
+    """Prepare keys, encrypt, POST. `http` has refresh/get_events/get_signing/post. `chat` is chatxdk-like.
+
+    Does not create a conversation key. An empty thread returns no_conversation_key (retryable) so the
+    routine's existing prepare path can run. Network errors before send are retryable; during send they
+    are timeout (possibly delivered).
+    """
+    path = conv_path(conv)
+    if not path:
+        return _fail('bad_conversation')
+    auth = _Auth(http.refresh)
+    from_cache = False
+    try:
+        cached = cache.load(path) if cache is not None else None
+        if cached:
+            events = cached['conversation_key_events']
+            signing = cached['signing_keys']
+            from_cache = True
+        else:
+            status, ev = auth.call(lambda: http.get_events(path))
+            if status != 200:
+                return _fail('http_%s' % status if status else 'network')
+            events = key_events_from(ev)
+            status, sk = auth.call(lambda: http.get_signing(path))
+            if status != 200:
+                return _fail('http_%s' % status if status else 'network')
+            signing = map_signing(sk, user_id)
+            if cache is not None and events and signing:
+                try:
+                    cache.save(path, events, signing)
+                except OSError:
+                    pass
+        try:
+            chat.import_keys(bytes(private_key), version=str(key_version))
+        except TypeError:
+            chat.import_keys(bytes(private_key))
+        chat.set_identity(str(user_id), str(key_version))
+        try:
+            chat.set_cache_keys(True)
+        except Exception:
+            pass
+        if signing:
+            chat.set_signing_keys(signing)
+        extracted = chat.extract_conversation_keys(list(events or []))
+        key, ver = pick_conversation_key(extracted)
+        if not key:
+            if from_cache and _refetch and cache is not None:
+                cache.clear()
+                return perform_post(texts, conv, user_id, key_version, private_key, chat, http, cache, _refetch=False)
+            return _fail('no_conversation_key')
+
+        def encrypt(text, notify):
+            return chat.encrypt_message(path, text, conversation_key=key, conversation_key_version=ver, should_notify=bool(notify))
+
+        prepared = post_prepared(texts, lambda body: auth.call(lambda: http.post(body)), encrypt)
+    except NetError:
+        return _fail('network')
+    except Exception:
+        prepared = _fail('encrypt_failed')
+    if prepared.get('code') == 'encrypt_failed' and from_cache and _refetch and cache is not None:
+        cache.clear()
+        return perform_post(texts, conv, user_id, key_version, private_key, chat, http, cache, _refetch=False)
+    return prepared
+
+
+def request_json(method, url, token=None, json_body=None, form=None, basic=None, timeout=HTTP_TIMEOUT_S):
+    headers = {'User-Agent': 'imessage-relay-xpost/' + rc.VERSION, 'Accept': 'application/json'}
+    data = None
+    if basic:
+        headers['Authorization'] = basic
+    elif token:
+        headers['Authorization'] = 'Bearer ' + token
+    if form is not None:
+        data = urllib.parse.urlencode(form).encode('utf-8')
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    elif json_body is not None:
+        data = json.dumps(json_body).encode('utf-8')
+        headers['Content-Type'] = 'application/json'
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            status = getattr(resp, 'status', 200)
+    except urllib.error.HTTPError as e:
+        try:
+            raw = e.read()
+        except Exception:
+            raw = b''
+        status = e.code
+    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError):
+        raise NetError('network')
+    obj = None
+    if raw:
+        try:
+            obj = json.loads(raw.decode('utf-8'))
+        except ValueError:
+            obj = None
+    return status, obj
+
+
+def _open_chat(juicebox_json=None):
+    from chat_xdk import Chat
+    if juicebox_json:
+        return Chat(juicebox_json if isinstance(juicebox_json, str) else json.dumps(juicebox_json))
+    return Chat()
+
+
+class _LiveHttp:
+    def __init__(self, client_id, client_secret, refresh_token, user_id):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.refresh_token = refresh_token
+        self.user_id = str(user_id or '')
+        self.token = ''
+
+    def refresh(self):
+        status, obj = request_json(
+            'POST', API + '/2/oauth2/token',
+            form={'grant_type': 'refresh_token', 'refresh_token': self.refresh_token, 'client_id': self.client_id},
+            basic=basic_auth(self.client_id, self.client_secret))
+        tok = parse_token(obj) if status == 200 else None
+        if not tok:
+            return False
+        self.token = tok['access_token']
+        rotated = tok.get('refresh_token') or ''
+        if rotated and rotated != self.refresh_token:
+            self.refresh_token = rotated
+            try:
+                rk.store('refresh-token', rotated, rk.trusted_bins())
+            except Exception:
+                pass
+        return True
+
+    def get_events(self, conv):
+        return request_json('GET', API + '/2/chat/conversations/%s/events?max_results=100' % urllib.parse.quote(conv),
+                            token=self.token)
+
+    def get_signing(self, conv):
+        rows = []
+        for i in participant_ids(conv, self.user_id):
+            status, obj = request_json('GET', API + '/2/users/%s/public_keys' % i, token=self.token)
+            if status != 200:
+                return status, obj
+            for ent in _as_list(obj):
+                if isinstance(ent, dict):
+                    ent = dict(ent)
+                    ent.setdefault('user_id', i)
+                    rows.append(ent)
+        return 200, {'data': rows}
+
+    def post(self, body):
+        return request_json('POST', API + '/2/chat/conversations/%s/messages' % urllib.parse.quote(conv_path_of_body(body)),
+                            token=self.token, json_body=body)
+
+
+def conv_path_of_body(body):
+    """post() is called with the message body only. The live wrapper closes over the path."""
+    return getattr(body, '_conv', '') or _LiveHttp._conv or ''
+
+
+# The live POST URL needs the conversation id, which is not inside the message body.
+_LiveHttp._conv = ''
+
+
+def _bind_post(http, conv):
+    path = conv
+
+    def post(body):
+        return request_json('POST', API + '/2/chat/conversations/%s/messages' % urllib.parse.quote(path),
+                            token=http.token, json_body=body)
+
+    http.post = post
+    return http
+
+
+def _decode_key(b64):
+    try:
+        raw = base64.b64decode(b64)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    return bytearray(raw)
+
+
+def _wipe(buf):
+    if isinstance(buf, bytearray):
+        for i in range(len(buf)):
+            buf[i] = 0
+
+
+def _post_live(texts):
+    cfg = rc.load_config()
+    conv = conv_path(cfg.get('relayConversationId'))
+    user_id = str(cfg.get('xpostUserId') or '')
+    key_version = str(cfg.get('xpostKeyVersion') or '')
+    client_id = str(cfg.get('xpostClientId') or '')
+    if not conv or not user_id or not key_version or not client_id:
+        return _fail('not_configured')
+    refresh = rk.load('refresh-token')
+    secret = rk.load('client-secret')
+    key_b64 = rk.load('private-key')
+    if not refresh or not secret or not key_b64:
+        return _fail('keychain')
+    private_key = _decode_key(key_b64)
+    if not private_key:
+        return _fail('keychain')
+    try:
+        try:
+            chat = _open_chat()
+        except ImportError:
+            return _fail('no_chatxdk')
+        http = _bind_post(_LiveHttp(client_id, secret, refresh, user_id), conv)
+        if not http.refresh():
+            return _fail('unauthorized')
+        return perform_post(texts, conv, user_id, key_version, private_key, chat, http, KeyCache())
+    finally:
+        _wipe(private_key)
+
+
+def _tty_in():
+    return open('/dev/tty', 'r')
+
+
+def _tty_out():
+    return open('/dev/tty', 'w')
+
+
+def prompt_line(label):
+    inn, out = _tty_in(), _tty_out()
+    try:
+        out.write(label)
+        out.flush()
+        return inn.readline().strip()
+    finally:
+        inn.close()
+        out.close()
+
+
+def prompt_secret(label):
+    import getpass
+    out = _tty_out()
+    old = sys.stdin
+    inn = _tty_in()
+    try:
+        sys.stdin = inn
+        return getpass.getpass(label, stream=out)
+    finally:
+        sys.stdin = old
+        inn.close()
+        out.close()
+
+
+def _save_cfg(**kw):
+    def _do():
+        raw = rc.read_raw_config() or {}
+        raw.update(kw)
+        rc.write_json_atomic(rc.CONFIG_PATH, raw)
+    rc.with_host_lock(_do)
+
+
+def _listen_for_code(port, timeout_s):
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path != '/cb':
+                self.send_response(404)
+                self.end_headers()
+                return
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.server.got = {
+                'code': (qs.get('code') or [''])[0],
+                'state': (qs.get('state') or [''])[0],
+                'error': (qs.get('error') or [''])[0],
+            }
+            body = b'<html><body>iMessage Relay is connected. You can close this tab.</body></html>'
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):
+            return
+
+    try:
+        server = HTTPServer(('127.0.0.1', int(port)), Handler)
+    except OSError:
+        return None, 'port_in_use'
+    server.got = None
+    server.timeout = 1
+    deadline = time.time() + timeout_s
+    try:
+        while time.time() < deadline and not server.got:
+            server.handle_request()
+    finally:
+        server.server_close()
+    return server.got, ''
+
+
+def cmd_setup():
+    """Browser PKCE, then a hidden Chat PIN. Does not turn directPost on. Prints one JSON object."""
+    cfg = rc.load_config()
+    port = int(cfg.get('xpostRedirectPort') or 53682)
+    redirect = 'http://127.0.0.1:%d/cb' % port
+    existing = str(cfg.get('xpostClientId') or '')
+    entered = prompt_line('X client id%s: ' % ((' [' + existing + ']') if existing else ''))
+    client_id = entered or existing
+    if not __import__('re').match(r'^[A-Za-z0-9_-]{1,200}$', client_id or ''):
+        return {'ok': False, 'retryable': False, 'code': 'bad_client_id', 'redirect': redirect}
+    client_secret = prompt_secret('X client secret (hidden): ')
+    if not client_secret or '\n' in client_secret or '\r' in client_secret:
+        return {'ok': False, 'retryable': False, 'code': 'client_secret_required', 'redirect': redirect}
+    verifier, challenge = pkce_pair()
+    state = secrets.token_urlsafe(24)
+    url = authorize_url(client_id, redirect, state, challenge)
+    err = _tty_out()
+    try:
+        err.write('Redirect URI (register it on the X app, then press Enter):\n%s\n' % redirect)
+        err.flush()
+    finally:
+        err.close()
+    prompt_line('Press Enter to open the browser. ')
+    try:
+        import subprocess
+        subprocess.run(['/usr/bin/open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        err = _tty_out()
+        try:
+            err.write('Open this URL in a browser:\n%s\n' % url)
+            err.flush()
+        finally:
+            err.close()
+    got, err_code = _listen_for_code(port, SETUP_TIMEOUT_S)
+    if err_code:
+        return {'ok': False, 'retryable': False, 'code': err_code, 'redirect': redirect}
+    bad = callback_error(state, got)
+    if bad:
+        return {'ok': False, 'retryable': False, 'code': bad, 'redirect': redirect}
+    try:
+        status, obj = request_json(
+            'POST', API + '/2/oauth2/token',
+            form={'grant_type': 'authorization_code', 'code': got['code'], 'redirect_uri': redirect,
+                  'code_verifier': verifier, 'client_id': client_id},
+            basic=basic_auth(client_id, client_secret), timeout=20)
+    except NetError:
+        return {'ok': False, 'retryable': False, 'code': 'token_exchange', 'redirect': redirect}
+    tok = parse_token(obj) if status == 200 else None
+    if not tok or not tok.get('refresh_token'):
+        return {'ok': False, 'retryable': False, 'code': 'token_exchange', 'redirect': redirect}
+    try:
+        bins = rk.trusted_bins()
+        rk.store('refresh-token', tok['refresh_token'], bins)
+        rk.store('client-secret', client_secret, bins)
+    except Exception:
+        return {'ok': False, 'retryable': False, 'code': 'keychain', 'redirect': redirect}
+    try:
+        status, me = request_json('GET', API + '/2/users/me', token=tok['access_token'], timeout=20)
+    except NetError:
+        return {'ok': False, 'retryable': False, 'code': 'users_me', 'redirect': redirect}
+    user_id = ''
+    if status == 200 and isinstance(me, dict):
+        data = me.get('data') if isinstance(me.get('data'), dict) else me
+        user_id = __import__('re').sub(r'[^0-9]', '', str((data or {}).get('id') or ''))[:30]
+    if not user_id:
+        return {'ok': False, 'retryable': False, 'code': 'users_me', 'redirect': redirect}
+    try:
+        status, keys = request_json('GET', API + '/2/users/%s/public_keys' % user_id, token=tok['access_token'], timeout=20)
+    except NetError:
+        return {'ok': False, 'retryable': False, 'code': 'public_keys', 'redirect': redirect}
+    row = latest_public_key(keys) if status == 200 else None
+    if not row:
+        return {'ok': False, 'retryable': False, 'code': 'public_keys', 'redirect': redirect}
+    version = str(row.get('public_key_version') or '')
+    if not __import__('re').match(r'^[A-Za-z0-9._:-]{1,40}$', version):
+        return {'ok': False, 'retryable': False, 'code': 'public_keys', 'redirect': redirect}
+    juice = row.get('juicebox_config')
+    pin = prompt_secret('X Chat PIN (hidden): ')
+    if not pin:
+        return {'ok': False, 'retryable': False, 'code': 'pin_required', 'redirect': redirect}
+    blob = None
+    try:
+        try:
+            chat = _open_chat(juice)
+        except ImportError:
+            return {'ok': False, 'retryable': False, 'code': 'no_chatxdk', 'redirect': redirect}
+        chat.unlock(pin)
+        blob = chat.export_keys()
+    except Exception as e:
+        out = {'ok': False, 'retryable': False, 'code': 'unlock_failed', 'redirect': redirect}
+        try:
+            from chat_xdk import guesses_remaining
+            n = guesses_remaining(e)
+            if isinstance(n, int):
+                out['guessesRemaining'] = n
+        except Exception:
+            pass
+        return out
+    finally:
+        pin = ''
+    if not blob:
+        return {'ok': False, 'retryable': False, 'code': 'unlock_failed', 'redirect': redirect}
+    try:
+        b64 = base64.b64encode(bytes(blob)).decode('ascii')
+        rk.store('private-key', b64, rk.trusted_bins())
+    except Exception:
+        return {'ok': False, 'retryable': False, 'code': 'keychain', 'redirect': redirect}
+    finally:
+        _wipe(blob)
+    _save_cfg(xpostClientId=client_id, xpostUserId=user_id, xpostKeyVersion=version, xpostRedirectPort=port)
+    return {'ok': True, 'retryable': False, 'code': 'ok', 'userIdSet': True, 'keySaved': True, 'redirect': redirect}
+
+
+def cmd_post(req):
+    if not isinstance(req, dict):
+        return _fail('bad_request')
+    texts = req.get('texts')
+    if not isinstance(texts, list) or not texts:
+        return _fail('bad_request')
+    clean = []
+    for t in texts:
+        if not isinstance(t, dict) or 'text' not in t:
+            return _fail('bad_request')
+        clean.append({'text': str(t.get('text') if t.get('text') is not None else ''),
+                      'header': bool(t.get('header')), 'notify': bool(t.get('notify'))})
+    return _post_live(clean)
+
+
+def main(argv=None, stdin=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        if not argv or argv[0] not in ('setup', 'post'):
+            emit({'ok': False, 'retryable': False, 'code': 'usage'})
+            return 0
+        if argv[0] == 'setup':
+            emit(cmd_setup())
+            return 0
+        src = sys.stdin if stdin is None else stdin
+        raw = src.read()
+        try:
+            req = json.loads(raw or 'null')
+        except ValueError:
+            emit(_fail('bad_request'))
+            return 0
+        emit(cmd_post(req))
+    except Exception:
+        emit(_fail('internal'))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+@@@@ END
+@@@@ FILE mac-helper/relayctl.py mode=755 sha256=6e5a90478503f6f8f51ad809f8f3fe54358bcd45bf8f32c516d16987e6cb1670 nl=1
 #!/usr/bin/python3
 """
 relayctl: the one command the bot (or you) uses to operate iMessage Relay on the Mac.
@@ -10257,6 +11785,7 @@ Every command prints one JSON object. Message bodies are never printed or stored
                                           guided setup in one locked edit; prints what it detected and the
                                           owner's checklist. Never changes dryRun, quiet hours or contacts.
   relayctl test-result                    the last /test run from X Chat (steps only, no text)
+  relayctl xpost setup|on|off|status|forget   v1.4.18 direct poster (opt-in; default off)
   relayctl version
 """
 import argparse
@@ -10271,6 +11800,7 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc  # noqa: E402
 import relay_setup  # noqa: E402
+import relay_keychain as rk  # noqa: E402
 
 JOBS_DIR = os.path.join(rc.APP_DIR, 'jobs')
 SELFTEST_DIR = os.path.join(rc.APP_DIR, 'selftest')
@@ -10802,6 +12332,131 @@ def _applet_from_plist():
         return ''
 
 
+def _xpost_python():
+    override = os.environ.get('IMESSAGE_RELAY_XPOST_PYTHON') or ''
+    if override:
+        return override
+    return os.path.join(rc.APP_DIR, 'xpost-venv', 'bin', 'python')
+
+
+def _xpost_script():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'relay_xpost.py')
+
+
+def _key_cache_age(now=None):
+    """Age of the direct-post key cache, in seconds. None when there is no cache. Never the keys."""
+    path = os.path.join(rc.APP_DIR, 'xchat_keys.json')
+    try:
+        with open(path, encoding='utf-8') as fh:
+            d = json.load(fh)
+        saved = float(d.get('savedAt') or 0)
+    except (OSError, ValueError, TypeError):
+        return None
+    if saved <= 0:
+        return None
+    t = time.time() if now is None else now
+    return max(0, int(t - saved))
+
+
+def _xpost_view(cfg, runner):
+    """Public direct-post status. Booleans and the redirect URI only: no client id, user id, or secrets."""
+    py = _xpost_python()
+    kc = {}
+    for account, key in (('refresh-token', 'refreshToken'), ('client-secret', 'clientSecret'), ('private-key', 'privateKey')):
+        try:
+            kc[key] = bool(rk.exists(account, runner=runner))
+        except Exception:
+            kc[key] = False
+    try:
+        port = int(cfg.get('xpostRedirectPort') or 53682)
+    except (TypeError, ValueError):
+        port = 53682
+    view = {
+        'ok': True,
+        'directPost': bool(cfg.get('directPost')),
+        'venv': bool(py and os.path.isfile(py)),
+        'clientIdSet': bool(cfg.get('xpostClientId')),
+        'keychain': kc,
+        'userIdSet': bool(cfg.get('xpostUserId')),
+        'keyCacheAgeSeconds': _key_cache_age(),
+        'ready': False,
+        'redirect': 'http://127.0.0.1:%d/cb' % port,
+    }
+    view['ready'] = bool(
+        view['venv'] and view['clientIdSet'] and view['userIdSet'] and cfg.get('xpostKeyVersion')
+        and cfg.get('relayConversationId') and all(kc.values()))
+    return view
+
+
+def _strip_xpost_ids(out):
+    if isinstance(out, dict):
+        for k in ('userId', 'xpostUserId', 'clientId', 'clientSecret', 'refreshToken', 'privateKey', 'pin', 'text'):
+            out.pop(k, None)
+    return out
+
+
+def cmd_xpost_setup(runner=subprocess.run):
+    """Run PKCE setup inside the 3.12 venv. Does not turn directPost on. Prompts stay on the child's tty."""
+    py = _xpost_python()
+    if not py or not os.path.isfile(py):
+        raise CtlError('python3.12 venv is missing. brew install python@3.12, then re-run install.sh '
+                       '(the watcher app is not rebuilt)')
+    script = _xpost_script()
+    proc = runner([py, script, 'setup'], stdout=subprocess.PIPE, stderr=None)
+    raw = getattr(proc, 'stdout', '') or ''
+    if isinstance(raw, bytes):
+        raw = raw.decode('utf-8', 'replace')
+    line = ''
+    for ln in str(raw).splitlines():
+        s = ln.strip()
+        if s.startswith('{') and s.endswith('}'):
+            line = s
+    if not line:
+        raise CtlError('xpost setup did not return JSON')
+    try:
+        out = json.loads(line)
+    except ValueError:
+        raise CtlError('xpost setup did not return JSON')
+    if not isinstance(out, dict):
+        raise CtlError('xpost setup did not return JSON')
+    _strip_xpost_ids(out)
+    if not out.get('ok'):
+        return out
+    view = _xpost_view(rc.load_config(), runner)
+    view['userIdSet'] = bool(out.get('userIdSet')) or view['userIdSet']
+    view['keySaved'] = bool(out.get('keySaved'))
+    if out.get('redirect'):
+        view['redirect'] = out['redirect']
+    return _strip_xpost_ids(view)
+
+
+def cmd_xpost(action, runner=subprocess.run):
+    """setup | on | off | status | forget. `set directPost` stays refused; on/off is only this command."""
+    if action == 'status':
+        return _xpost_view(rc.load_config(), runner)
+    if action == 'off':
+        edit_config(lambda raw: raw.__setitem__('directPost', False))
+        return _xpost_view(rc.load_config(), runner)
+    if action == 'on':
+        view = _xpost_view(rc.load_config(), runner)
+        if not view['ready']:
+            raise CtlError('direct post is not ready. relayctl xpost status shows what is missing '
+                           '(venv, X app, Keychain, relay chat).')
+        edit_config(lambda raw: raw.__setitem__('directPost', True))
+        return _xpost_view(rc.load_config(), runner)
+    if action == 'forget':
+        rk.delete_all(runner=runner)
+        try:
+            os.remove(os.path.join(rc.APP_DIR, 'xchat_keys.json'))
+        except OSError:
+            pass
+        edit_config(lambda raw: raw.__setitem__('directPost', False))
+        return _xpost_view(rc.load_config(), runner)
+    if action == 'setup':
+        return cmd_xpost_setup(runner)
+    raise CtlError('use: relayctl xpost setup|on|off|status|forget')
+
+
 def watcher_app():
     """Resolve the watcher binary the install actually uses. install.sh records it in fda_binary.txt
     (and the LaunchAgent points at it); honor those first so a custom / pre-existing app path is never
@@ -10909,6 +12564,8 @@ def main(argv=None):
     g.add_argument('--webhook-key-stdin', action='store_true'); g.add_argument('--webhook-key-prompt', action='store_true')
     a.add_argument('--open-windows', action='store_true')
     sp.add_parser('test-result')
+    a = sp.add_parser('xpost')
+    a.add_argument('action', choices=['setup', 'on', 'off', 'status', 'forget'])
     args = p.parse_args(argv)
     try:
         c = args.cmd
@@ -10971,6 +12628,8 @@ def main(argv=None):
             out = cmd_setup(args)
         elif c == 'test-result':
             out = cmd_test_result()
+        elif c == 'xpost':
+            out = cmd_xpost(args.action)
         else:
             out = {'ok': True, 'version': rc.VERSION}
     except CtlError as e:
@@ -11176,9 +12835,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=d0601923c59b01be647a038cbdaaa0b00dfc5fb01353dcb701e9027622d7e41b nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=69638165a587af1e4e86da0b306f50b927bb5ff79acc7d34822e28cf245ca98e nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.17 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.18 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -11269,6 +12928,12 @@ STDOUT (one JSON object):
   v1.4.17: a silent "\U0001f4ac <label> \u00b7 7:20 PM" header line (body:false, should_notify false, never threaded) goes
   before a text from a different person than the last one, or the same person after headerGapMinutes (0 = off).
   header_state.json keeps only a key hash and a time.
+  v1.4.18: a body-free {"type":"direct","ids":[...],"headerState":{"k","at"}} marker means the Mac already
+  posted that text (and its header, when the id ends in #hdr). Commit the ids, keep header state if it is
+  newer, and do not send. Update this file on the bot BEFORE `relayctl xpost on`: an older helper treats
+  type "direct" as unknown and posts a helper error for every marker. When a webhook carries headerState,
+  that snapshot (even {}) is the header state for this post; skipHeader means the Mac already posted the
+  header and headerStateAfter is the state to store. Absent those keys, behavior matches v1.4.17.
   v1.4.9: a photo line is never "quiet" (it always starts "Jordan:"; a photo-only message's caption is
   "Jordan:", its notice "Jordan: 📷 Photo couldn't be relayed …"). With "media_off" the routine may add
   "media_error": "<call>_<http status>" (e.g. "initialize_403", "append_413", "file_ref"), logged as
@@ -11335,6 +13000,54 @@ def header_text(meta):
 def _hkey(who):
     import hashlib
     return hashlib.sha256(('imr-hdr:' + who).encode('utf-8')).hexdigest()[:24]
+
+
+def _load_header_state(path):
+    try:
+        with open(path, encoding='utf-8') as fh:
+            old = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(old, dict) or not old.get('k'):
+        return {}
+    return {'k': old.get('k'), 'at': old.get('at')}
+
+
+def _save_header_state(path, st):
+    """Monotonic on `at`: a late older snapshot must not rewind a newer direct-post state."""
+    if not isinstance(st, dict) or not st.get('k'):
+        return
+    try:
+        new_at = float(st.get('at') or 0)
+    except (TypeError, ValueError):
+        return
+    cur = _load_header_state(path)
+    try:
+        cur_at = float(cur.get('at') or 0) if cur.get('k') else None
+    except (TypeError, ValueError):
+        cur_at = None
+    if cur.get('k') and cur_at is not None and cur_at > new_at:
+        return
+    try:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        tmp = path + '.tmp'
+        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w', encoding='utf-8') as fh:
+            json.dump({'k': st.get('k'), 'at': st.get('at')}, fh)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _apply_direct(payload, dd, hdr_path, defer):
+    """Mac already posted. Remember ids, sync header state, send nothing. Ignore any text field."""
+    ids = [str(i) for i in (payload.get('ids') or []) if i]
+    st = payload.get('headerState')
+    if isinstance(st, dict) and st.get('k'):
+        _save_header_state(hdr_path, st)
+    if not defer:
+        dd.commit(ids)
+    return {'action': 'skip', 'reason': 'already posted from the Mac',
+            'posted_kind': 'direct', 'ack_ids': ids}
 
 
 def add_headers(lines, gap_min, state, now=None):
@@ -12198,6 +13911,11 @@ def _default_runner(helper):
 
 def process(req, runner=None):
     payload = req.get('payload') or {}
+    if str(payload.get('type') or '').strip() == 'direct':
+        dedupe_path = req.get('dedupe_path') or '~/.imessage-relay-routine/seen_ids.json'
+        dd = Dedupe(dedupe_path, req.get('ttl_seconds', 86400))
+        hdr_path = os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', HEADER_STATE)
+        return _apply_direct(payload, dd, hdr_path, bool(req.get('defer_commit')))
     conv = str(req.get('conversation_id') or payload.get('relayConversationId') or '').strip()
     ev = format_event(payload)                              # may raise ValueError -> error
     runner = runner or _default_runner(req.get('helper'))
@@ -12214,17 +13932,22 @@ def process(req, runner=None):
     hdr_path = os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', HEADER_STATE)
     hdr_state = None
     if ev['kind'] in ('message', 'batch'):
-        try:
-            with open(hdr_path) as fh:
-                old = json.load(fh)
-        except (OSError, ValueError):
-            old = {}
-        src = [payload] if ev['kind'] == 'message' else (payload.get('messages') or [])[:BATCH_MAX]
-        metas = {str(m.get('id') or (str(payload.get('id') or '') + '#' + str(i))) if ev['kind'] == 'batch'
-                 else str(payload.get('id') or ''): _hdr_meta(m) for i, m in enumerate(src)}
-        lines = [dict(ln, hdr=metas.get(ln['id'])) for ln in lines]
-        lines, hdr_state = add_headers(lines, payload.get('headerGapMinutes', 0),   # set by a v1.4.17+ Mac
-                                       old if isinstance(old, dict) else {})
+        # A direct-post Mac sends headerState (even {}) so this run does not use a stale file.
+        # Absent the key, v1.4.17 behavior: the file beside the dedupe store.
+        if 'headerState' in payload and isinstance(payload.get('headerState'), dict):
+            old = payload.get('headerState') or {}
+        else:
+            old = _load_header_state(hdr_path)
+        if payload.get('skipHeader'):
+            after = payload.get('headerStateAfter')
+            hdr_state = after if isinstance(after, dict) else old
+        else:
+            src = [payload] if ev['kind'] == 'message' else (payload.get('messages') or [])[:BATCH_MAX]
+            metas = {str(m.get('id') or (str(payload.get('id') or '') + '#' + str(i))) if ev['kind'] == 'batch'
+                     else str(payload.get('id') or ''): _hdr_meta(m) for i, m in enumerate(src)}
+            lines = [dict(ln, hdr=metas.get(ln['id'])) for ln in lines]
+            lines, hdr_state = add_headers(lines, payload.get('headerGapMinutes', 0),   # set by a v1.4.17+ Mac
+                                           old if isinstance(old, dict) else {})
 
     xchat = dict(req.get('xchat') or {})
     # v1.4.5 speed: the keys come from the request (then cached) or from the key cache. With neither,
@@ -12370,14 +14093,7 @@ def process(req, runner=None):
     # id is what prevents a retried webhook from being re-sent.
     ids = [ln['id'] for ln in lines]
     if hdr_state:
-        try:
-            os.makedirs(os.path.dirname(hdr_path) or '.', exist_ok=True)
-            tmp = hdr_path + '.tmp'
-            with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as fh:
-                json.dump({'k': hdr_state.get('k'), 'at': hdr_state.get('at')}, fh)
-            os.replace(tmp, hdr_path)
-        except OSError:
-            pass                                 # a missed header is cosmetic
+        _save_header_state(hdr_path, hdr_state)  # a missed header is cosmetic; never rewind `at`
     if not req.get('defer_commit'):
         dd.commit(ids)
     res = {'action': 'send', 'sends': sends, 'encrypted': True, 'posted_kind': ev['kind'], 'ack_ids': ids}
@@ -15623,7 +17339,7 @@ function relayLog(text) {
   process.exit(0);
 })().catch(e => { console.log('FAIL', e.stack || e.message); process.exit(1); });
 @@@@ END
-@@@@ FILE tests/py/helpers.py mode=644 sha256=0f208310bfd5d5bc6c572b14d61baa95284213e0bf5eeb8e2eb542fbfc33ab00 nl=1
+@@@@ FILE tests/py/helpers.py mode=644 sha256=57ee6bbcb9650e6d229e83cda7b2a046b8cc9e616487bef2a6a0f07568d22d07 nl=1
 """Shared test helpers: fresh module state per test, fakes, and a temp chat.db shaped like the real one."""
 import importlib
 import os
@@ -15664,6 +17380,10 @@ def fresh(tmp):
     import relay_media
     m.media = importlib.reload(relay_media)       # v1.4.6 attachments (outbox / inflight / send stage)
     m.host = importlib.reload(imessage_relay_host)
+    import relay_header, relay_keychain, relay_direct
+    m.header = importlib.reload(relay_header)
+    m.keychain = importlib.reload(relay_keychain)
+    m.direct = importlib.reload(relay_direct)
     m.watch = importlib.reload(imessage_relay_watch)
     m.ctl = importlib.reload(relayctl)
     os.makedirs(os.environ['IMESSAGE_RELAY_HOME'], exist_ok=True)
@@ -20533,6 +22253,648 @@ class HeaderGuards(Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
+@@@@ FILE tests/py/test_v1418_direct.py mode=644 sha256=16d4788f8ebef1f980b16e94f09d6d4f3bdb8eb5758450654db25f5ab11f8935 nl=1
+"""v1.4.18: opt-in direct poster. Default off. Fictional names only. No live X calls."""
+import collections
+import contextlib
+import io
+import json
+import os
+import subprocess
+import sys
+import time
+import unittest
+import urllib.parse
+from datetime import datetime, timezone
+
+from helpers import fresh, read_log, tmpdir, ROOT
+import relay_header as rh
+import relay_keychain as rk
+import relay_xpost as rx
+from test_watch import ALLOWED, Base
+
+ROUTINE = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'routine'))
+if ROUTINE not in sys.path:
+    sys.path.insert(0, ROUTINE)
+import relay_post as rp  # noqa: E402
+
+OK = {'ok': True, 'retryable': False, 'code': 'ok', 'message_id': 'x-msg-1', 'header_sent': False}
+FULL = {'events': [], 'conversation_key_events': ['KEYEV'], 'signing_keys': [{'user_id': 'U'}]}
+
+
+class XRunner(object):
+    """subprocess stand-in. Records direct-post stdin. Never a shell."""
+
+    def __init__(self, outcomes=()):
+        self.outcomes = list(outcomes)
+        self.calls = []
+        self.inputs = []
+        self.results = []
+        self.messages_running = True
+
+    def __call__(self, cmd, **kw):
+        assert 'shell' not in kw, 'never use a shell'
+        self.calls.append(list(cmd))
+        if cmd and cmd[-1] == 'post' and any(str(c).endswith('relay_xpost.py') for c in cmd):
+            self.inputs.append(kw.get('input'))
+            if not self.outcomes:
+                raise AssertionError('unexpected direct post')
+            out = self.outcomes.pop(0)
+            if out == 'timeout':
+                raise subprocess.TimeoutExpired(cmd, 8)
+            if out == 'empty':
+                return subprocess.CompletedProcess(cmd, 0, '', '')
+            if isinstance(out, str):
+                return subprocess.CompletedProcess(cmd, 0, out, '')
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(out), '')
+        if cmd[0] == '/usr/bin/osascript':
+            rc, err = self.results.pop(0)
+            return subprocess.CompletedProcess(cmd, rc, '', err)
+        if cmd[0] == '/usr/bin/pgrep':
+            return subprocess.CompletedProcess(cmd, 0 if self.messages_running else 1, '', '')
+        return subprocess.CompletedProcess(cmd, 0, '', '')
+
+
+class KeyRunner(object):
+    def __init__(self, present=()):
+        self.present = set(present)
+        self.calls = []
+
+    def __call__(self, argv, **kw):
+        self.calls.append(list(argv))
+        if len(argv) > 1 and argv[1] == 'delete-generic-password':
+            self.present.discard(argv[argv.index('-a') + 1])
+            return subprocess.CompletedProcess(argv, 0, '', '')
+        if len(argv) > 1 and argv[1] == 'find-generic-password':
+            acct = argv[argv.index('-a') + 1]
+            return subprocess.CompletedProcess(argv, 0 if acct in self.present else 1, '', '')
+        return subprocess.CompletedProcess(argv, 0, '', '')
+
+
+def _lines(mod, messages):
+    out = []
+    for i, m in enumerate(messages):
+        out.append({'id': str(m.get('id') or i), 'text': mod._message_line(m), 'body': True, 'hdr': mod._hdr_meta(m)})
+    return out
+
+
+class HeaderParity(unittest.TestCase):
+    def test_matches_relay_post_and_state_has_no_name(self):
+        msgs = [
+            {'id': '1', 'label': 'Alex', 'handle': '+15555550123', 'text': 'hello there',
+             'receivedAt': '2026-01-01T00:00:00Z', 'localTime': '7:20 PM'},
+            {'id': '2', 'label': 'Alex', 'handle': '+15555550123', 'text': '\U0001f4f7 Photo', 'quiet': True,
+             'receivedAt': '2026-01-01T00:05:00Z', 'localTime': '7:25 PM'},
+            {'id': '3', 'label': 'Alex', 'handle': '+15555550123', 'text': 'on my way', 'quiet': True,
+             'receivedAt': '2026-01-01T00:06:00Z', 'localTime': '7:26 PM'},
+            {'id': '4', 'label': 'Sam', 'handle': '+15555550188', 'text': '\u2764\ufe0f a message', 'reaction': True,
+             'receivedAt': '2026-01-01T00:07:00Z', 'localTime': '7:27 PM'},
+            {'id': '5', 'label': 'Sam', 'handle': '+15555550188', 'text': 'hi', 'group': {'label': 'Family'},
+             'receivedAt': '2026-01-01T00:08:00Z', 'localTime': '7:28 PM'},
+            {'id': '6', 'label': 'Sam', 'handle': '+15555550188', 'text': 'hi', 'unknown': True,
+             'receivedAt': '2026-01-01T00:09:00Z', 'localTime': '7:29 PM'},
+            {'id': '7', 'label': 'Alex', 'handle': '+15555550123', 'text': 'offer', 'tag': 'spam',
+             'receivedAt': '2026-01-01T00:10:00Z', 'localTime': '7:30 PM'},
+        ]
+        photo = rh._message_line(msgs[1])
+        self.assertEqual(photo, rp._message_line(msgs[1]))
+        self.assertIn('Alex:', photo)                          # a photo line keeps the name
+        self.assertEqual(rh._message_line(msgs[2]), 'on my way')
+        self.assertNotIn(': ', rh._message_line(msgs[3]))
+        self.assertEqual(rh._message_line(msgs[4]), rp._message_line(msgs[4]))
+        self.assertTrue(rh._message_line(msgs[5]).startswith('\u26a0\ufe0f Unknown'))
+        self.assertTrue(rh._message_line(msgs[6]).startswith('\U0001f6ab'))
+        now = 1_800_000_000
+        a_lines, a_st = rh.add_headers(_lines(rh, msgs), 30, {}, now=now)
+        b_lines, b_st = rp.add_headers(_lines(rp, msgs), 30, {}, now=now)
+        self.assertEqual([(ln.get('id'), ln.get('text'), bool(ln.get('header'))) for ln in a_lines],
+                         [(ln.get('id'), ln.get('text'), bool(ln.get('header'))) for ln in b_lines])
+        self.assertEqual(a_st, b_st)
+        self.assertNotIn('Alex', json.dumps(a_st))
+        self.assertNotIn('Sam', json.dumps(a_st))
+        path = os.path.join(tmpdir(), 'header_state.json')
+        self.assertTrue(rh.save_state(a_st, path))
+        raw = open(path, encoding='utf-8').read()
+        self.assertNotIn('Alex', raw)
+        self.assertNotIn('hello there', raw)
+        self.assertNotIn('Family', raw)
+        self.assertEqual(oct(os.stat(path).st_mode & 0o777), '0o600')
+        self.assertFalse(rh.save_state({'k': 'older', 'at': 1}, path))
+        self.assertEqual(json.load(open(path, encoding='utf-8'))['k'], a_st['k'])
+        self.assertTrue(rh.save_state({'k': 'newer', 'at': a_st['at']}, path))
+        self.assertEqual(json.load(open(path, encoding='utf-8'))['k'], 'newer')
+        kept, st = rh.add_headers(_lines(rh, msgs[:1]), 0, {'k': 'keep', 'at': 1})
+        self.assertEqual(st, {'k': 'keep', 'at': 1})
+        self.assertFalse(any(ln.get('header') for ln in kept))
+
+
+class KeychainArgs(unittest.TestCase):
+    def test_secret_never_in_argv_and_failed_write_deletes(self):
+        rec = KeyRunner()
+        written = []
+        rk.store('refresh-token', 'super-secret-value', runner=rec, write_secret=lambda a, s: written.append((a, s)))
+        blob = json.dumps(rec.calls)
+        self.assertNotIn('super-secret-value', blob)
+        self.assertIn(rk.PLACEHOLDER, rec.calls[0])
+        self.assertNotIn('-A', rec.calls[0])
+        self.assertIn('/usr/bin/security', rec.calls[0])
+        self.assertEqual(written, [('refresh-token', 'super-secret-value')])
+        with self.assertRaises(ValueError):
+            rk.store('client-secret', 'has\nnewline', runner=rec, write_secret=lambda a, s: None)
+        self.assertEqual(len(rec.calls), 1, 'a rejected secret never reaches security')
+
+        def boom(account, secret):
+            raise RuntimeError('update failed')
+
+        with self.assertRaises(RuntimeError):
+            rk.store('client-secret', 'sek', runner=rec, write_secret=boom)
+        self.assertNotIn('sek', json.dumps(rec.calls))
+        self.assertTrue(any('delete-generic-password' in c for c in rec.calls))
+
+
+class XpostUnit(unittest.TestCase):
+    def test_pkce_signing_and_send_body(self):
+        verifier, challenge = rx.pkce_pair()
+        self.assertTrue(verifier)
+        self.assertNotIn('=', challenge)
+        url = rx.authorize_url('clid', 'http://127.0.0.1:53682/cb', 'st', challenge)
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        self.assertTrue(url.startswith('https://x.com/i/oauth2/authorize?'))
+        self.assertEqual(q['response_type'], ['code'])
+        self.assertEqual(q['scope'], [rx.SCOPES])
+        self.assertEqual(q['code_challenge_method'], ['S256'])
+        self.assertEqual(q['code_challenge'], [challenge])
+        self.assertEqual(q['redirect_uri'], ['http://127.0.0.1:53682/cb'])
+        self.assertEqual(rx.callback_error('a', {'state': 'b', 'code': 'z'}), 'state_mismatch')
+        rows = rx.map_signing({'data': [
+            {'public_key': 'ID', 'signing_public_key': 'SG', 'public_key_version': 2,
+             'identity_public_key_signature': 'SIG'},
+            {'signing_public_key': 'only-signing'},
+        ]}, '42')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['public_key'], 'SG')
+        self.assertEqual(rows[0]['identity_public_key'], 'ID')
+        self.assertEqual(rows[0]['user_id'], '42')
+        self.assertEqual(rows[0]['identity_public_key_signature'], 'SIG')
+        body = rx.send_body({'message_id': 'm', 'encrypted_content': 'E', 'encoded_event_signature': 'S'})
+        self.assertEqual(body['encoded_message_create_event'], 'E')
+        self.assertEqual(body['encoded_message_event_signature'], 'S')
+        self.assertEqual(rx.participant_ids('111:222', '9'), ['111', '222'])
+        self.assertEqual(rx.participant_ids('g12345', '9'), ['9'])
+
+    def test_header_then_500_and_network_and_encrypt(self):
+        secret = 'secret words'
+        calls = []
+
+        def http_500(body):
+            calls.append(body)
+            return (201, {}) if len(calls) == 1 else (500, {})
+
+        def encrypt(text, notify):
+            return {'message_id': 'mid-%d' % (1 if notify else 0), 'encrypted_content': 'E',
+                    'encoded_event_signature': 'S'}
+
+        out = rx.post_prepared(
+            [{'text': 'HEADER-LINE', 'header': True, 'notify': False},
+             {'text': secret, 'header': False, 'notify': True}], http_500, encrypt)
+        self.assertFalse(out['ok'])
+        self.assertTrue(out['retryable'])
+        self.assertTrue(out['header_sent'])
+        self.assertEqual(out['code'], 'http_500')
+        self.assertNotIn(secret, json.dumps(out))
+        self.assertNotIn('HEADER-LINE', json.dumps(out))
+
+        def http_down(body):
+            raise rx.NetError('down')
+
+        net = rx.post_payloads(
+            [({'header': False}, {'message_id': 'm1', 'encrypted_content': 'E', 'encoded_event_signature': 'S'})],
+            http_down)
+        self.assertEqual((net['ok'], net['retryable'], net['code']), (False, False, 'timeout'))
+
+        def boom(text, notify):
+            raise RuntimeError('nope ' + text)
+
+        enc = rx.post_prepared([{'text': secret, 'header': False, 'notify': True}],
+                               lambda body: (_ for _ in ()).throw(AssertionError('posted')), boom)
+        self.assertEqual(enc['code'], 'encrypt_failed')
+        self.assertTrue(enc['retryable'])
+        self.assertNotIn(secret, json.dumps(enc))
+
+    def test_empty_extract_does_not_post(self):
+        class Chat(object):
+            def import_keys(self, keys, version=None):
+                pass
+
+            def set_identity(self, user_id, version):
+                pass
+
+            def set_cache_keys(self, on):
+                pass
+
+            def set_signing_keys(self, keys):
+                pass
+
+            def extract_conversation_keys(self, events):
+                return {'keys': {}, 'latest_version': None}
+
+            def encrypt_message(self, *a, **k):
+                raise AssertionError('encrypt')
+
+        class Http(object):
+            def __init__(self):
+                self.posted = []
+
+            def refresh(self):
+                return True
+
+            def get_events(self, path):
+                return 200, {'meta': {'conversation_key_events': ['EV']}}
+
+            def get_signing(self, path):
+                return 200, {'data': [{'public_key': 'ID', 'signing_public_key': 'SG',
+                                       'public_key_version': '1', 'user_id': '9'}]}
+
+            def post(self, body):
+                self.posted.append(body)
+                raise AssertionError('posted')
+
+        http = Http()
+        out = rx.perform_post([{'text': 'hi', 'header': False, 'notify': True}], '111-222', '9', '1',
+                              b'not-a-real-key', Chat(), http, cache=None)
+        self.assertEqual(out['code'], 'no_conversation_key')
+        self.assertTrue(out['retryable'])
+        self.assertEqual(http.posted, [])
+
+    def test_bad_stdin_is_one_public_line(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = rx.main(['post'], stdin=io.StringIO('not-json'))
+        self.assertEqual(code, 0)
+        obj = json.loads(buf.getvalue())
+        self.assertEqual((obj['ok'], obj['retryable'], obj['code']), (False, True, 'bad_request'))
+        self.assertNotIn('not-json', buf.getvalue())
+        self.assertNotIn('text', rx._public_outcome({'ok': False, 'retryable': True, 'code': 'x', 'text': 'secret words'}))
+
+
+class RoutineDirect(unittest.TestCase):
+    def setUp(self):
+        self.d = tmpdir()
+        self.dedupe = os.path.join(self.d, 'seen.json')
+        self.helper = {'python': sys.executable, 'script': os.path.join(self.d, 'xchat_lite.py')}
+
+    def _run(self, calls, argv_out=None):
+        def runner(argv, input=b''):
+            calls.append(json.loads(input.decode()))
+            if argv_out is not None:
+                argv_out.append(' '.join(argv))
+            return subprocess.CompletedProcess(argv, 0, json.dumps({
+                'message_id': 'm', 'encoded_message_create_event': 'E', 'encoded_message_event_signature': 'S'}), '')
+        return runner
+
+    def test_direct_marker_commits_ids_and_drops_text(self):
+        calls = []
+        hdr = os.path.join(self.d, 'header_state.json')
+        with open(hdr, 'w', encoding='utf-8') as fh:
+            json.dump({'k': 'newer', 'at': 100}, fh)
+        r = rp.process({'payload': {'type': 'direct', 'ids': ['m1', 'm1#hdr'],
+                                    'headerState': {'k': 'older', 'at': 10}, 'text': 'secret words'},
+                        'dedupe_path': self.dedupe}, runner=self._run(calls))
+        self.assertEqual(r['action'], 'skip')
+        self.assertEqual(r['posted_kind'], 'direct')
+        self.assertEqual(r['reason'], 'already posted from the Mac')
+        self.assertEqual(calls, [])
+        self.assertNotIn('secret words', json.dumps(r))
+        self.assertNotIn('secret words', open(self.dedupe, encoding='utf-8').read())
+        seen = json.load(open(self.dedupe, encoding='utf-8'))
+        self.assertIn('m1', seen)
+        self.assertIn('m1#hdr', seen)
+        self.assertEqual(json.load(open(hdr, encoding='utf-8'))['k'], 'newer')   # monotonic: do not rewind
+        rp.process({'payload': {'type': 'direct', 'ids': ['m2'], 'headerState': {'k': 'later', 'at': 200}},
+                    'dedupe_path': self.dedupe})
+        self.assertEqual(json.load(open(hdr, encoding='utf-8'))['at'], 200)
+
+    def test_header_state_empty_forces_a_header_and_skip_and_gap_default(self):
+        who = rp._hkey('h:+15555550123')
+        hdr = os.path.join(self.d, 'header_state.json')
+        with open(hdr, 'w', encoding='utf-8') as fh:
+            json.dump({'k': who, 'at': time.time()}, fh)
+        calls = []
+        argv = []
+        payload = {'type': 'message', 'id': 'g1', 'label': 'Alex', 'handle': '+15555550123',
+                   'text': 'dinner at 7?', 'receivedAt': '2026-01-01T00:00:00Z', 'localTime': '7:20 PM',
+                   'headerGapMinutes': 30, 'headerState': {}}
+        r = rp.process({'payload': payload, 'conversation_id': '1111-2222', 'xchat': dict(FULL),
+                        'dedupe_path': self.dedupe, 'helper': self.helper}, runner=self._run(calls, argv))
+        self.assertEqual(r['action'], 'send')
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0]['text'].startswith('\U0001f4ac'))
+        self.assertFalse(r['sends'][0]['should_notify'])
+        self.assertTrue(r['sends'][1]['should_notify'])
+        self.assertNotIn('dinner at 7?', ' '.join(argv))
+
+        calls2 = []
+        payload2 = dict(payload, id='g2', skipHeader=True, headerState={'k': 'before', 'at': 1},
+                        headerStateAfter={'k': 'afterkey', 'at': 1900000000})
+        r2 = rp.process({'payload': payload2, 'conversation_id': '1111-2222', 'xchat': dict(FULL),
+                         'dedupe_path': self.dedupe, 'helper': self.helper}, runner=self._run(calls2))
+        self.assertEqual(len(calls2), 1)
+        self.assertNotIn('\U0001f4ac', calls2[0]['text'])
+        self.assertEqual(json.load(open(hdr, encoding='utf-8'))['k'], 'afterkey')
+
+        calls3 = []
+        bare = {'type': 'message', 'id': 'g3', 'label': 'Alex', 'handle': '+15555550123', 'text': 'plain'}
+        r3 = rp.process({'payload': bare, 'conversation_id': '1111-2222', 'xchat': dict(FULL),
+                         'dedupe_path': self.dedupe, 'helper': self.helper}, runner=self._run(calls3))
+        self.assertEqual(len(calls3), 1)
+        self.assertFalse(calls3[0]['text'].startswith('\U0001f4ac'))
+        self.assertTrue(r3['sends'][0]['should_notify'])
+        self.assertEqual(r['ack_ids'][0], 'g1#hdr')
+
+
+class DirectWatch(Base):
+    def touch_venv(self):
+        py = os.path.join(os.environ['IMESSAGE_RELAY_HOME'], 'xpost-venv', 'bin', 'python')
+        os.makedirs(os.path.dirname(py), exist_ok=True)
+        open(py, 'wb').close()
+        return py
+
+    def arm(self, outcomes):
+        self.cfg['directPost'] = True
+        self.touch_venv()
+        self.runner = XRunner(outcomes)
+        self.w = self.new_watcher()
+        self.w.tick()
+        return self.runner
+
+    def parsed(self):
+        out = []
+        for raw in self.runner.inputs:
+            if isinstance(raw, bytes):
+                raw = raw.decode('utf-8')
+            out.append(json.loads(raw))
+        return out
+
+    def _msg(self, mid, text, rowid, **extra):
+        m = {'rowid': rowid, 'id': mid, 'contactName': 'Test Contact', 'label': 'Test', 'handle': ALLOWED,
+             'text': text, 'receivedAt': '2026-01-01T00:00:00Z', 'route': ALLOWED}
+        m.update(extra)
+        return m
+
+    def test_default_off_is_one_webhook_and_no_header_state(self):
+        self.assertFalse(self.m.rc.sanitize_config({})['directPost'])
+        self.w.tick()
+        self.db.add(ALLOWED, text='hello direct', guid='m-direct-1')
+        self.w.tick()
+        self.assertEqual(len(self.poster.calls), 1)
+        p = self.poster.calls[0][1]
+        self.assertEqual((p['type'], p['id'], p['text']), ('message', 'm-direct-1', 'hello direct'))
+        self.assertNotIn('headerState', p)
+        self.assertFalse(any('relay_xpost.py' in ' '.join(c) for c in self.runner.calls))
+        self.assertFalse(os.path.exists(os.path.join(os.environ['IMESSAGE_RELAY_HOME'], 'header_state.json')))
+
+    def test_fallback_uses_the_same_id(self):
+        self.arm([{'ok': False, 'retryable': True, 'code': 'http_503', 'header_sent': False}])
+        self.db.add(ALLOWED, text='hello direct', guid='m-direct-1')
+        c = self.w.tick()
+        self.assertEqual(len(self.poster.calls), 1)
+        p = self.poster.calls[0][1]
+        self.assertEqual((p['type'], p['id'], p['text']), ('message', 'm-direct-1', 'hello direct'))
+        self.assertIn('headerState', p)
+        self.assertNotIn('skipHeader', p)
+        self.assertEqual(c['directPostFallback'], 1)
+        self.assertEqual(len(self.parsed()), 1)
+        joined = ' '.join(' '.join(c) for c in self.runner.calls)
+        self.assertNotIn('hello direct', joined)
+        self.assertIn('hello direct', self.parsed()[0]['texts'][-1]['text'])
+        self.assertNotIn('hello direct', read_log())
+        self.assertIn('http_503', read_log())
+
+    def test_success_dedupes_and_header_state_has_no_name(self):
+        self.arm([OK, OK, OK])
+        self.db.add(ALLOWED, text='hello direct', guid='m-direct-1')
+        c = self.w.tick()
+        self.assertEqual(self.poster.types(), ['direct'])
+        marker = self.poster.calls[0][1]
+        self.assertNotIn('text', marker)
+        self.assertEqual(marker['ids'][0], 'm-direct-1')
+        self.assertIn('m-direct-1#hdr', marker['ids'])
+        self.assertIn('headerState', marker)
+        self.assertEqual((c['directPosted'], c['forwarded']), (1, 1))
+        body = self.parsed()[0]
+        self.assertTrue(body['texts'][0]['header'])
+        self.assertFalse(body['texts'][0]['notify'])
+        self.assertIn('hello direct', body['texts'][1]['text'])
+        st = json.load(open(os.path.join(os.environ['IMESSAGE_RELAY_HOME'], 'header_state.json'), encoding='utf-8'))
+        self.assertNotIn('Test', json.dumps(st))
+        self.assertNotIn('hello direct', json.dumps(st))
+        n = len(self.runner.inputs)
+        self.w.tick()
+        self.w = self.new_watcher()
+        self.w.tick()
+        self.assertEqual(len(self.runner.inputs), n, 'a second tick and a new watcher do not resend')
+
+    def test_timeout_does_not_webhook_or_retry(self):
+        self.arm(['timeout'])
+        self.db.add(ALLOWED, text='hello direct', guid='m-direct-1')
+        c = self.w.tick()
+        self.assertEqual(self.poster.calls, [])
+        self.assertEqual(c['directPostTimeout'], 1)
+        self.assertNotIn('hello direct', read_log())
+        self.assertIn('timeout', read_log())
+        self.w.tick()
+        self.w = self.new_watcher()
+        self.w.tick()
+        self.assertEqual(len(self.runner.inputs), 1)
+
+    def test_empty_stdout_is_not_retried(self):
+        self.arm(['empty'])
+        self.db.add(ALLOWED, text='hello direct', guid='m-direct-1')
+        self.w.tick()
+        self.assertEqual(self.poster.calls, [])
+        self.w.tick()
+        self.assertEqual(len(self.runner.inputs), 1)
+
+    def test_two_texts_are_two_posts_and_a_header_is_not_repeated(self):
+        self.cfg['batchWebhooks'] = True
+        self.arm([OK, OK])
+        self.db.add(ALLOWED, text='one line', guid='m-a')
+        self.db.add(ALLOWED, text='two line', guid='m-b')
+        self.w.tick()
+        self.assertEqual(self.poster.types(), ['direct', 'direct'])
+        self.assertEqual(len(self.parsed()), 2)
+        self.assertGreater(len(self.parsed()[0]['texts']), 1)     # header + text
+        self.assertEqual(len(self.parsed()[1]['texts']), 1)       # same person, inside the gap
+        self.assertFalse(self.parsed()[1]['texts'][0]['header'])
+        for cmd in self.runner.calls:
+            if cmd[-1:] == ['post']:
+                blob = ' '.join(cmd)
+                self.assertNotIn('one line', blob)
+                self.assertNotIn('two line', blob)
+
+    def test_reaction_stays_on_the_webhook_with_header_state(self):
+        self.arm([])
+        self.db.add(ALLOWED, text='Loved "hi"', assoc=2000, guid='m-tap')
+        self.w.tick()
+        self.assertEqual(self.runner.inputs, [])
+        self.assertEqual(len(self.poster.calls), 1)
+        p = self.poster.calls[0][1]
+        self.assertEqual(p['type'], 'message')
+        self.assertTrue(p.get('reaction'))
+        self.assertIn('headerState', p)
+        self.assertNotIn('Loved', json.dumps(p))
+
+    def test_photo_with_media_is_not_batched_with_text(self):
+        self.cfg['directPost'] = True
+        self.cfg['batchWebhooks'] = True
+        self.touch_venv()
+        self.runner = XRunner([OK])
+        self.w = self.new_watcher()
+        photo = self._msg('m-photo', '\U0001f4f7 Photo', 50, media=[{'token': 'tok', 'size': 4}])
+        text = self._msg('m-text', 'after photo', 51)
+        self.w.retry = [photo, text]
+        self.w._flush_now(self.m.rc.sanitize_config(self.cfg), collections.defaultdict(int))
+        self.assertEqual(self.poster.types(), ['message', 'direct'])
+        self.assertEqual(self.poster.calls[0][1]['text'], '\U0001f4f7 Photo')
+        self.assertIn('headerState', self.poster.calls[0][1])
+        self.assertNotIn('after photo', json.dumps(self.poster.calls[0][1]))
+        self.assertEqual(len(self.parsed()), 1)
+        self.assertIn('after photo', self.parsed()[0]['texts'][-1]['text'])
+        self.assertTrue(self.m.direct.eligible({'directPost': True}, {'text': '\U0001f4f7 Photo'}))
+        self.assertFalse(self.m.direct.eligible({'directPost': True}, {'text': '\U0001f4f7 Photo', 'media': [{}]}))
+        self.assertFalse(self.m.direct.eligible({'directPost': True}, {'text': 'hi', 'reaction': True}))
+        self.assertTrue(self.m.direct.eligible({'directPost': True}, {'text': 'hi', 'group': {'label': 'Family'}}))
+
+    def test_digest_is_not_direct_posted(self):
+        self.arm([])
+        self.cfg['quietHours'] = {'start': '00:00', 'end': '23:59', 'tz': 'UTC'}
+        self.now = datetime(2026, 10, 18, 3, 0, tzinfo=timezone.utc).timestamp()
+        self.db.add(ALLOWED, text='night one', guid='m-night')
+        c = self.w.tick()
+        self.assertEqual((self.poster.calls, self.runner.inputs, c['held']), ([], [], 1))
+        self.now = datetime(2026, 10, 18, 23, 59, tzinfo=timezone.utc).timestamp()
+        self.w.tick()
+        self.assertEqual(self.poster.types(), ['digest'])
+        self.assertEqual(self.runner.inputs, [])
+        self.assertNotIn('night one', read_log())
+
+    def test_header_already_sent_asks_the_routine_to_skip(self):
+        self.arm([{'ok': False, 'retryable': True, 'code': 'http_500', 'header_sent': True}])
+        self.db.add(ALLOWED, text='hello direct', guid='m-direct-1')
+        self.w.tick()
+        p = self.poster.calls[0][1]
+        self.assertEqual(p['id'], 'm-direct-1')
+        self.assertTrue(p.get('skipHeader'))
+        self.assertIn('headerStateAfter', p)
+        self.assertIn('k', p['headerStateAfter'])
+
+
+class XpostCtl(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tmpdir()
+        self.m = fresh(self.tmp)
+        self.ctl = self.m.ctl
+
+    def touch_venv(self):
+        py = os.path.join(self.m.rc.APP_DIR, 'xpost-venv', 'bin', 'python')
+        os.makedirs(os.path.dirname(py), exist_ok=True)
+        open(py, 'wb').close()
+
+    def ready_cfg(self):
+        self.m.rc.write_json_atomic(self.m.rc.CONFIG_PATH, {
+            'directPost': False, 'xpostClientId': 'abc_DEF-123', 'xpostUserId': '4242424242',
+            'xpostKeyVersion': '3', 'relayConversationId': '1111-2222', 'xpostRedirectPort': 53682,
+        })
+
+    def test_set_directpost_is_rejected(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = self.ctl.main(['set', 'directPost', 'true'])
+        self.assertEqual(code, 1)
+        self.assertFalse(self.m.rc.load_config()['directPost'])
+        self.assertIn('directPost', buf.getvalue())
+
+    def test_on_off_status_forget(self):
+        self.ready_cfg()
+        self.touch_venv()
+        runner = KeyRunner(('refresh-token', 'client-secret', 'private-key'))
+        cache = os.path.join(self.m.rc.APP_DIR, 'xchat_keys.json')
+        with open(cache, 'w', encoding='utf-8') as fh:
+            json.dump({'savedAt': time.time() - 15}, fh)
+        view = self.ctl.cmd_xpost('status', runner=runner)
+        blob = json.dumps(view)
+        self.assertTrue(view['ready'])
+        self.assertFalse(view['directPost'])
+        self.assertTrue(view['venv'] and view['clientIdSet'] and view['userIdSet'])
+        self.assertTrue(all(view['keychain'].values()))
+        self.assertIsInstance(view['keyCacheAgeSeconds'], int)
+        self.assertNotIn('abc_DEF-123', blob)
+        self.assertNotIn('4242424242', blob)
+        self.assertEqual(view['redirect'], 'http://127.0.0.1:53682/cb')
+        on = self.ctl.cmd_xpost('on', runner=runner)
+        self.assertTrue(on['directPost'])
+        self.assertTrue(self.m.rc.load_config()['directPost'])
+        off = self.ctl.cmd_xpost('off', runner=runner)
+        self.assertFalse(off['directPost'])
+        self.ctl.cmd_xpost('on', runner=runner)
+        gone = self.ctl.cmd_xpost('forget', runner=runner)
+        self.assertFalse(gone['directPost'])
+        self.assertEqual(self.m.rc.read_raw_config().get('xpostClientId'), 'abc_DEF-123')
+        self.assertFalse(os.path.exists(cache))
+        deleted = [c[c.index('-a') + 1] for c in runner.calls if 'delete-generic-password' in c]
+        self.assertEqual(sorted(deleted), ['client-secret', 'private-key', 'refresh-token'])
+        bare = KeyRunner()
+        with self.assertRaises(self.ctl.CtlError) as ctx:
+            self.ctl.cmd_xpost('on', runner=bare)
+        self.assertIn('not ready', str(ctx.exception))
+
+    def test_setup_missing_venv_and_mock_does_not_enable(self):
+        with self.assertRaises(self.ctl.CtlError) as ctx:
+            self.ctl.cmd_xpost('setup', runner=lambda *a, **k: None)
+        msg = str(ctx.exception)
+        self.assertIn('python@3.12', msg)
+        self.assertIn('install.sh', msg)
+        self.assertIn('not rebuilt', msg)
+        self.touch_venv()
+        calls = []
+
+        def runner(argv, **kw):
+            calls.append(list(argv))
+            if argv[-1] == 'setup':
+                return subprocess.CompletedProcess(argv, 0, json.dumps({
+                    'ok': True, 'userId': '4242424242', 'userIdSet': True, 'keySaved': True,
+                    'redirect': 'http://127.0.0.1:53682/cb', 'directPost': True,
+                }), '')
+            return subprocess.CompletedProcess(argv, 1, '', '')
+
+        out = self.ctl.cmd_xpost('setup', runner=runner)
+        self.assertTrue(out['ok'])
+        self.assertTrue(out['userIdSet'])
+        self.assertTrue(out['keySaved'])
+        self.assertNotIn('userId', out)
+        self.assertNotIn('4242424242', json.dumps(out))
+        self.assertFalse(self.m.rc.load_config()['directPost'])
+        self.assertTrue(any(c[-1] == 'setup' for c in calls))
+
+
+class InstallGuards(unittest.TestCase):
+    def test_venv_is_optional_and_uninstall_wont_touch_keychain_in_tests(self):
+        inst = open(os.path.join(ROOT, 'install.sh'), encoding='utf-8').read()
+        un = open(os.path.join(ROOT, 'uninstall.sh'), encoding='utf-8').read()
+        self.assertIn("IMESSAGE_RELAY_ALLOW_NON_MAC:-}", inst)
+        self.assertIn('chatxdk<0.6', inst)
+        self.assertIn('brew install python@3.12', inst)
+        self.assertIn('xpost-venv', inst)
+        self.assertLess(un.index('IMESSAGE_RELAY_ALLOW_NON_MAC'), un.index('delete-generic-password'))
+        self.assertIn('com.imessage-relay.xpost', un)
+        self.assertIn('refresh-token', un)
+        self.assertIn('client-secret', un)
+        self.assertIn('private-key', un)
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
 @@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=c445fb291fdea4cdc89b2bd5f7ab91094df5a633c64ffa6e67098166e2e4446c nl=1
 """v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),
 and an exact full-name match to one Contacts card with one number sends without asking."""
@@ -22608,7 +24970,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=4bc7d2908c8ee05d77f70018919d5b66b678a2b3a2897cd10c2dc8c619a6af81 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=54432f60ebddc2f72b2102e14e3249a3dd23e7d02e9ebf2df306f767d1d9af07 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -22801,7 +25163,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.17')
+        self.assertEqual(m.rc.VERSION, '1.4.18')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

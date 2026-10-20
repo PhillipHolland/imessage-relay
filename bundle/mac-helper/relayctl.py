@@ -36,6 +36,7 @@ Every command prints one JSON object. Message bodies are never printed or stored
                                           guided setup in one locked edit; prints what it detected and the
                                           owner's checklist. Never changes dryRun, quiet hours or contacts.
   relayctl test-result                    the last /test run from X Chat (steps only, no text)
+  relayctl xpost setup|on|off|status|forget   v1.4.18 direct poster (opt-in; default off)
   relayctl version
 """
 import argparse
@@ -50,6 +51,7 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_common as rc  # noqa: E402
 import relay_setup  # noqa: E402
+import relay_keychain as rk  # noqa: E402
 
 JOBS_DIR = os.path.join(rc.APP_DIR, 'jobs')
 SELFTEST_DIR = os.path.join(rc.APP_DIR, 'selftest')
@@ -581,6 +583,131 @@ def _applet_from_plist():
         return ''
 
 
+def _xpost_python():
+    override = os.environ.get('IMESSAGE_RELAY_XPOST_PYTHON') or ''
+    if override:
+        return override
+    return os.path.join(rc.APP_DIR, 'xpost-venv', 'bin', 'python')
+
+
+def _xpost_script():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'relay_xpost.py')
+
+
+def _key_cache_age(now=None):
+    """Age of the direct-post key cache, in seconds. None when there is no cache. Never the keys."""
+    path = os.path.join(rc.APP_DIR, 'xchat_keys.json')
+    try:
+        with open(path, encoding='utf-8') as fh:
+            d = json.load(fh)
+        saved = float(d.get('savedAt') or 0)
+    except (OSError, ValueError, TypeError):
+        return None
+    if saved <= 0:
+        return None
+    t = time.time() if now is None else now
+    return max(0, int(t - saved))
+
+
+def _xpost_view(cfg, runner):
+    """Public direct-post status. Booleans and the redirect URI only: no client id, user id, or secrets."""
+    py = _xpost_python()
+    kc = {}
+    for account, key in (('refresh-token', 'refreshToken'), ('client-secret', 'clientSecret'), ('private-key', 'privateKey')):
+        try:
+            kc[key] = bool(rk.exists(account, runner=runner))
+        except Exception:
+            kc[key] = False
+    try:
+        port = int(cfg.get('xpostRedirectPort') or 53682)
+    except (TypeError, ValueError):
+        port = 53682
+    view = {
+        'ok': True,
+        'directPost': bool(cfg.get('directPost')),
+        'venv': bool(py and os.path.isfile(py)),
+        'clientIdSet': bool(cfg.get('xpostClientId')),
+        'keychain': kc,
+        'userIdSet': bool(cfg.get('xpostUserId')),
+        'keyCacheAgeSeconds': _key_cache_age(),
+        'ready': False,
+        'redirect': 'http://127.0.0.1:%d/cb' % port,
+    }
+    view['ready'] = bool(
+        view['venv'] and view['clientIdSet'] and view['userIdSet'] and cfg.get('xpostKeyVersion')
+        and cfg.get('relayConversationId') and all(kc.values()))
+    return view
+
+
+def _strip_xpost_ids(out):
+    if isinstance(out, dict):
+        for k in ('userId', 'xpostUserId', 'clientId', 'clientSecret', 'refreshToken', 'privateKey', 'pin', 'text'):
+            out.pop(k, None)
+    return out
+
+
+def cmd_xpost_setup(runner=subprocess.run):
+    """Run PKCE setup inside the 3.12 venv. Does not turn directPost on. Prompts stay on the child's tty."""
+    py = _xpost_python()
+    if not py or not os.path.isfile(py):
+        raise CtlError('python3.12 venv is missing. brew install python@3.12, then re-run install.sh '
+                       '(the watcher app is not rebuilt)')
+    script = _xpost_script()
+    proc = runner([py, script, 'setup'], stdout=subprocess.PIPE, stderr=None)
+    raw = getattr(proc, 'stdout', '') or ''
+    if isinstance(raw, bytes):
+        raw = raw.decode('utf-8', 'replace')
+    line = ''
+    for ln in str(raw).splitlines():
+        s = ln.strip()
+        if s.startswith('{') and s.endswith('}'):
+            line = s
+    if not line:
+        raise CtlError('xpost setup did not return JSON')
+    try:
+        out = json.loads(line)
+    except ValueError:
+        raise CtlError('xpost setup did not return JSON')
+    if not isinstance(out, dict):
+        raise CtlError('xpost setup did not return JSON')
+    _strip_xpost_ids(out)
+    if not out.get('ok'):
+        return out
+    view = _xpost_view(rc.load_config(), runner)
+    view['userIdSet'] = bool(out.get('userIdSet')) or view['userIdSet']
+    view['keySaved'] = bool(out.get('keySaved'))
+    if out.get('redirect'):
+        view['redirect'] = out['redirect']
+    return _strip_xpost_ids(view)
+
+
+def cmd_xpost(action, runner=subprocess.run):
+    """setup | on | off | status | forget. `set directPost` stays refused; on/off is only this command."""
+    if action == 'status':
+        return _xpost_view(rc.load_config(), runner)
+    if action == 'off':
+        edit_config(lambda raw: raw.__setitem__('directPost', False))
+        return _xpost_view(rc.load_config(), runner)
+    if action == 'on':
+        view = _xpost_view(rc.load_config(), runner)
+        if not view['ready']:
+            raise CtlError('direct post is not ready. relayctl xpost status shows what is missing '
+                           '(venv, X app, Keychain, relay chat).')
+        edit_config(lambda raw: raw.__setitem__('directPost', True))
+        return _xpost_view(rc.load_config(), runner)
+    if action == 'forget':
+        rk.delete_all(runner=runner)
+        try:
+            os.remove(os.path.join(rc.APP_DIR, 'xchat_keys.json'))
+        except OSError:
+            pass
+        edit_config(lambda raw: raw.__setitem__('directPost', False))
+        return _xpost_view(rc.load_config(), runner)
+    if action == 'setup':
+        return cmd_xpost_setup(runner)
+    raise CtlError('use: relayctl xpost setup|on|off|status|forget')
+
+
 def watcher_app():
     """Resolve the watcher binary the install actually uses. install.sh records it in fda_binary.txt
     (and the LaunchAgent points at it); honor those first so a custom / pre-existing app path is never
@@ -688,6 +815,8 @@ def main(argv=None):
     g.add_argument('--webhook-key-stdin', action='store_true'); g.add_argument('--webhook-key-prompt', action='store_true')
     a.add_argument('--open-windows', action='store_true')
     sp.add_parser('test-result')
+    a = sp.add_parser('xpost')
+    a.add_argument('action', choices=['setup', 'on', 'off', 'status', 'forget'])
     args = p.parse_args(argv)
     try:
         c = args.cmd
@@ -750,6 +879,8 @@ def main(argv=None):
             out = cmd_setup(args)
         elif c == 'test-result':
             out = cmd_test_result()
+        elif c == 'xpost':
+            out = cmd_xpost(args.action)
         else:
             out = {'ok': True, 'version': rc.VERSION}
     except CtlError as e:

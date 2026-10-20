@@ -121,6 +121,49 @@ rm -rf "$EXT_DIR"; mkdir -p "$EXT_DIR"
 for f in manifest.json content.js background.js popup.html popup.js popup.css; do cp "$SRC/extension/$f" "$EXT_DIR/$f"; done
 printf '#!/bin/bash\nexec %q %q "$@"\n' "$PY" "$BIN/relayctl.py" > "$APP/relayctl"   # %q: safe even if a path has spaces
 chmod 755 "$APP/relayctl"
+
+# v1.4.18: optional Python 3.12 venv for the direct poster. Never rebuilds or re-signs the watcher
+# app. A missing interpreter does not fail the install: direct post stays off until the owner opts in.
+xpost_venv() {
+  if [[ "${IMESSAGE_RELAY_ALLOW_NON_MAC:-}" == "1" ]]; then
+    return 0
+  fi
+  local py="" cand
+  if [[ -n "${IMESSAGE_RELAY_PYTHON312:-}" && -x "${IMESSAGE_RELAY_PYTHON312}" ]]; then
+    py="${IMESSAGE_RELAY_PYTHON312}"
+  else
+    for cand in \
+      /opt/homebrew/bin/python3.12 \
+      /usr/local/bin/python3.12 \
+      /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+    do
+      if [[ -x "$cand" ]]; then
+        py="$cand"
+        break
+      fi
+    done
+    if [[ -z "$py" ]]; then
+      py="$(command -v python3.12 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -z "$py" || ! -x "$py" ]]; then
+    echo "xpost:     python3.12 not found. Direct post stays off until: brew install python@3.12"
+    echo "xpost:     then re-run install.sh (the watcher app is not rebuilt)"
+    return 0
+  fi
+  local venv="$APP/xpost-venv"
+  if ! "$py" -m venv "$venv"; then
+    echo "xpost:     could not create the venv (direct post stays off). Re-run install.sh after: brew install python@3.12"
+    return 0
+  fi
+  if ! "$venv/bin/python" -m pip install --disable-pip-version-check -q 'chatxdk<0.6'; then
+    echo "xpost:     chatxdk did not install (direct post stays off). Re-run install.sh when the network is up."
+    return 0
+  fi
+  echo "xpost:     venv ready (chatxdk). Opt in later with: relayctl xpost setup"
+}
+xpost_venv
+
 echo "files:     $BIN"
 echo "extension: $EXT_DIR"
 

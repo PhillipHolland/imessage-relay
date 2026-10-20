@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.17 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.18 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -90,6 +90,12 @@ STDOUT (one JSON object):
   v1.4.17: a silent "\U0001f4ac <label> \u00b7 7:20 PM" header line (body:false, should_notify false, never threaded) goes
   before a text from a different person than the last one, or the same person after headerGapMinutes (0 = off).
   header_state.json keeps only a key hash and a time.
+  v1.4.18: a body-free {"type":"direct","ids":[...],"headerState":{"k","at"}} marker means the Mac already
+  posted that text (and its header, when the id ends in #hdr). Commit the ids, keep header state if it is
+  newer, and do not send. Update this file on the bot BEFORE `relayctl xpost on`: an older helper treats
+  type "direct" as unknown and posts a helper error for every marker. When a webhook carries headerState,
+  that snapshot (even {}) is the header state for this post; skipHeader means the Mac already posted the
+  header and headerStateAfter is the state to store. Absent those keys, behavior matches v1.4.17.
   v1.4.9: a photo line is never "quiet" (it always starts "Jordan:"; a photo-only message's caption is
   "Jordan:", its notice "Jordan: 📷 Photo couldn't be relayed …"). With "media_off" the routine may add
   "media_error": "<call>_<http status>" (e.g. "initialize_403", "append_413", "file_ref"), logged as
@@ -156,6 +162,54 @@ def header_text(meta):
 def _hkey(who):
     import hashlib
     return hashlib.sha256(('imr-hdr:' + who).encode('utf-8')).hexdigest()[:24]
+
+
+def _load_header_state(path):
+    try:
+        with open(path, encoding='utf-8') as fh:
+            old = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(old, dict) or not old.get('k'):
+        return {}
+    return {'k': old.get('k'), 'at': old.get('at')}
+
+
+def _save_header_state(path, st):
+    """Monotonic on `at`: a late older snapshot must not rewind a newer direct-post state."""
+    if not isinstance(st, dict) or not st.get('k'):
+        return
+    try:
+        new_at = float(st.get('at') or 0)
+    except (TypeError, ValueError):
+        return
+    cur = _load_header_state(path)
+    try:
+        cur_at = float(cur.get('at') or 0) if cur.get('k') else None
+    except (TypeError, ValueError):
+        cur_at = None
+    if cur.get('k') and cur_at is not None and cur_at > new_at:
+        return
+    try:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        tmp = path + '.tmp'
+        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w', encoding='utf-8') as fh:
+            json.dump({'k': st.get('k'), 'at': st.get('at')}, fh)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _apply_direct(payload, dd, hdr_path, defer):
+    """Mac already posted. Remember ids, sync header state, send nothing. Ignore any text field."""
+    ids = [str(i) for i in (payload.get('ids') or []) if i]
+    st = payload.get('headerState')
+    if isinstance(st, dict) and st.get('k'):
+        _save_header_state(hdr_path, st)
+    if not defer:
+        dd.commit(ids)
+    return {'action': 'skip', 'reason': 'already posted from the Mac',
+            'posted_kind': 'direct', 'ack_ids': ids}
 
 
 def add_headers(lines, gap_min, state, now=None):
@@ -1019,6 +1073,11 @@ def _default_runner(helper):
 
 def process(req, runner=None):
     payload = req.get('payload') or {}
+    if str(payload.get('type') or '').strip() == 'direct':
+        dedupe_path = req.get('dedupe_path') or '~/.imessage-relay-routine/seen_ids.json'
+        dd = Dedupe(dedupe_path, req.get('ttl_seconds', 86400))
+        hdr_path = os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', HEADER_STATE)
+        return _apply_direct(payload, dd, hdr_path, bool(req.get('defer_commit')))
     conv = str(req.get('conversation_id') or payload.get('relayConversationId') or '').strip()
     ev = format_event(payload)                              # may raise ValueError -> error
     runner = runner or _default_runner(req.get('helper'))
@@ -1035,17 +1094,22 @@ def process(req, runner=None):
     hdr_path = os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', HEADER_STATE)
     hdr_state = None
     if ev['kind'] in ('message', 'batch'):
-        try:
-            with open(hdr_path) as fh:
-                old = json.load(fh)
-        except (OSError, ValueError):
-            old = {}
-        src = [payload] if ev['kind'] == 'message' else (payload.get('messages') or [])[:BATCH_MAX]
-        metas = {str(m.get('id') or (str(payload.get('id') or '') + '#' + str(i))) if ev['kind'] == 'batch'
-                 else str(payload.get('id') or ''): _hdr_meta(m) for i, m in enumerate(src)}
-        lines = [dict(ln, hdr=metas.get(ln['id'])) for ln in lines]
-        lines, hdr_state = add_headers(lines, payload.get('headerGapMinutes', 0),   # set by a v1.4.17+ Mac
-                                       old if isinstance(old, dict) else {})
+        # A direct-post Mac sends headerState (even {}) so this run does not use a stale file.
+        # Absent the key, v1.4.17 behavior: the file beside the dedupe store.
+        if 'headerState' in payload and isinstance(payload.get('headerState'), dict):
+            old = payload.get('headerState') or {}
+        else:
+            old = _load_header_state(hdr_path)
+        if payload.get('skipHeader'):
+            after = payload.get('headerStateAfter')
+            hdr_state = after if isinstance(after, dict) else old
+        else:
+            src = [payload] if ev['kind'] == 'message' else (payload.get('messages') or [])[:BATCH_MAX]
+            metas = {str(m.get('id') or (str(payload.get('id') or '') + '#' + str(i))) if ev['kind'] == 'batch'
+                     else str(payload.get('id') or ''): _hdr_meta(m) for i, m in enumerate(src)}
+            lines = [dict(ln, hdr=metas.get(ln['id'])) for ln in lines]
+            lines, hdr_state = add_headers(lines, payload.get('headerGapMinutes', 0),   # set by a v1.4.17+ Mac
+                                           old if isinstance(old, dict) else {})
 
     xchat = dict(req.get('xchat') or {})
     # v1.4.5 speed: the keys come from the request (then cached) or from the key cache. With neither,
@@ -1191,14 +1255,7 @@ def process(req, runner=None):
     # id is what prevents a retried webhook from being re-sent.
     ids = [ln['id'] for ln in lines]
     if hdr_state:
-        try:
-            os.makedirs(os.path.dirname(hdr_path) or '.', exist_ok=True)
-            tmp = hdr_path + '.tmp'
-            with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as fh:
-                json.dump({'k': hdr_state.get('k'), 'at': hdr_state.get('at')}, fh)
-            os.replace(tmp, hdr_path)
-        except OSError:
-            pass                                 # a missed header is cosmetic
+        _save_header_state(hdr_path, hdr_state)  # a missed header is cosmetic; never rewind `at`
     if not req.get('defer_commit'):
         dd.commit(ids)
     res = {'action': 'send', 'sends': sends, 'encrypted': True, 'posted_kind': ev['kind'], 'ack_ids': ids}

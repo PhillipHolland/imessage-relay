@@ -23,8 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.17'
-EXTENSION_VERSION = '1.4.17'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
+VERSION = '1.4.18'
+EXTENSION_VERSION = '1.4.16'   # v1.4.18 does not change the extension (status must not nag a reload)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -82,6 +82,11 @@ DEFAULT_CONFIG = {
     'mirrorTapbacks': True,        # v1.4.6: their tapback on a relayed reply -> that reaction on HIS X message
     'quietNamesSeconds': 600,      # v1.4.6: "Name:" only when the sender changes within this window (0 = always)
     'headerGapMinutes': 30,        # v1.4.17: 💬 header before a new person / same person after this gap (0 = off)
+    'directPost': False,           # v1.4.18: opt-in. Mac posts text straight to X Chat; routine stays the fallback
+    'xpostClientId': '',           # v1.4.18: X app client id (not a secret). Secret stays in the Keychain
+    'xpostUserId': '',             # v1.4.18: sender numeric user id, set by `relayctl xpost setup`
+    'xpostKeyVersion': '',         # v1.4.18: sender public_key_version from setup
+    'xpostRedirectPort': 53682,    # v1.4.18: loopback PKCE redirect http://127.0.0.1:<port>/cb
     'undoSeconds': 5,              # v1.4.6: \U0001f5d1\ufe0f on his own reply within this cancels it (0-10; 0 = off)
     'stripOptOut': True,           # v1.4.6: drop "Reply STOP to opt out" footers on texts tagged spam / unknown
     'relayAttachments': True,      # v1.4.6: 1:1 photos both ways (in-flight temp files only, never stored)
@@ -295,6 +300,13 @@ def sanitize_config(user):
     cfg['quietNamesSeconds'] = _clamp_int(cfg.get('quietNamesSeconds'), 600, 0, 3600)
     cfg['undoSeconds'] = _clamp_int(cfg.get('undoSeconds'), 5, 0, 10)
     cfg['headerGapMinutes'] = _clamp_int(cfg.get('headerGapMinutes'), 30, 0, 1440)
+    cfg['directPost'] = truthy(cfg.get('directPost'), False)
+    cid = str(cfg.get('xpostClientId') or '')
+    cfg['xpostClientId'] = cid if re.match(r'^[A-Za-z0-9_-]{1,200}$', cid) else ''
+    cfg['xpostUserId'] = re.sub(r'[^0-9]', '', str(cfg.get('xpostUserId') or ''))[:30]
+    kv = str(cfg.get('xpostKeyVersion') or '')
+    cfg['xpostKeyVersion'] = kv if re.match(r'^[A-Za-z0-9._:-]{1,40}$', kv) else ''
+    cfg['xpostRedirectPort'] = _clamp_int(cfg.get('xpostRedirectPort'), 53682, 1, 65535)
     cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
     sm = str(cfg.get('spamMode') or 'follow-messages').strip().lower()

@@ -26,5 +26,6 @@
   "senderXHandle": "",
   "autoReopenMessages": false,
   "pollSeconds": 10,
-  "defaultCountryCode": "1"
+  "defaultCountryCode": "1",
+  "directPost": false
 }

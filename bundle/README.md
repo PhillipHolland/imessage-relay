@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.17
+# iMessage Relay v1.4.18
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,6 +22,15 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.18 (Mac helper + routine relay_post.py; extension stays 1.4.16): opt-in direct post. With
+  `relayctl xpost on`, the Mac encrypts inbound text and posts it to the relay chat in about 1–2 seconds.
+  The routine stays the fallback. Default off, so an existing install behaves as v1.4.17 until the owner
+  opts in. Photos, reactions, and quiet-hours digests still use the webhook. Needs Python 3.12
+  (`brew install python@3.12`, then re-run install.sh; the watcher app is not rebuilt) and relay_post.py
+  v1.4.18 on the bot **before** `relayctl xpost on`. Setup: an X app (pay-per-use, user token) with
+  redirect `http://127.0.0.1:53682/cb` and scopes `dm.read` `dm.write` `tweet.read` `users.read`
+  `offline.access`, then `relayctl xpost setup` (browser login as the sender, then the hidden Chat PIN),
+  then `relayctl xpost on`.
 - v1.4.17 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new conversation is easy to spot. Before a
   relayed text from a different person than the last one, or the same person after 30 min (`RC set headerGapMinutes N`,
   0 = off), a separate silent line "💬 Alex · 7:20 PM" (label + your local time, no text) is posted; groups use the
@@ -147,7 +156,9 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.17)
+## Limits (v1.4.18)
+- Direct post is opt-in and text-only. Photos, reactions, and quiet-hours digests stay on the webhook.
+  It is off until `relayctl xpost on`.
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -168,7 +179,9 @@ v1.4.6 makes the relay feel native in X Chat:
   key, so the ID is always `gpnjllicnleeogdmgpjekgflakdiifee`.
 - `mac-helper/`: `imessage_relay_host.py` (native host `com.imessage_relay.host`),
   `imessage_relay_watch.py` (watcher), `watch_launcher.py` (run by the watcher app), `typedstream.py` (attributedBody decoder),
-  `relayctl.py` (operations), `relay_common.py`, `relay_ui.py` (v1.4.6 reaction queue + id map),
+  `relayctl.py` (operations), `relay_common.py`, `relay_header.py`, `relay_direct.py`, `relay_keychain.py`,
+  `relay_xpost.py` (v1.4.18 direct poster; runs under `~/.imessage-relay/xpost-venv`, Python 3.12),
+  `relay_ui.py` (v1.4.6 reaction queue + id map),
   `relay_media.py` (v1.4.6 in-flight attachments), `relay_drop.py` (v1.4.7 photo encryption + drop upload; v1.4.8 key wrap), `relay_echo.py`, `send_imessage.applescript`, templates,
   `config.example.json`.
 - `drop/`: the v1.4.7 encrypted photo drop (`core.mjs` shared; `api/` + `vercel.json` for Vercel,
@@ -216,6 +229,7 @@ relayctl add-contact … | label … | remove-contact … | contacts | recent-se
 relayctl setup … | test-result | owner-handles detect [--apply]
 relayctl set-drop --url https://… --key-stdin | set-drop --off      # v1.4.7 photo drop (key on stdin only)
 relayctl set-drop --wrap-key-stdin                                  # v1.4.8 photo-key wrap key (stdin only)
+relayctl xpost setup | on | off | status | forget                   # v1.4.18 direct post (default off)
 ```
 In the relay chat: `/test` (end-to-end check), `/test send` (also texts your own number), `/help`.
 

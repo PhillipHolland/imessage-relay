@@ -52,6 +52,7 @@ import relay_drop  # noqa: E402  (v1.4.7: the encrypted photo drop)
 import relay_ui
 import relay_setup  # noqa: E402
 import relay_contacts  # noqa: E402  (v1.4.0: replies to someone new)
+import relay_direct  # noqa: E402  (v1.4.18: opt-in direct poster; stdlib client, chatxdk stays in the venv)
 from typedstream import message_text  # noqa: E402
 
 STATE_PATH = os.path.join(rc.APP_DIR, 'watch_state.json')
@@ -814,6 +815,90 @@ class Watcher:
             except Exception:
                 pass
 
+    def _direct_one(self, cfg, counts, t):
+        """One eligible text through the direct poster. False means the fallback webhook failed."""
+        m = self.retry[0]
+        self._quiet(m, cfg, t)
+        d = relay_direct.send(cfg, self.public(m), runner=self.runner, now=t)
+        code = relay_direct.sanitize_code(d.get('code'))
+        action = d.get('action')
+        if action == 'posted':
+            self.retry.pop(0)
+            counts['directPosted'] += 1
+            counts['forwarded'] += 1
+            self._after_post(m, t)
+            self._bookkeep(m, t, counts)
+            marker = d.get('marker')
+            if marker is not None and not self.post(cfg, marker):
+                counts['directPostMarkerFailed'] += 1
+                rc.log_event('direct_post', code='marker_failed', n=1)
+            return True
+        if action == 'timeout':
+            self.retry.pop(0)
+            counts['directPostTimeout'] += 1
+            rc.log_event('direct_post', code='timeout', n=1)
+            self._after_post(m, t)
+            self._bookkeep(m, t, counts)
+            return True
+        counts['directPostFallback'] += 1
+        if code:
+            rc.log_event('direct_post', code=code, n=1)
+        payload = dict(type='message', untrusted=True, headerGapMinutes=cfg.get('headerGapMinutes', 30), **self.public(m))
+        payload.update(d.get('stamp') or {})
+        if not self.post(cfg, payload):
+            return False
+        self.retry.pop(0)
+        counts['forwarded'] += 1
+        if d.get('save_after_on_webhook'):
+            relay_direct.save_after(d.get('header_after'))
+        self._after_post(m, t)
+        self._bookkeep(m, t, counts)
+        return True
+
+    def _flush_ineligible(self, cfg, counts, t):
+        """While directPost is on, webhook only a leading run of photos/reactions. Texts stay for _direct_one.
+        The same header snapshot goes with the webhook so the routine and the Mac share one state."""
+        chunk = []
+        for m in self.retry:
+            if relay_direct.eligible(cfg, m):
+                break
+            chunk.append(m)
+            if len(chunk) >= BATCH_MAX:
+                break
+        saved = (self._last_route, self._last_route_at)
+        for m in chunk:
+            self._quiet(m, cfg, t)
+            self._last_route, self._last_route_at = m.get('route'), t
+        self._last_route, self._last_route_at = saved
+        pubs = [self.public(m) for m in chunk]
+        _before, after = relay_direct.plan_state(pubs, cfg.get('headerGapMinutes', 30), t)
+        stamp = {'headerState': relay_direct.rh.public_state(_before)}
+        if len(chunk) >= 2 and cfg.get('batchWebhooks', True):
+            payload = {'type': 'batch', 'count': len(chunk), 'messages': pubs, 'untrusted': True,
+                       'headerGapMinutes': cfg.get('headerGapMinutes', 30)}
+            payload.update(stamp)
+            if not self.post(cfg, payload):
+                return False
+            self.retry = self.retry[len(chunk):]
+            counts['forwarded'] += len(chunk)
+            counts['batched'] += len(chunk)
+            relay_direct.save_after(after)
+            for m in chunk:
+                self._after_post(m, t)
+                self._bookkeep(m, t, counts)
+            return True
+        m = chunk[0]
+        payload = dict(type='message', untrusted=True, headerGapMinutes=cfg.get('headerGapMinutes', 30), **pubs[0])
+        payload.update(stamp)
+        if not self.post(cfg, payload):
+            return False
+        self.retry.pop(0)
+        counts['forwarded'] += 1
+        relay_direct.save_after(after)
+        self._after_post(m, t)
+        self._bookkeep(m, t, counts)
+        return True
+
     def flush(self, cfg, counts):
         waiting = self._resolve_mirrors(counts)
         try:
@@ -855,6 +940,18 @@ class Watcher:
                 for m in chunk:
                     self._bookkeep(m, t, counts)
         while not failed and self.retry and posts < MAX_POSTS_PER_TICK:
+            if cfg.get('directPost'):
+                if relay_direct.eligible(cfg, self.retry[0]):
+                    if not self._direct_one(cfg, counts, t):
+                        failed = True
+                        break
+                    posts += 1
+                    continue
+                if not self._flush_ineligible(cfg, counts, t):
+                    failed = True
+                    break
+                posts += 1
+                continue
             if len(self.retry) >= 2 and cfg.get('batchWebhooks', True):
                 # v1.4.5 speed: several texts waiting -> ONE webhook (one routine run on the box), still
                 # one X message per text there. Same retry rules: nothing is dropped, a 2xx is never re-sent.
@@ -906,7 +1003,8 @@ class Watcher:
         counts = dict.fromkeys(('taggedUnknown', 'batched', 'scanned', 'notAllowlisted', 'group', 'groupMessages', 'own', 'muted', 'shortCode', 'noHandle',
                                 'reactionsOrEvents', 'empty', 'deferredEmpty', 'tooOld', 'rowErrors', 'rosterWriteErrors',
                                 'new', 'held', 'forwarded', 'digested', 'webhookFailures', 'droppedPaused',
-                                'backpressure', 'rateLimited', 'rebaselined', 'dbBusy', 'mirrored', 'spamHeld', 'tagged'), 0)
+                                'backpressure', 'rateLimited', 'rebaselined', 'dbBusy', 'mirrored', 'spamHeld', 'tagged',
+                                'directPosted', 'directPostFallback', 'directPostTimeout', 'directPostMarkerFailed'), 0)
         self.process_jobs(cfg)
         self.retry_notifications(cfg)
         try:
