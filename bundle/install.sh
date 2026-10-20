@@ -352,26 +352,42 @@ PY
 LOG_FILE="${IMESSAGE_RELAY_LOG:-$LOGS/imessage-relay.log}"
 LOG_OFFSET=0; [[ -f "$LOG_FILE" ]] && LOG_OFFSET=$(wc -c < "$LOG_FILE" | tr -d ' ')
 AGENT_LOADED=0
+# v1.4.23: bootout unloads the agent. When that unload hangs and a short alarm kills it mid-removal,
+# Launch Services rebuilds this ad-hoc app and tccd deletes its Full Disk Access grant. The next
+# start is then "authorization denied" until the owner toggles the switch. If the loaded job already
+# runs this applet, restart it in place with kickstart -k (the service is never unloaded).
 if [[ $LOAD_AGENT -eq 1 ]] && command -v launchctl >/dev/null 2>&1; then
-  with_timeout 15 launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-  # Wait for the old service to actually leave the domain (up to ~10s) before bootstrapping the new
-  # one; bootstrapping while the previous instance is still shutting down fails with "service already
-  # loaded / in progress". Poll `launchctl print`, which errors once the label is gone.
-  for _ in $(seq 1 20); do
-    with_timeout 5 launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break
-    sleep 0.5
-  done
-  if with_timeout 15 launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || with_timeout 15 launchctl load -w "$PLIST" 2>/dev/null; then
-    echo "watcher:   loaded ($LABEL)"; AGENT_LOADED=1
-  else
-    echo "watcher:   could not load; try: launchctl bootstrap gui/$(id -u) \"$PLIST\""
+  DOMAIN="gui/$(id -u)"
+  TARGET="$DOMAIN/$LABEL"
+  WANT="${PROGRAM_ARGS[0]}"
+  LOADED_PROG="$(with_timeout 5 launchctl print "$TARGET" 2>/dev/null | sed -n 's/^[[:space:]]*program =[[:space:]]*//p' || true)"
+  LOADED_PROG="${LOADED_PROG%%$'\n'*}"
+  if [[ -n "$LOADED_PROG" && "$LOADED_PROG" == "$WANT" && "$WANT" == */Contents/MacOS/applet ]]; then
+    if with_timeout 30 launchctl kickstart -k "$TARGET"; then
+      echo "watcher:   restarted ($LABEL)"; AGENT_LOADED=1
+    fi
+  fi
+  if [[ $AGENT_LOADED -eq 0 ]]; then
+    # Not already this applet (first install, or a job that points somewhere else). One bootout, then
+    # wait until the label is actually gone, then one bootstrap. Do not bootout again.
+    with_timeout 45 launchctl bootout "$TARGET" >/dev/null 2>&1 || true
+    for _ in $(seq 1 40); do
+      with_timeout 5 launchctl print "$TARGET" >/dev/null 2>&1 || break
+      sleep 0.25
+    done
+    if with_timeout 20 launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || with_timeout 20 launchctl load -w "$PLIST" 2>/dev/null; then
+      echo "watcher:   loaded ($LABEL)"; AGENT_LOADED=1
+    else
+      echo "watcher:   could not load; try: launchctl bootstrap $DOMAIN \"$PLIST\""
+    fi
   fi
 else
   echo "watcher:   not loaded (launchctl unavailable or --no-launchagent)"
 fi
 
 # 6) Can the watcher read chat.db? A freshly built app never has Full Disk Access yet. Otherwise
-#    wait briefly for the restarted watcher to log watch_baseline/chat_db_ok or chat_db_unavailable.
+#    wait for the restarted watcher. A denied open is retried before it is logged, and a later
+#    chat_db_ok wins: one early chat_db_unavailable is not the final answer.
 FDA="unknown"
 if [[ "$WAPP_STATE" == "built" ]]; then
   FDA="missing (new app)"
@@ -379,7 +395,8 @@ elif [[ $AGENT_LOADED -eq 1 ]]; then
   FDA=$("$PY" - "$LOG_FILE" "$LOG_OFFSET" <<'PY'
 import json, sys, time
 path, off = sys.argv[1], int(sys.argv[2] or 0)
-end = time.time() + 12
+end = time.time() + 15
+newest = None
 while time.time() < end:
     try:
         with open(path, 'rb') as f:
@@ -387,17 +404,19 @@ while time.time() < end:
             lines = f.read().decode('utf-8', 'replace').splitlines()
     except OSError:
         lines = []
-    for line in reversed(lines):
+    for line in lines:
         try:
             ev = json.loads(line).get('event')
         except ValueError:
             continue
         if ev in ('watch_baseline', 'chat_db_ok'):
-            print('ok'); sys.exit()
-        if ev == 'chat_db_unavailable':
-            print('missing'); sys.exit()
-    time.sleep(1)
-print('unknown')
+            newest = 'ok'
+        elif ev == 'chat_db_unavailable':
+            newest = 'missing'
+    if newest == 'ok':
+        print('ok'); sys.exit()
+    time.sleep(0.5)
+print(newest or 'unknown')
 PY
 )
 fi

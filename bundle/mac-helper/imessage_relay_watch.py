@@ -103,6 +103,10 @@ NOT_RUNNING_LOG_EVERY_S = 300
 FDA_LOG_EVERY_S = 3600
 FDA_REMIND_S = 30 * 60       # v1.4.20: first reminder 30 min after the warning, then hourly
 FDA_REPEAT_S = 3600
+# v1.4.23: a restart can have the first chat.db open return "authorization denied" and a later
+# open succeed. Probe a few times before posting fda_missing. Sleeps between the 4 tries.
+FDA_PROBE_TRIES = 4
+FDA_PROBE_BACKOFF_S = (0.5, 1.0, 2.0)
 CHROME_STALE_S = 15 * 60     # ext_seen older than this (the host only rewrites it every 5 min)
 CHROME_ARM_S = 10 * 60       # watcher must see that stale stamp for this long first (sleep wakes don't nag)
 EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
@@ -1025,6 +1029,27 @@ class Watcher:
             setattr(self, which + '_phase', 2)
         setattr(self, which + '_warned', True)
 
+    def open_chat_db(self):
+        """Open chat.db, retrying an authorization failure before calling it missing Full Disk Access.
+
+        The first open after a restart can be "authorization denied" and a later open in the same
+        process can succeed. Do not post fda_missing on that first miss. A grant that is really
+        gone stays denied; only then do we log chat_db_unavailable and post. A later success still
+        posts recovered (note_fda_ok). A lock/busy error is not retried and is never fda_missing.
+        """
+        last = None
+        for i in range(FDA_PROBE_TRIES):
+            try:
+                return rc.open_chat_db(self.db_path)
+            except rc.ChatDbBusy:
+                raise
+            except rc.ChatDbUnavailable as e:
+                last = e
+                if i + 1 >= FDA_PROBE_TRIES:
+                    break
+                self.sleeper(FDA_PROBE_BACKOFF_S[min(i, len(FDA_PROBE_BACKOFF_S) - 1)])
+        raise last
+
     def note_fda(self, cfg, t):
         if cfg['paused'] or not cfg.get('webhookUrl'):
             return
@@ -1089,7 +1114,7 @@ class Watcher:
         t = self.now()
         self.note_chrome(cfg, t)
         try:
-            con = rc.open_chat_db(self.db_path)
+            con = self.open_chat_db()
         except rc.ChatDbBusy as e:
             # chat.db is readable but momentarily locked/busy: skip this tick, retry next time. Never
             # treat this as missing Full Disk Access, and never post fda_missing (item 11).

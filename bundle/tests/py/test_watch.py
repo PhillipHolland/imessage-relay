@@ -354,6 +354,58 @@ class Failures(Base):
         self.w.tick()
         self.assertEqual(len(self.poster.calls), 3, 'no duplicates')
 
+    def test_authorization_denied_retries_then_recovers(self):
+        # v1.4.23: one denied open is not yet "Full Disk Access is missing". A few probes with
+        # backoff come first. If those clear, nothing is posted. If they do not, one fda_missing
+        # is posted, and the next open that works posts recovered.
+        slept = []
+        self.w.sleeper = lambda s: slept.append(s)
+        orig = self.m.watch.rc.open_chat_db
+        state = {'n': 0}
+
+        def flaky(path=None):
+            state['n'] += 1
+            if state['n'] < 3:
+                raise self.m.rc.ChatDbUnavailable('authorization denied')
+            return orig(path)
+
+        self.m.watch.rc.open_chat_db = flaky
+        try:
+            self.w.tick()
+        finally:
+            self.m.watch.rc.open_chat_db = orig
+        self.assertEqual(slept, [0.5, 1.0])
+        self.assertEqual(self.poster.types(), [], 'a denial that clears is not posted')
+        self.assertEqual(read_log().count('chat_db_unavailable'), 0)
+        self.assertIn('"chat_db_ok"', read_log())
+
+        def denied(path=None):
+            raise self.m.rc.ChatDbUnavailable('authorization denied')
+
+        self.m.watch.rc.open_chat_db = denied
+        slept[:] = []
+        try:
+            self.w.tick()
+        finally:
+            self.m.watch.rc.open_chat_db = orig
+        self.assertEqual(slept, [0.5, 1.0, 2.0])
+        self.assertEqual([p['status'] for _, p, _ in self.poster.calls], ['fda_missing'])
+        self.assertEqual(read_log().count('chat_db_unavailable'), 1)
+        self.w.tick()
+        self.assertEqual([p['status'] for _, p, _ in self.poster.calls], ['fda_missing', 'recovered'])
+
+        def busy(path=None):
+            raise self.m.rc.ChatDbBusy('database is locked')
+
+        self.m.watch.rc.open_chat_db = busy
+        slept[:] = []
+        try:
+            self.w.tick()
+        finally:
+            self.m.watch.rc.open_chat_db = orig
+        self.assertEqual(slept, [], 'a lock is not retried and is not an FDA problem')
+        self.assertEqual([p['status'] for _, p, _ in self.poster.calls], ['fda_missing', 'recovered'])
+
     def test_chat_db_unavailable_reports_fda_once(self):
         os.unlink(self.db.path)
         self.w.tick()

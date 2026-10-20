@@ -73,6 +73,17 @@ class Install(unittest.TestCase):
                         PATH='/usr/bin:/bin')
         self.app = os.path.join(self.home, '.imessage-relay')
         self.wapp = os.path.join(self.home, 'Applications', APP_NAME)
+        # install.sh bootout/kickstart uses the real uid's launchd label. A test must never reach
+        # /bin/launchctl (that would restart the live watcher). `open` would also pop System Settings.
+        bindir = os.path.join(self.home, 'bin')
+        os.makedirs(bindir)
+        with open(os.path.join(bindir, 'launchctl'), 'w') as f:
+            f.write('#!/bin/bash\nprintf \'%s\\n\' "$*" >> "$HOME/launchctl.log"\nexit 1\n')
+        with open(os.path.join(bindir, 'open'), 'w') as f:
+            f.write('#!/bin/bash\nprintf \'%s\\n\' "$*" >> "$HOME/open.log"\nexit 0\n')
+        os.chmod(os.path.join(bindir, 'launchctl'), 0o755)
+        os.chmod(os.path.join(bindir, 'open'), 0o755)
+        self.env['PATH'] = bindir + ':' + self.env['PATH']
 
     def fake_mac_tools(self):
         d = os.path.join(self.home, 'fakebin')
@@ -342,6 +353,67 @@ class Install(unittest.TestCase):
         self.assertEqual((cfg['dryRun'], cfg['contacts'][0]['name']), (False, 'Keep Me'))
         self.assertEqual(rtext(roster), roster_before, 'roster untouched')
         self.assertIn("'bin', 'watch_launcher.py'", rtext(os.path.join(self.app, 'fdatest.py')))
+
+    def test_loaded_applet_restarts_with_kickstart_not_bootout(self):
+        # v1.4.23: an upgrade whose LaunchAgent already runs the watcher applet must restart with
+        # `launchctl kickstart -k` and must not `bootout`. bootout is what unloaded the agent and,
+        # when it hung, got the applet's Full Disk Access grant deleted. A job that is not that
+        # applet still bootstraps (first install, or a different program).
+        self.fake_mac_tools()
+        ctl = os.path.join(self.home, 'bin', 'launchctl')
+        with open(ctl, 'w') as f:
+            f.write(r"""#!/bin/bash
+printf '%s\n' "$*" >> "$HOME/launchctl.log"
+if [[ "$1" == "print" ]]; then
+  if [[ -f "$HOME/loaded-program" ]]; then
+    printf '\tprogram = %s\n' "$(cat "$HOME/loaded-program")"
+    exit 0
+  fi
+  exit 1
+fi
+if [[ "$1" == "kickstart" || "$1" == "bootstrap" ]]; then
+  mkdir -p "$HOME/Library/Logs"
+  printf '%s\n' '{"event":"chat_db_ok"}' >> "$HOME/Library/Logs/imessage-relay.log"
+fi
+exit 0
+""")
+        os.chmod(ctl, 0o755)
+        logp = os.path.join(self.home, 'launchctl.log')
+
+        def calls():
+            return rtext(logp).splitlines() if os.path.exists(logp) else []
+
+        first = self.sh('install.sh', '--no-open-settings')
+        self.assertEqual(first.returncode, 0, first.stderr + first.stdout)
+        applet = os.path.join(self.wapp, 'Contents', 'MacOS', 'applet')
+        self.assertTrue(os.path.isfile(applet))
+        got = calls()
+        self.assertTrue(any(l.startswith('bootout ') for l in got), got)
+        self.assertTrue(any(l.startswith('bootstrap ') for l in got), got)
+        self.assertFalse(any(l.startswith('kickstart') for l in got), got)
+
+        with open(os.path.join(self.home, 'loaded-program'), 'w') as f:
+            f.write(applet)
+        os.remove(logp)
+        second = self.sh('install.sh', '--no-open-settings')
+        self.assertEqual(second.returncode, 0, second.stderr + second.stdout)
+        self.assertIn('watcher:   restarted', second.stdout)
+        got = calls()
+        self.assertTrue(any(l.startswith('kickstart -k ') for l in got), got)
+        self.assertFalse(any(l.startswith('bootout') for l in got), got)
+        self.assertFalse(any(l.startswith('bootstrap') for l in got), got)
+        self.assertIn('chat.db:   watcher access: ok', second.stdout)
+
+        with open(os.path.join(self.home, 'loaded-program'), 'w') as f:
+            f.write('/usr/bin/python3')
+        os.remove(logp)
+        third = self.sh('install.sh', '--no-open-settings')
+        self.assertEqual(third.returncode, 0, third.stderr + third.stdout)
+        got = calls()
+        self.assertTrue(any(l.startswith('bootout ') for l in got), got)
+        self.assertTrue(any(l.startswith('bootstrap ') for l in got), got)
+        self.assertFalse(any(l.startswith('kickstart') for l in got), got)
+        self.assertEqual(self.plist()['ProgramArguments'], [applet])
 
     def test_refuses_non_mac_without_override(self):
         env = dict(self.env)

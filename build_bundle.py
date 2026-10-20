@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.22, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.23, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=dc78e39eabc316bebb7c4a8ae94f14eb0801659c894946d693f1a49c9f02723a nl=1
-# iMessage Relay v1.4.22
+@@@@ FILE README.md mode=644 sha256=d8e86a198b12f7b05b6f8d95edd10b0da7137ea669989509cdd6f7fb427604f6 nl=1
+# iMessage Relay v1.4.23
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.23 (Mac helper only; the extension stays 1.4.21, so no reload; `relay_post.py` does not change): an upgrade that already runs the watcher applet restarts it in place and does not unload the LaunchAgent. Unloading it could hang, and killing that unload made macOS delete the app's Full Disk Access grant, so the watcher came back unable to read chat.db. A denied open is retried a few times before the chat is told Full Disk Access is missing, and a later success says watching is back. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.22 (Mac helper + routine relay_post.py; the extension stays 1.4.21, so no reload): chat lines are shorter. The conversation header stays `💬 name · time`. Someone who is not a contact reads `⚠️ name · not a contact:`. Spam reads `🚫 name · spam:`. Promo and receipt have no icon. A confirmation is `→ name ✓` or `→ name ✓✓`. A held digest is `While you were away · N texts` and still uses • under each name. `/status` says `replies to name`. Health lines are one sentence; the spam count still starts with 🚫. `/test` is unchanged. **Update relay_post.py on the bot**, then re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.21 (Chrome extension + Mac helper): a lone emoji sent with X Chat's Reply on a contact's text reaches that contact. X draws that emoji as a large glyph, not as message text, so it used to be ignored with no warning. The usual 5 second undo still applies. A reply the relay sees and will not send posts a ⚠️ reason in the chat. A short word, digits, or an email start within 10 minutes of a prompt is still only a prompt answer. Reload the extension, then press Cmd+R on the x.com chat tab. Re-run `./install.sh` (the watcher app is not rebuilt). `relay_post.py` does not change.
 - v1.4.20 (Mac helper + routine relay_post.py; extension stays 1.4.16): `/status` is one short line in the relay chat. A lost Full Disk Access grant repeats, with the fix, and one line says when Messages is readable again. Chrome not checking in gets a line too. `/pause` says texts during the pause are not kept. `/snooze` holds them for one digest (default the next 7:00 AM). `/help` is a few short lines. Replace `relay_post.py` on the bot so health lines notify, then re-run `./install.sh` (the watcher app is not rebuilt; no extension reload).
@@ -186,7 +187,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.22)
+## Limits (v1.4.23)
 - A lone emoji used as a native Reply to a contact's text is sent to that contact. An emoji that does not quote a contact, within 10 minutes of a prompt, is still only a prompt answer.
 - `/snooze` holds inbound texts the same way quiet hours do, then delivers one digest. A command can set at most 24 hours; a hand-edited time more than 36 hours ahead is ignored. `/pause` does not keep texts.
 - "Chrome hasn't checked in" means the extension has not talked to the Mac. Closing the chat tab while Chrome stays open does not raise it.
@@ -314,7 +315,7 @@ Edit with `~/.imessage-relay/relayctl` (see `relayctl --help`); every component 
 - `{"type":"needs_target","detail","reason","at"}` (host, reply NOT sent; no body)
 - `{"type":"status","status":"messages_not_running"|"fda_missing"|"recovered"|"chrome_away"|"chrome_back","detail","at"}` (no message body; the four health lines notify)
 @@@@ END
-@@@@ FILE install.sh mode=755 sha256=9545c65a328f70b6975a278e5673b4498abbcb315030912f4828cece66653563 nl=1
+@@@@ FILE install.sh mode=755 sha256=7de8b6670cfdc6e5baebeafdd62cd8450a3e414914dae52648c1f7268f54772f nl=1
 #!/bin/bash
 # iMessage Relay v1.4.8 installer (macOS, current user, no sudo). Idempotent: safe to re-run.
 # Upgrades in place: replaces program files and the extension copy; keeps config.json,
@@ -669,26 +670,42 @@ PY
 LOG_FILE="${IMESSAGE_RELAY_LOG:-$LOGS/imessage-relay.log}"
 LOG_OFFSET=0; [[ -f "$LOG_FILE" ]] && LOG_OFFSET=$(wc -c < "$LOG_FILE" | tr -d ' ')
 AGENT_LOADED=0
+# v1.4.23: bootout unloads the agent. When that unload hangs and a short alarm kills it mid-removal,
+# Launch Services rebuilds this ad-hoc app and tccd deletes its Full Disk Access grant. The next
+# start is then "authorization denied" until the owner toggles the switch. If the loaded job already
+# runs this applet, restart it in place with kickstart -k (the service is never unloaded).
 if [[ $LOAD_AGENT -eq 1 ]] && command -v launchctl >/dev/null 2>&1; then
-  with_timeout 15 launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-  # Wait for the old service to actually leave the domain (up to ~10s) before bootstrapping the new
-  # one; bootstrapping while the previous instance is still shutting down fails with "service already
-  # loaded / in progress". Poll `launchctl print`, which errors once the label is gone.
-  for _ in $(seq 1 20); do
-    with_timeout 5 launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break
-    sleep 0.5
-  done
-  if with_timeout 15 launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || with_timeout 15 launchctl load -w "$PLIST" 2>/dev/null; then
-    echo "watcher:   loaded ($LABEL)"; AGENT_LOADED=1
-  else
-    echo "watcher:   could not load; try: launchctl bootstrap gui/$(id -u) \"$PLIST\""
+  DOMAIN="gui/$(id -u)"
+  TARGET="$DOMAIN/$LABEL"
+  WANT="${PROGRAM_ARGS[0]}"
+  LOADED_PROG="$(with_timeout 5 launchctl print "$TARGET" 2>/dev/null | sed -n 's/^[[:space:]]*program =[[:space:]]*//p' || true)"
+  LOADED_PROG="${LOADED_PROG%%$'\n'*}"
+  if [[ -n "$LOADED_PROG" && "$LOADED_PROG" == "$WANT" && "$WANT" == */Contents/MacOS/applet ]]; then
+    if with_timeout 30 launchctl kickstart -k "$TARGET"; then
+      echo "watcher:   restarted ($LABEL)"; AGENT_LOADED=1
+    fi
+  fi
+  if [[ $AGENT_LOADED -eq 0 ]]; then
+    # Not already this applet (first install, or a job that points somewhere else). One bootout, then
+    # wait until the label is actually gone, then one bootstrap. Do not bootout again.
+    with_timeout 45 launchctl bootout "$TARGET" >/dev/null 2>&1 || true
+    for _ in $(seq 1 40); do
+      with_timeout 5 launchctl print "$TARGET" >/dev/null 2>&1 || break
+      sleep 0.25
+    done
+    if with_timeout 20 launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || with_timeout 20 launchctl load -w "$PLIST" 2>/dev/null; then
+      echo "watcher:   loaded ($LABEL)"; AGENT_LOADED=1
+    else
+      echo "watcher:   could not load; try: launchctl bootstrap $DOMAIN \"$PLIST\""
+    fi
   fi
 else
   echo "watcher:   not loaded (launchctl unavailable or --no-launchagent)"
 fi
 
 # 6) Can the watcher read chat.db? A freshly built app never has Full Disk Access yet. Otherwise
-#    wait briefly for the restarted watcher to log watch_baseline/chat_db_ok or chat_db_unavailable.
+#    wait for the restarted watcher. A denied open is retried before it is logged, and a later
+#    chat_db_ok wins: one early chat_db_unavailable is not the final answer.
 FDA="unknown"
 if [[ "$WAPP_STATE" == "built" ]]; then
   FDA="missing (new app)"
@@ -696,7 +713,8 @@ elif [[ $AGENT_LOADED -eq 1 ]]; then
   FDA=$("$PY" - "$LOG_FILE" "$LOG_OFFSET" <<'PY'
 import json, sys, time
 path, off = sys.argv[1], int(sys.argv[2] or 0)
-end = time.time() + 12
+end = time.time() + 15
+newest = None
 while time.time() < end:
     try:
         with open(path, 'rb') as f:
@@ -704,17 +722,19 @@ while time.time() < end:
             lines = f.read().decode('utf-8', 'replace').splitlines()
     except OSError:
         lines = []
-    for line in reversed(lines):
+    for line in lines:
         try:
             ev = json.loads(line).get('event')
         except ValueError:
             continue
         if ev in ('watch_baseline', 'chat_db_ok'):
-            print('ok'); sys.exit()
-        if ev == 'chat_db_unavailable':
-            print('missing'); sys.exit()
-    time.sleep(1)
-print('unknown')
+            newest = 'ok'
+        elif ev == 'chat_db_unavailable':
+            newest = 'missing'
+    if newest == 'ok':
+        print('ok'); sys.exit()
+    time.sleep(0.5)
+print(newest or 'unknown')
 PY
 )
 fi
@@ -4024,10 +4044,10 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=ff9c9db818ae49b55ca3cc5e45c9b71be7fab8a10631125f5f1a310311f2f47b nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=ddc967f8e84a4c36292408ad66ccd271040b7b340ac1c2c6a8b0fcfb5314f5a9 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.22.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.23.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -5905,7 +5925,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=0024eaa20c23c57a481b370a589285bc0e52741d41d0d64c64a9d68cc0b2f448 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=887cd2cf46053ae98a0b850297c6d828c5fa4736d33ad848c314187d128560a3 nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -6011,6 +6031,10 @@ NOT_RUNNING_LOG_EVERY_S = 300
 FDA_LOG_EVERY_S = 3600
 FDA_REMIND_S = 30 * 60       # v1.4.20: first reminder 30 min after the warning, then hourly
 FDA_REPEAT_S = 3600
+# v1.4.23: a restart can have the first chat.db open return "authorization denied" and a later
+# open succeed. Probe a few times before posting fda_missing. Sleeps between the 4 tries.
+FDA_PROBE_TRIES = 4
+FDA_PROBE_BACKOFF_S = (0.5, 1.0, 2.0)
 CHROME_STALE_S = 15 * 60     # ext_seen older than this (the host only rewrites it every 5 min)
 CHROME_ARM_S = 10 * 60       # watcher must see that stale stamp for this long first (sleep wakes don't nag)
 EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
@@ -6933,6 +6957,27 @@ class Watcher:
             setattr(self, which + '_phase', 2)
         setattr(self, which + '_warned', True)
 
+    def open_chat_db(self):
+        """Open chat.db, retrying an authorization failure before calling it missing Full Disk Access.
+
+        The first open after a restart can be "authorization denied" and a later open in the same
+        process can succeed. Do not post fda_missing on that first miss. A grant that is really
+        gone stays denied; only then do we log chat_db_unavailable and post. A later success still
+        posts recovered (note_fda_ok). A lock/busy error is not retried and is never fda_missing.
+        """
+        last = None
+        for i in range(FDA_PROBE_TRIES):
+            try:
+                return rc.open_chat_db(self.db_path)
+            except rc.ChatDbBusy:
+                raise
+            except rc.ChatDbUnavailable as e:
+                last = e
+                if i + 1 >= FDA_PROBE_TRIES:
+                    break
+                self.sleeper(FDA_PROBE_BACKOFF_S[min(i, len(FDA_PROBE_BACKOFF_S) - 1)])
+        raise last
+
     def note_fda(self, cfg, t):
         if cfg['paused'] or not cfg.get('webhookUrl'):
             return
@@ -6997,7 +7042,7 @@ class Watcher:
         t = self.now()
         self.note_chrome(cfg, t)
         try:
-            con = rc.open_chat_db(self.db_path)
+            con = self.open_chat_db()
         except rc.ChatDbBusy as e:
             # chat.db is readable but momentarily locked/busy: skip this tick, retry next time. Never
             # treat this as missing Full Disk Access, and never post fda_missing (item 11).
@@ -7489,7 +7534,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=9392f30c35ec2455e3ed8283b51865333e894e62e777199d2eee2691deb2986c nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=d905cf65e2bc682cb1d9ec2a78f37b527c391c33c53a4677b86aac09e1c5d2e2 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7515,8 +7560,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.22'
-EXTENSION_VERSION = '1.4.21'   # v1.4.22 does not change the extension (no reload)
+VERSION = '1.4.23'
+EXTENSION_VERSION = '1.4.21'   # v1.4.23 does not change the extension (no reload)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -18705,7 +18750,7 @@ class EndToEnd(Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_install.py mode=644 sha256=80131fef6ce18aede53184a4a0c991f4c43ef51385d1078ff22305fff5d49c63 nl=1
+@@@@ FILE tests/py/test_install.py mode=644 sha256=8a7f676d223dd29a7d6462d0c14d3502a57df2825828463034efb3580b6de596 nl=1
 """install.sh / uninstall.sh in a fake HOME (Linux-runnable: launchctl is skipped when absent).
 
 Two suites:
@@ -18781,6 +18826,17 @@ class Install(unittest.TestCase):
                         PATH='/usr/bin:/bin')
         self.app = os.path.join(self.home, '.imessage-relay')
         self.wapp = os.path.join(self.home, 'Applications', APP_NAME)
+        # install.sh bootout/kickstart uses the real uid's launchd label. A test must never reach
+        # /bin/launchctl (that would restart the live watcher). `open` would also pop System Settings.
+        bindir = os.path.join(self.home, 'bin')
+        os.makedirs(bindir)
+        with open(os.path.join(bindir, 'launchctl'), 'w') as f:
+            f.write('#!/bin/bash\nprintf \'%s\\n\' "$*" >> "$HOME/launchctl.log"\nexit 1\n')
+        with open(os.path.join(bindir, 'open'), 'w') as f:
+            f.write('#!/bin/bash\nprintf \'%s\\n\' "$*" >> "$HOME/open.log"\nexit 0\n')
+        os.chmod(os.path.join(bindir, 'launchctl'), 0o755)
+        os.chmod(os.path.join(bindir, 'open'), 0o755)
+        self.env['PATH'] = bindir + ':' + self.env['PATH']
 
     def fake_mac_tools(self):
         d = os.path.join(self.home, 'fakebin')
@@ -19050,6 +19106,67 @@ class Install(unittest.TestCase):
         self.assertEqual((cfg['dryRun'], cfg['contacts'][0]['name']), (False, 'Keep Me'))
         self.assertEqual(rtext(roster), roster_before, 'roster untouched')
         self.assertIn("'bin', 'watch_launcher.py'", rtext(os.path.join(self.app, 'fdatest.py')))
+
+    def test_loaded_applet_restarts_with_kickstart_not_bootout(self):
+        # v1.4.23: an upgrade whose LaunchAgent already runs the watcher applet must restart with
+        # `launchctl kickstart -k` and must not `bootout`. bootout is what unloaded the agent and,
+        # when it hung, got the applet's Full Disk Access grant deleted. A job that is not that
+        # applet still bootstraps (first install, or a different program).
+        self.fake_mac_tools()
+        ctl = os.path.join(self.home, 'bin', 'launchctl')
+        with open(ctl, 'w') as f:
+            f.write(r"""#!/bin/bash
+printf '%s\n' "$*" >> "$HOME/launchctl.log"
+if [[ "$1" == "print" ]]; then
+  if [[ -f "$HOME/loaded-program" ]]; then
+    printf '\tprogram = %s\n' "$(cat "$HOME/loaded-program")"
+    exit 0
+  fi
+  exit 1
+fi
+if [[ "$1" == "kickstart" || "$1" == "bootstrap" ]]; then
+  mkdir -p "$HOME/Library/Logs"
+  printf '%s\n' '{"event":"chat_db_ok"}' >> "$HOME/Library/Logs/imessage-relay.log"
+fi
+exit 0
+""")
+        os.chmod(ctl, 0o755)
+        logp = os.path.join(self.home, 'launchctl.log')
+
+        def calls():
+            return rtext(logp).splitlines() if os.path.exists(logp) else []
+
+        first = self.sh('install.sh', '--no-open-settings')
+        self.assertEqual(first.returncode, 0, first.stderr + first.stdout)
+        applet = os.path.join(self.wapp, 'Contents', 'MacOS', 'applet')
+        self.assertTrue(os.path.isfile(applet))
+        got = calls()
+        self.assertTrue(any(l.startswith('bootout ') for l in got), got)
+        self.assertTrue(any(l.startswith('bootstrap ') for l in got), got)
+        self.assertFalse(any(l.startswith('kickstart') for l in got), got)
+
+        with open(os.path.join(self.home, 'loaded-program'), 'w') as f:
+            f.write(applet)
+        os.remove(logp)
+        second = self.sh('install.sh', '--no-open-settings')
+        self.assertEqual(second.returncode, 0, second.stderr + second.stdout)
+        self.assertIn('watcher:   restarted', second.stdout)
+        got = calls()
+        self.assertTrue(any(l.startswith('kickstart -k ') for l in got), got)
+        self.assertFalse(any(l.startswith('bootout') for l in got), got)
+        self.assertFalse(any(l.startswith('bootstrap') for l in got), got)
+        self.assertIn('chat.db:   watcher access: ok', second.stdout)
+
+        with open(os.path.join(self.home, 'loaded-program'), 'w') as f:
+            f.write('/usr/bin/python3')
+        os.remove(logp)
+        third = self.sh('install.sh', '--no-open-settings')
+        self.assertEqual(third.returncode, 0, third.stderr + third.stdout)
+        got = calls()
+        self.assertTrue(any(l.startswith('bootout ') for l in got), got)
+        self.assertTrue(any(l.startswith('bootstrap ') for l in got), got)
+        self.assertFalse(any(l.startswith('kickstart') for l in got), got)
+        self.assertEqual(self.plist()['ProgramArguments'], [applet])
 
     def test_refuses_non_mac_without_override(self):
         env = dict(self.env)
@@ -23789,7 +23906,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=50881be3a1c366ebcd50f00c4e10f77ee4af70941aafa724ca449b9dcecfa2f0 nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=d4349ee06606a931f5301be5a3944c162b70b00a4ad702de94d8069b4b67485e nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -23918,7 +24035,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.22 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.23 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -23948,7 +24065,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.22 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.23 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -24032,7 +24149,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.22 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.23 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -26279,7 +26396,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=d1c6ae9cecb7e7153198a95a5832d842b37b1f7b5e80d0607829295983c4622c nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=015180a83ff0be5fc51d460c0d18fb3a08d1997033b1dd7dc6e03b71278fe653 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -26472,7 +26589,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.22')
+        self.assertEqual(m.rc.VERSION, '1.4.23')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)
@@ -26824,7 +26941,7 @@ class Labels(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_watch.py mode=644 sha256=a30c9a926e58cbed9f1f15a45120d5b8d4a7e0768888f1bc20987d59ced0690a nl=1
+@@@@ FILE tests/py/test_watch.py mode=644 sha256=1ca4953e8371d7a93325eaad0949e9bd59de6f57b9f0f735d92dafbb0e2fe82a nl=1
 """Inbound watcher against a temp sqlite db shaped like chat.db."""
 import json
 import os
@@ -27180,6 +27297,58 @@ class Failures(Base):
         self.now += 30
         self.w.tick()
         self.assertEqual(len(self.poster.calls), 3, 'no duplicates')
+
+    def test_authorization_denied_retries_then_recovers(self):
+        # v1.4.23: one denied open is not yet "Full Disk Access is missing". A few probes with
+        # backoff come first. If those clear, nothing is posted. If they do not, one fda_missing
+        # is posted, and the next open that works posts recovered.
+        slept = []
+        self.w.sleeper = lambda s: slept.append(s)
+        orig = self.m.watch.rc.open_chat_db
+        state = {'n': 0}
+
+        def flaky(path=None):
+            state['n'] += 1
+            if state['n'] < 3:
+                raise self.m.rc.ChatDbUnavailable('authorization denied')
+            return orig(path)
+
+        self.m.watch.rc.open_chat_db = flaky
+        try:
+            self.w.tick()
+        finally:
+            self.m.watch.rc.open_chat_db = orig
+        self.assertEqual(slept, [0.5, 1.0])
+        self.assertEqual(self.poster.types(), [], 'a denial that clears is not posted')
+        self.assertEqual(read_log().count('chat_db_unavailable'), 0)
+        self.assertIn('"chat_db_ok"', read_log())
+
+        def denied(path=None):
+            raise self.m.rc.ChatDbUnavailable('authorization denied')
+
+        self.m.watch.rc.open_chat_db = denied
+        slept[:] = []
+        try:
+            self.w.tick()
+        finally:
+            self.m.watch.rc.open_chat_db = orig
+        self.assertEqual(slept, [0.5, 1.0, 2.0])
+        self.assertEqual([p['status'] for _, p, _ in self.poster.calls], ['fda_missing'])
+        self.assertEqual(read_log().count('chat_db_unavailable'), 1)
+        self.w.tick()
+        self.assertEqual([p['status'] for _, p, _ in self.poster.calls], ['fda_missing', 'recovered'])
+
+        def busy(path=None):
+            raise self.m.rc.ChatDbBusy('database is locked')
+
+        self.m.watch.rc.open_chat_db = busy
+        slept[:] = []
+        try:
+            self.w.tick()
+        finally:
+            self.m.watch.rc.open_chat_db = orig
+        self.assertEqual(slept, [], 'a lock is not retried and is not an FDA problem')
+        self.assertEqual([p['status'] for _, p, _ in self.poster.calls], ['fda_missing', 'recovered'])
 
     def test_chat_db_unavailable_reports_fda_once(self):
         os.unlink(self.db.path)
