@@ -9,7 +9,7 @@ const BG = fs.readFileSync(path.join(__dirname, '../../extension/background.js')
 const CONV = '1111-2222';
 
 function env(opts = {}) {
-  const store = {}, listeners = [], nativeCalls = [], badge = {};
+  const store = {}, listeners = [], nativeCalls = [], badge = {}, scripts = [], reloads = [];
   let hostConfig = Object.assign({ ok: true, version: '1.3.2', paused: false, dryRun: true,
     relayConversationId: CONV, contacts: [{ name: 'Test Contact', label: 'Test', handle: '15555550123' }] }, opts.config || {});
   const local = {
@@ -30,7 +30,19 @@ function env(opts = {}) {
     storage: { local, session: { async get() { return {}; }, async set() {} }, onChanged: { addListener() {} } },
     action: { async setBadgeText(o) { badge.text = o.text; }, async setBadgeBackgroundColor() {} },
     alarms: { create() {}, onAlarm: { addListener() {} } },
-    tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} } },
+    tabs: {
+      onUpdated: { addListener() {} }, onRemoved: { addListener() {} },
+      query: async () => (opts.tabList || []),
+      reload: async id => { reloads.push(id); },
+      sendMessage: async () => null,
+    },
+    scripting: opts.noScripting ? undefined : {
+      executeScript: async req => {
+        if (opts.scriptFail) throw new Error('inject failed');
+        scripts.push(req);
+        return [];
+      },
+    },
   };
   const ctx = { chrome, console: { log() {}, warn() {} } };
   vm.runInNewContext(BG, ctx);
@@ -42,7 +54,7 @@ function env(opts = {}) {
   const ask = msg => new Promise(res => listeners.forEach(f => f(msg, { id: 'ext' }, res)));
   const sends = () => nativeCalls.filter(c => c.msg.type === 'send').map(c => c.msg);
   const signal = sig => listeners.forEach(f => f({ type: 'relay-signal', signal: sig }, { id: 'ext', tab: { id: 1 } }, () => {}));
-  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
+  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, scripts, reloads, setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
 }
 let passed = 0, failed = 0;
 async function test(name, fn) { try { await fn(); passed++; console.log('PASS', name); } catch (e) { failed++; console.log('FAIL', name, '\n   ', e.stack.split('\n').slice(0, 2).join(' | ')); } }
@@ -92,7 +104,9 @@ async function test(name, fn) { try { await fn(); passed++; console.log('PASS', 
     e.send({ text: '[no text]' });
     await sleep(100);
     assert.strictEqual(e.sends().length, 0);
-    assert.deepStrictEqual(e.store.events.map(i => i.detail), ['direction score 2 < 3', 'stale item', 'empty text']);
+    assert.deepStrictEqual(e.store.events.map(i => i.detail).sort(), ['direction score 2 < 3', 'empty text', 'stale item']);
+    const skipped = e.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'skipped').map(c => c.msg.reason).sort();
+    assert.deepStrictEqual(skipped, ['empty', 'other', 'other']);
     assert.ok(!JSON.stringify(e.store).includes('9999-1111'), 'other conversation id not stored');
   });
 
@@ -207,6 +221,74 @@ async function test(name, fn) { try { await fn(); passed++; console.log('PASS', 
     assert.strictEqual(ev.status, 'refused');
     assert.ok(/too long to relay/.test(ev.detail));
     assert.strictEqual(ev.textLength, 5000);
+  });
+
+  await test('quoteLabel rides on the send; a newline label is dropped and never stored', async () => {
+    const e = env();
+    e.send({ text: 'sounds good', quotedText: 'picnic at the lake', quoteLabel: '  Sam  ', key: 'ql1' });
+    e.send({ text: 'again please', quotedText: 'other body here', quoteLabel: 'Sam\nJordan', key: 'ql2' });
+    e.send({ text: 'third one ok', quotedText: 'third body here', quoteLabel: 'S'.repeat(100), key: 'ql3' });
+    await sleep(100);
+    assert.strictEqual(e.sends()[0].quoteLabel, 'Sam');
+    assert.ok(!('quoteLabel' in e.sends()[1]), 'a newline is not a label');
+    assert.strictEqual(e.sends()[2].quoteLabel.length, 80);
+    const dump = JSON.stringify(e.store);
+    assert.ok(!dump.includes('picnic') && !dump.includes('Sam') && !dump.includes('sounds good'));
+  });
+
+  await test('an unknown relay-chat reply that quotes something posts one skip reason', async () => {
+    const e = env();
+    e.send({ direction: 'unknown', score: 0, quotedText: 'picnic at the lake', youSent: true, text: 'ok sure', key: 'unk1' });
+    e.send({ direction: 'unknown', score: 0, text: 'plain bubble', key: 'unk2' });
+    await sleep(80);
+    assert.strictEqual(e.sends().length, 0);
+    const skipped = e.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'skipped');
+    assert.strictEqual(skipped.length, 1);
+    assert.strictEqual(skipped[0].msg.reason, 'other');
+    assert.strictEqual(e.store.events.length, 1);
+    assert.strictEqual(e.store.events[0].detail, 'direction unknown');
+    assert.ok(!JSON.stringify(e.store).includes('picnic') && !JSON.stringify(e.store).includes('ok sure'));
+  });
+
+  await test('an unacked signal asks the host once and ignores another chat', async () => {
+    const e = env();
+    e.signal({ status: 'unacked', conversationId: CONV, id: '3' });
+    e.signal({ status: 'unacked', conversationId: CONV, id: '3' });
+    e.signal({ status: 'unacked', conversationId: '9999-0000', id: '9' });
+    await sleep(80);
+    const u = e.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'unacked');
+    assert.strictEqual(u.length, 1);
+    assert.deepStrictEqual(Object.keys(u[0].msg).sort(), ['status', 'type']);
+    assert.strictEqual(e.store.events.filter(x => x.detail === 'no host ack').length, 1);
+    assert.ok(!JSON.stringify(e.store).includes('9999-0000'));
+  });
+
+  await test('open x.com tabs get content.js in every frame; a failed inject reloads a chat once', async () => {
+    const e = env({ tabList: [
+      { id: 7, url: 'https://x.com/i/chat/111-222' },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await e.ctx.ensureContentScripts();
+    assert.strictEqual(e.scripts.length, 2);
+    assert.strictEqual(e.scripts[0].target.tabId, 7);
+    assert.strictEqual(e.scripts[0].target.allFrames, true);
+    assert.strictEqual(e.scripts[0].files.length, 1);
+    assert.strictEqual(e.scripts[0].files[0], 'content.js');
+    assert.strictEqual(e.reloads.length, 0);
+    await e.ctx.ensureContentScripts();
+    assert.strictEqual(e.scripts.length, 4, 'a later pass injects again; the page guard is a no-op');
+    assert.strictEqual(e.reloads.length, 0);
+
+    const bad = env({ scriptFail: true, tabList: [
+      { id: 7, url: 'https://x.com/i/chat/abc' },
+      { id: 9, url: 'https://x.com/messages/1' },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await bad.ctx.ensureContentScripts();
+    assert.deepStrictEqual(bad.reloads.slice().sort(), [7, 9]);
+    await bad.ctx.ensureContentScripts();
+    assert.deepStrictEqual(bad.reloads.slice().sort(), [7, 9], 'each chat tab reloads once');
+    assert.strictEqual(bad.scripts.length, 0);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

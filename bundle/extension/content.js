@@ -100,6 +100,7 @@
     maxNewPerBatch: 3,         // a batch bigger than this = history/initial load
     dupWindowMs: 3000,
     freshMs: 120000,           // a bubble with a time[datetime] older than this is history, not new
+    ackMs: 10000,              // v1.4.24: a typed relay-chat send with no host ack posts a warning
     emptyTextRetries: 3,
     emptyRetryDelayMs: 400,
     urlPollMs: 1000,
@@ -696,6 +697,7 @@
       // it like a testid so an own jumbo-emoji row is still outbound. The class is what X sets;
       // computed style covers an inline style with no class. data-send-status is "sent" on
       // received rows too and is not a direction signal.
+      let rowEnd = false, rowStart = false;
       {
         const rs = style(entry);
         const jc = (rs && rs.justifyContent) || '';
@@ -704,19 +706,43 @@
         const cls = entry.classList;
         const clsEnd = !!(cls && cls.contains('justify-end'));
         const clsStart = !!(cls && cls.contains('justify-start'));
-        let rowEnd = false, rowStart = false;
         if (clsEnd !== clsStart) { rowEnd = clsEnd; rowStart = clsStart; }
         else if (!clsEnd) { rowEnd = endish(jc); rowStart = startish(jc); }
         if (rowEnd && !rowStart) { score += W.testId; signals.push('row:+' + W.testId + '(justify-end)'); }
         else if (rowStart && !rowEnd) { score -= W.testId; signals.push('row:-' + W.testId + '(justify-start)'); }
       }
 
+      // v1.4.24: X's screen-reader label on the owner's row is a hidden span whose whole text is
+      // "You sent". A text reply often has no justify-end class, and a background tab has no rects,
+      // so the score stayed 0 and the service worker dropped it with no notice. A bare "You" is not
+      // enough. A justify-start row stays inbound.
+      let youSent = false;
+      if (!rowStart) {
+        walkElements(entry, el => {
+          if (youSent || !isHiddenEl(el)) return;
+          const t = normSpaces(el.textContent || '').replace(/\s+/g, ' ').trim();
+          if (/^you sent$/i.test(t)) youSent = true;
+        });
+      }
+      if (youSent) {
+        score += W.testId;
+        if (score < W.testId) score = W.testId;
+        signals.push('sr:+' + W.testId + '(you sent)');
+      }
+
+      const quotedText = entryQuote(entry);
+      // A native-reply preview on a row that is not clearly someone else's (justify-start) is the
+      // owner's reply. Hidden screen-reader text stays out of quotedText (visibleText skips it).
+      if (quotedText && !rowStart && score > -cfg.decisionThreshold && score < W.testId) {
+        score = W.testId;
+        signals.push('preview:+' + W.testId);
+      }
+
       const direction = score >= cfg.decisionThreshold ? 'outbound' : score <= -cfg.decisionThreshold ? 'inbound' : 'unknown';
       signals.push('score:' + score);
       const key = conv + '|id:uuid=' + uuid;
-      const quotedText = entryQuote(entry);
       if (quotedText) signals.push('quote:' + quotedText.length);
-      return { conv, uuid, text, quotedText, timeIso: entryTimeIso(entry), key, direction, score, signals, textEl, bubbleEl: bubble && bubble.el, ref };
+      return { conv, uuid, text, quotedText, timeIso: entryTimeIso(entry), key, direction, score, signals, textEl, bubbleEl: bubble && bubble.el, ref, youSent };
     }
 
     // ---------- baseline / flush ----------
@@ -857,6 +883,115 @@
       }
     }
 
+    // v1.4.24: a quoted body with no "Name:" prefix. The sender is the nearest preceding
+    // "💬 name · time" header, and only when every match names that one person.
+    const HEADER_LINE_RE = /^\s*\u{1F4AC}\s*(.+?)\s*\u00b7\s*\d{1,2}:\d{2}\s*[AaPp]\.?[Mm]\.?\s*$/u;
+    function normBody(s) {
+      return normSpaces(s).replace(/\s+/g, ' ').trim().toLowerCase().replace(/(?:\u2026|\.\.\.)\s*$/, '').replace(/\s+$/, '');
+    }
+    function headerLabelOf(entry) {
+      const m = HEADER_LINE_RE.exec(normSpaces(entryText(entry).text).replace(/\s+/g, ' ').trim());
+      if (!m) return '';
+      return m[1].replace(/[\r\n]/g, '').trim().slice(0, 80);
+    }
+    function headerBefore(entries, index) {
+      for (let i = index - 1; i >= 0; i--) {
+        const lab = headerLabelOf(entries[i]);
+        if (lab) return lab;
+      }
+      return '';
+    }
+    function referencedUuid(entry) {
+      const own = String(uuidOf(entry) || '').toLowerCase();
+      const textEl = bodyEl(entry);
+      let other = '';
+      const consider = el => {
+        if (!el || other || (textEl && el !== textEl && deepContains(textEl, el))) return;
+        for (const at of ['data-testid', 'href', 'data-message-id', 'data-reply-to', 'aria-describedby']) {
+          const v = el.getAttribute && el.getAttribute(at);
+          const m = v && UUID_ANY_RE.exec(v);
+          if (m && m[1].toLowerCase() !== own) { other = m[1].toLowerCase(); return; }
+        }
+      };
+      consider(entry);   // X puts the replied-to id on the message row itself; walkElements starts at the children
+      walkElements(entry, consider);
+      return other;
+    }
+    function quoteMatchKeys(quoted) {
+      const n = normBody(quoted);
+      const keys = [];
+      if (n.length >= 4) keys.push(n);
+      const sp = n.indexOf(' ');
+      if (sp > 0 && sp <= 40 && n.length - sp - 1 >= 4) keys.push(n.slice(sp + 1));
+      return keys;
+    }
+    function matchingLabels(entries, idx, keys, exact) {
+      const labels = [];
+      for (let i = idx - 1; i >= 0; i--) {
+        let a;
+        try { a = analyze(entries[i]); } catch (err) { continue; }
+        if (!a || a.direction === 'outbound') continue;
+        const body = normBody(a.text);
+        if (body.length < 4 || headerLabelOf(entries[i])) continue;
+        const hit = exact ? keys.some(k => body === k) : keys.some(k => k.length >= 12 && body.indexOf(k) === 0);
+        if (!hit) continue;
+        labels.push(headerBefore(entries, i));
+      }
+      return labels;
+    }
+    function oneLabel(labels) {
+      const uniq = [];
+      labels.forEach(l => { if (uniq.indexOf(l) < 0) uniq.push(l); });
+      if (uniq.length === 1 && uniq[0]) return uniq[0];
+      return '';
+    }
+    function quoteLabelFrom(entry, quoted) {
+      const keys = quoteMatchKeys(quoted);
+      const all = allEntries();
+      const idx = all.indexOf(entry);
+      if (idx < 0) return '';
+      const ref = referencedUuid(entry);
+      if (ref) {
+        const j = all.findIndex(e => e !== entry && String(uuidOf(e) || '').toLowerCase() === ref);
+        if (j < 0) return '';
+        return headerBefore(all, j);
+      }
+      if (!keys.length) return '';
+      const exactLabels = matchingLabels(all, idx, keys, true);
+      const exact = oneLabel(exactLabels);
+      if (exact) return exact;
+      if (exactLabels.length) return '';   // matches disagreed, or none had a header
+      const longs = keys.filter(k => k.length >= 12);
+      if (!longs.length) return '';
+      return oneLabel(matchingLabels(all, idx, longs, false));
+    }
+
+    // v1.4.24: every typed send in the relay chat must get a host ack. Otherwise the background
+    // posts one fixed warning. History and other chats never arm this.
+    let ackTimer = null, ackGen = 0;
+    function relayChatHere() {
+      const st = getState() || {};
+      const conv = conversationId();
+      const filter = normalizeFilter(st.conversationFilter);
+      return !!(conv && filter && filter === conv);
+    }
+    function armUnacked() {
+      if (!relayChatHere()) return;
+      const gen = ++ackGen;
+      if (ackTimer) win.clearTimeout(ackTimer);
+      const ms = Number(cfg.ackMs) > 0 ? Number(cfg.ackMs) : 10000;
+      ackTimer = win.setTimeout(() => {
+        if (gen !== ackGen) return;
+        ackTimer = null;
+        try { onStatus({ status: 'unacked', conversationId: conversationId(), id: String(gen) }); } catch (e) { /* ignore */ }
+      }, ms);
+    }
+    function noteHostAck(hold) {
+      if (hold) { armUnacked(); return; }
+      ackGen++;
+      if (ackTimer) { win.clearTimeout(ackTimer); ackTimer = null; }
+    }
+
     function flush() { try { flushInner(); } finally { flushCache = null; } }
     function flushInner() {
       const roots = Array.from(pending);
@@ -965,6 +1100,14 @@
         const typedBad = a.direction === 'outbound' ? typedMismatch(rawText) : false;
         const item = { ts, conversationId: conv, direction: a.direction, text: a.text, signals: a.signals, score: a.score, key: a.key, source };
         if (a.quotedText) item.quotedText = a.quotedText;
+        if (a.youSent) item.youSent = true;
+        if (a.direction === 'outbound' && a.quotedText) {
+          try {
+            const lab = quoteLabelFrom(e, a.quotedText);
+            if (lab) item.quoteLabel = lab;
+          } catch (err) { /* a missed label asks "Who is this for?" rather than guessing */ }
+        }
+        if (a.direction === 'outbound' && !UI_TAG_RE.test(a.text || '')) armUnacked();
         if (typedBad) item.typedMismatch = true;      // v1.4.14: what we read is not what he typed: never sent
         if (a.direction !== 'inbound') { try { item.quoteProbe = structureOf(e); } catch (err) { /* diagnostics only */ } }
         if (cardUrls.length) item.cards = cardUrls.length;
@@ -989,6 +1132,7 @@
         const t = realNow();
         typed = typed.filter(x => t - x.at < 30000).slice(-4);
         typed.push({ n: typedNorm(v), at: t });
+        armUnacked();   // v1.4.24: even if this bubble is never emitted, the owner hears why
       } catch (e) { /* never block his send */ }
     }
     function typedMismatch(text) {
@@ -1576,6 +1720,7 @@
       },
       stop() {
         if (observer) observer.disconnect();
+        noteHostAck(false);
         [urlTimer, shadowTimer].forEach(t => t && win.clearInterval(t));
         [flushTimer, scanTimer].forEach(t => t && win.clearTimeout(t));
         observer = null; urlTimer = null; flushTimer = null; shadowTimer = null; scanTimer = null;
@@ -1592,6 +1737,7 @@
       uiReact: (uuid, emoji, opt) => uiSerial(() => uiReactNow(uuid, emoji, opt)),   // v1.4.6
       uiType: text => uiSerial(() => uiTypeNow(text)),
       uiAwaitUndo: (uuid, ms) => uiAwaitUndoNow(uuid, ms),
+      noteHostAck,                     // v1.4.24: background ack cancels the unacked warning
       uiClearPrompt: clearPrompt,
       uiMediaInfo, uiMediaChunk, uiMediaRelease,  // v1.4.6 attachments
       _mediaOf: mediaOf,
@@ -1770,6 +1916,10 @@
     if (msg && msg.type === 'relay-structure') {          // v1.4.3 popup button; text-free
       if (!mainDetector || !mainDetector.hasEntries()) return false;
       try { sendResponse({ ok: true, from: role, structure: mainDetector.pageStructure() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
+      return false;
+    }
+    if (msg && msg.type === 'relay-ack') {                // v1.4.24: the host answered this send
+      if (mainDetector) mainDetector.noteHostAck(!!msg.hold);
       return false;
     }
     if (msg && msg.type === 'relay-ui') {                 // v1.4.6: background asks for one UI action

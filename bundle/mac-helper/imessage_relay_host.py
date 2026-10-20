@@ -1,13 +1,13 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.23.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.24.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
 
   {"type":"get_config"}  -> {"ok":true,"version","paused","dryRun","relayConversationId",
                              "contacts":[{name,label,handle}],"ownerXHandle","senderXHandle","pendingSelfTest"}
-  {"type":"send","text","quotedText"?,"conversationId","ts"}
+  {"type":"send","text","quotedText"?,"quoteLabel"?,"conversationId","ts"}
                          -> {"ok":bool,"dryRun":bool,"contact":label,"routedBy":"quote"|"prefix"|"recent",
                              "sent"?,"delivered"?,"skipped"?,"error"?,"needsTarget"?}
   {"type":"selftest","id"} -> runs a self-test requested by `relayctl selftest`
@@ -1307,7 +1307,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if not cfg['contacts'] and not cfg['relayAll']:
         return refuse('no contacts in config', textLength=len(text))
 
-    route = rc.route_reply(text, quoted[:500], cfg, rc.load_roster(), now())
+    qlabel = _quote_label(msg)
+    route = rc.route_reply(text, quoted[:500], cfg, rc.load_roster(), now(), quote_label=qlabel)
     probe = msg.get('quoteProbe')
     if isinstance(probe, str) and probe:
         # v1.4.3 quote diagnostics: text-free page structure around the owner's bubble (tags, roles,
@@ -1315,6 +1316,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         rc.log_event('quote_probe', quoteSeen=bool(quoted.strip()), quoteResolved=route.get('by') == 'quote',
                      routedBy=route.get('by') or '', needsTarget=bool(route.get('needsTarget')),
                      confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe),
+                     quoteLabelSeen=bool(qlabel),
                      cards=msg.get('cards') if isinstance(msg.get('cards'), int) and 0 < msg.get('cards') <= 5 else 0)
     confirmed = bool(msg.get('confirmed'))
     hint = msg.get('handle')
@@ -1716,6 +1718,18 @@ def handle_test(msg, cfg, runner, sleeper, now, poster):
                                 'extVersion': msg.get('extVersion')}, cfg, runner, sleeper, now, poster)
 
 
+def _quote_label(msg):
+    """v1.4.24: a sender label the extension read off the 💬 header above the quoted bubble. Label only."""
+    ql = msg.get('quoteLabel') if isinstance(msg, dict) else ''
+    if not isinstance(ql, str) or '\n' in ql or '\r' in ql:
+        return ''
+    return re.sub(r'\s+', ' ', ql).strip()[:80]
+
+
+# v1.4.24: the extension saw the owner's send and the host never answered. Exact line, via status detail.
+UNACKED_LINE = '\u26a0\ufe0f Didn\u2019t send. Reload X Chat and retype.'
+
+
 # v1.4.21: the extension saw a reply and will not send it. Fixed sentences, never the message.
 _SKIP_REASON = {
     'empty': 'There was nothing to send.',
@@ -1729,6 +1743,10 @@ _SKIP_REASON = {
 def handle_signal(msg, cfg, now, poster):
     """A browser-side condition (item 6) the host turns into one body-free webhook. No message text."""
     status = str(msg.get('status') or '')
+    if status == 'unacked':
+        rc.log_event('signal', status='unacked')
+        notify(cfg, poster, {'type': 'status', 'detail': UNACKED_LINE, 'at': rc.iso_utc(now())})
+        return {'ok': True}
     if status == 'skipped':
         raw = re.sub(r'[^a-z_]', '', str(msg.get('reason') or '').lower())[:40]
         reason = raw if raw in _SKIP_REASON else 'other'

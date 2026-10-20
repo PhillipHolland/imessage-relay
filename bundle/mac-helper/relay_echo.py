@@ -188,30 +188,18 @@ def record_quote_keys(text, route, at=None, path=None):
     rc.write_json_atomic(p, {'entries': items[-1000:]}, mode=0o600)
 
 
-def lookup_quote(quoted, cfg=None, at=None, path=None):
-    """Routes (handles / group keys) whose recorded quiet line matches the quote. The quote may start with
-    the bot account's name; that is dropped first, as in parse_quote."""
-    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()
-    sender = ((cfg or {}).get('senderXHandle') or '').lstrip('@')
-    for drop in ('@' + sender, sender):
-        if sender and q.lower().startswith(drop.lower()):
-            q = q[len(drop):].lstrip(' \u00b7-')
-            break
-    norm = _quote_norm(q)
+def _qall(norm):
+    return hmac.new(_echo_secret(), ('qall:' + norm).encode('utf-8'), hashlib.sha256).hexdigest()[:32]
+
+
+def _lookup_recorded(norm, entries):
+    """Routes whose stored hashes match norm. Full text wins; else the longest shared prefix."""
     if len(norm) < 4:
         return set()
-    full = hmac.new(_echo_secret(), ('qall:' + norm).encode('utf-8'), hashlib.sha256).hexdigest()[:32]
-    pref = set()
-    for n in QUOTE_PREFIXES:
-        if len(norm) >= n:
-            pref.add(hmac.new(_echo_secret(), ('q%d:' % n + norm[:n]).encode('utf-8'), hashlib.sha256).hexdigest()[:32])
-    at = time.time() if at is None else at
-    entries = [e for e in (rc.read_json(path or rc.QUOTE_KEYS_PATH, {}) or {}).get('entries', [])
-               if isinstance(e, dict) and at - float(e.get('at', 0)) < rc.QUOTE_KEYS_TTL_S]
+    full = _qall(norm)
     exact = {e['r'] for e in entries if full in set(e.get('k') or [])}
     if exact:
         return exact
-    # a truncated preview: the LONGEST shared prefix decides
     for n in sorted(QUOTE_PREFIXES, reverse=True):
         if len(norm) < n:
             continue
@@ -219,4 +207,31 @@ def lookup_quote(quoted, cfg=None, at=None, path=None):
         hits = {e['r'] for e in entries if h in set(e.get('k') or [])}
         if hits:
             return hits
+    return set()
+
+
+def lookup_quote(quoted, cfg=None, at=None, path=None):
+    """Routes (handles / group keys) whose recorded relayed body matches the quote. The quote may start
+    with the bot account's name; that is dropped first, as in parse_quote. A miss (not an ambiguous hit)
+    also tries the quote with its first short token removed, and only an exact full-text hit on that
+    remainder counts. Several routes, or two variants that disagree, stay a set: the caller does not guess."""
+    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()
+    sender = ((cfg or {}).get('senderXHandle') or '').lstrip('@')
+    for drop in ('@' + sender, sender):
+        if sender and q.lower().startswith(drop.lower()):
+            q = q[len(drop):].lstrip(' \u00b7-')
+            break
+    norm = _quote_norm(q)
+    at = time.time() if at is None else at
+    entries = [e for e in (rc.read_json(path or rc.QUOTE_KEYS_PATH, {}) or {}).get('entries', [])
+               if isinstance(e, dict) and at - float(e.get('at', 0)) < rc.QUOTE_KEYS_TTL_S]
+    primary = _lookup_recorded(norm, entries)
+    if primary:
+        return primary
+    parts = norm.split(' ', 1)
+    if len(parts) == 2 and 1 <= len(parts[0]) <= 40 and len(parts[1]) >= 4:
+        # X's reply preview leads with a chrome word ("iMessage") or the sender handle. Only the
+        # remainder's full hash counts, so a truncated preview cannot attach to the wrong person.
+        full = _qall(parts[1])
+        return {e['r'] for e in entries if full in set(e.get('k') or [])}
     return set()

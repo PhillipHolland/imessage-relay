@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.23, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.24, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=d8e86a198b12f7b05b6f8d95edd10b0da7137ea669989509cdd6f7fb427604f6 nl=1
-# iMessage Relay v1.4.23
+@@@@ FILE README.md mode=644 sha256=03dde958413cfb6ca5b63117122bc62351343605d7f1a193016c8aa80fd6f0e8 nl=1
+# iMessage Relay v1.4.24
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -30,7 +30,7 @@ iMessage from an opted-in contact
   -> bot posts "Alex: running late" into ONE relay chat (sender <-> you)
 Your reply in the relay chat (x.com in Chrome)
   -> extension sees your own bubble -> native host picks the contact -> Messages.app -> iMessage
-  -> ✅ appears on your own X message (v1.4.6; a text line only if something fails)
+  -> ✅ appears on your own X message (v1.4.6; the → line is posted only if that reaction does not land)
 ```
 v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bot access to the Mac:
 - The Mac encrypts each incoming 1:1 photo with a fresh random AES-256-GCM key and uploads only the
@@ -41,6 +41,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.24 (Chrome extension 1.4.24 + Mac helper; `relay_post.py` does not change): a native Reply in the relay chat gets a send or a visible reason. Open x.com tabs are injected again after the extension reloads, so Cmd+R is no longer required for the content script to attach. A quote that is only the message body (no "Name:" prefix) goes to the sender that body was relayed from, or to the one name in the 💬 header above that bubble. Two matches still ask who it is for. If the Mac does not answer a typed send within 10 seconds, the chat says to reload X Chat and retype. A ✅ on the sent message is the confirmation; `→ name ✓✓` is posted only when that reaction does not land. A delivery failure still warns. Reload the extension (it asks for a scripting permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.23 (Mac helper only; the extension stays 1.4.21, so no reload; `relay_post.py` does not change): an upgrade that already runs the watcher applet restarts it in place and does not unload the LaunchAgent. Unloading it could hang, and killing that unload made macOS delete the app's Full Disk Access grant, so the watcher came back unable to read chat.db. A denied open is retried a few times before the chat is told Full Disk Access is missing, and a later success says watching is back. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.22 (Mac helper + routine relay_post.py; the extension stays 1.4.21, so no reload): chat lines are shorter. The conversation header stays `💬 name · time`. Someone who is not a contact reads `⚠️ name · not a contact:`. Spam reads `🚫 name · spam:`. Promo and receipt have no icon. A confirmation is `→ name ✓` or `→ name ✓✓`. A held digest is `While you were away · N texts` and still uses • under each name. `/status` says `replies to name`. Health lines are one sentence; the spam count still starts with 🚫. `/test` is unchanged. **Update relay_post.py on the bot**, then re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.21 (Chrome extension + Mac helper): a lone emoji sent with X Chat's Reply on a contact's text reaches that contact. X draws that emoji as a large glyph, not as message text, so it used to be ignored with no warning. The usual 5 second undo still applies. A reply the relay sees and will not send posts a ⚠️ reason in the chat. A short word, digits, or an email start within 10 minutes of a prompt is still only a prompt answer. Reload the extension, then press Cmd+R on the x.com chat tab. Re-run `./install.sh` (the watcher app is not rebuilt). `relay_post.py` does not change.
@@ -187,7 +188,9 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.23)
+## Limits (v1.4.24)
+- A native Reply that quotes only the message body goes to that sender when one person sent it, or when the 💬 header above that bubble names one person. Two matches ask who it is for.
+- A typed reply that gets no answer from the Mac within 10 seconds says to reload X Chat and retype. A ✅ on the sent message is the confirmation. `→ name ✓✓` is posted only when that reaction does not land. A failed delivery still warns.
 - A lone emoji used as a native Reply to a contact's text is sent to that contact. An emoji that does not quote a contact, within 10 minutes of a prompt, is still only a prompt answer.
 - `/snooze` holds inbound texts the same way quiet hours do, then delivers one digest. A command can set at most 24 hours; a hand-edited time more than 36 hours ahead is ignored. `/pause` does not keep texts.
 - "Chrome hasn't checked in" means the extension has not talked to the Mac. Closing the chat tab while Chrome stays open does not raise it.
@@ -1259,7 +1262,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=ef3e85076f714d850d78a9ba26c47f5f4e740a6c545d7ba343c10a1ee98d2c4b nl=1
+@@@@ FILE extension/background.js mode=644 sha256=6d660bb6a089656dfd74800c28d36f1df75f542171db2d220927687d4b173d14 nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1470,12 +1473,14 @@ async function isDuplicate(key) {
 }
 
 // A reply the content script refused to forward (over the host length limit): owner notice, no host call.
-async function handleRefusal(item) {
-  if (await isDuplicate(item.key)) return;
+async function handleRefusal(item, src) {
+  if (await isDuplicate(item.key)) { await ackTab(src); return; }
   await addEvent({
     kind: 'reply', key: item.key, contactName: '', textLength: item.textLength || 0,
     status: 'refused', detail: 'reply too long to relay (' + (item.textLength || 0) + ' chars, limit ' + (item.limit || 4000) + ') — nothing sent, shorten it',
   });
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: 'other' }); } catch (e) { /* host down */ }
+  await ackTab(src);
 }
 
 let pendingGuessMem = null;   // fallback store when chrome.storage.session is unavailable
@@ -1509,6 +1514,7 @@ async function handleCancel(item, g) {
   }
   await addEvent({ kind: 'reply', key: item.key, contactName: g.label || '', status: 'skipped', detail: 'cancelled' });
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_cancelled', label: g.label || '' }); } catch (e) { /* host may be down */ }
+  await ackTab(uiSrc);
 }
 
 function pickOption(options, t) {
@@ -1550,6 +1556,7 @@ async function handleYes(item, nameArg, src) {
   const patch = { status, detail };
   if (res && res.contact) { patch.contactName = String(res.contact).slice(0, 40); patch.routedBy = String(res.routedBy || ''); }
   await updateEvent(item.key, patch);
+  if (res) await ackTab(useSrc);
   if (res && res.ui) await applyUi(res, useSrc, seenAt);
   if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
 }
@@ -1570,6 +1577,12 @@ async function tabUi(src, msg) {
   const opts = typeof src.frameId === 'number' ? { frameId: src.frameId } : undefined;
   try { return await withTimeout(chrome.tabs.sendMessage(src.tabId, Object.assign({ type: 'relay-ui' }, msg), opts), UI_TIMEOUT_MS); }
   catch (e) { return null; }
+}
+// v1.4.24: tell the tab the host has this send (hold resets the 10s warning; otherwise it cancels).
+async function ackTab(src, hold) {
+  if (!src || typeof src.tabId !== 'number' || !chrome.tabs || !chrome.tabs.sendMessage) return;
+  const opts = typeof src.frameId === 'number' ? { frameId: src.frameId } : undefined;
+  try { await chrome.tabs.sendMessage(src.tabId, { type: 'relay-ack', hold: !!hold }, opts); } catch (e) { /* tab gone */ }
 }
 async function hostAck(ack) { try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({ type: 'ui_ack' }, ack)); } catch (e) { /* host down */ } }
 async function applyUi(res, src, seenAt) {
@@ -1688,7 +1701,7 @@ function testSummary(steps) {
 
 // The owner typed "/test" in the relay chat. Runs even while paused or with no contacts (it never
 // sends a reply). Every step is time-boxed so a missing piece is reported as failed, not a hang.
-async function handleTest(item, sendArg) {
+async function handleTest(item, sendArg, src) {
   const cfg = await getConfig(true);
   if (cfg.ok && (!cfg.relayConversationId || item.conversationId !== cfg.relayConversationId)) return;   // not the relay chat
   if (!(Number(item.score) >= MIN_NATIVE_SCORE)) return;
@@ -1713,16 +1726,19 @@ async function handleTest(item, sendArg) {
   }
   if (!res || res.command !== 'test') {
     await updateEvent(item.key, { status: 'test-failed', detail: 'host refused /test: ' + String((res && res.error) || 'no response').slice(0, 120) });
+    if (res) await ackTab(src);
     return;
   }
   if (!res.webhookAccepted) {
     await updateEvent(item.key, { status: 'test-failed', detail: testSummary(res.steps) + ' (nothing could reach X Chat)' });
+    await ackTab(src);
     return;
   }
   await setPendingTest({ testId: String(res.testId || testId), tag: String(res.tag || '').slice(0, 6), key: item.key,
                          conversationId: item.conversationId, at: Date.now() });
   try { if (chrome.alarms) chrome.alarms.create('relay-test-expiry', { delayInMinutes: TEST_ROUTINE_WINDOW_MS / 60000 }); } catch (e) { /* tests */ }
   await updateEvent(item.key, { status: 'test-waiting', detail: testSummary(res.steps) + '; waiting for the routine report' });
+  await ackTab(src);
 }
 
 // A bubble in the relay chat that is NOT the owner's: is it the routine's report for the pending test?
@@ -1751,11 +1767,15 @@ async function handleItem(item, src) {
   if (src) uiSrc = src;
   const seenAt = Date.now();
   if (UI_TAG_RE.test(String(item.text || ''))) return;   // v1.4.6: a prompt the relay typed itself, never a reply
-  if (item.refuse) { await handleRefusal(item); return; }
-  if (item.direction !== 'outbound') { await maybeTestReport(item); return; }
+  if (item.refuse) { await handleRefusal(item, src); return; }
+  if (item.direction !== 'outbound') {
+    const reported = await maybeTestReport(item);
+    if (!reported && item.direction === 'unknown') await noticeUnknown(item, src);
+    return;
+  }
   const tm = TEST_RE.exec(String(item.text || ''));
   if (tm) {                                   // "/test [send]": end-to-end check, never a reply (v1.3.8)
-    await handleTest(item, tm[1]);
+    await handleTest(item, tm[1], src);
     return;
   }
   if (item.typedMismatch) {                   // v1.4.14: the bubble read back differs from what he typed: never send it
@@ -1764,6 +1784,7 @@ async function handleItem(item, src) {
     const xu = uuidFromKey(item.key);
     if (xu && src) await tabUi(src, { action: 'react', uuid: xu, emoji: '\u26A0\uFE0F' });
     try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'typed_mismatch' }); } catch (e) { /* host down */ }
+    await ackTab(src);
     return;
   }
   const pickText = String(item.text || '').trim().replace(/[.)!]+$/, '');
@@ -1804,18 +1825,17 @@ async function handleItem(item, src) {
   const xUuid = uuidFromKey(item.key);
   if (d.skip) {
     await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip }));
-    // v1.4.10: a ⚠️ reaction on the bubble. History and a low direction score stay quiet.
-    // v1.4.21: the reaction can fail, so those same skips also post a ⚠️ line. Never the text.
-    const quietSkip = /^(stale item|direction score)/.test(d.skip);
-    if (xUuid && src && cfg.uiReactions !== false && !quietSkip) {
+    // v1.4.24: an outbound reply in the relay chat always posts a reason, including a low direction
+    // score and a stale bubble. History never reaches this (the content script does not emit it).
+    if (xUuid && src && cfg.uiReactions !== false) {
       await tabUi(src, { action: 'react', uuid: xUuid, emoji: '\u26A0\uFE0F' });
     }
-    if (!quietSkip) {
-      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: skipReason(d.skip) }); } catch (e) { /* host down */ }
-    }
+    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: skipReason(d.skip) }); } catch (e) { /* host down */ }
+    await ackTab(src);
     return;
   }
   const payload = { type: 'send', text: item.text || '', quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  if (item.quoteLabel) payload.quoteLabel = String(item.quoteLabel).slice(0, 80);
   if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
   if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
   if (item.cards) payload.cards = item.cards;
@@ -1833,19 +1853,24 @@ async function handleItem(item, src) {
       try { pre = await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({}, payload, { preflight: true })); } catch (e) { pre = null; }
       if (pre && !pre.held) {
         res = pre; viaPreflight = true;
+        await ackTab(src);                  // v1.4.24: a prompt is the host ack
         undoP.then(async u => {             // 🗑️ during the window still cancels the held reply behind a prompt
           if (!(u && u.trashed)) return;
           const g = await getPendingGuess();
           if (g && g.xUuid === xUuid) await clearPendingGuess();
           await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
         }).catch(() => {});
-      } else if (pre && pre.held) delete payload.quoteProbe;     // logged once, by the preflight
+      } else if (pre && pre.held) {
+        delete payload.quoteProbe;          // logged once, by the preflight
+        await ackTab(src, true);            // host saw it; the send itself is still ahead of the undo window
+      }
     }
     if (!viaPreflight) {
       const u = await undoP;
       if (u && u.trashed) {
         await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
         try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
+        await ackTab(src);
         return;
       }
       await updateEvent(item.key, { status: 'sending' });
@@ -1863,7 +1888,10 @@ async function handleItem(item, src) {
   if (!viaPreflight) console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
                                                       attachments: (payload.attachments || []).length });
   try {
-    if (!viaPreflight) res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
+    if (!viaPreflight) {
+      await ackTab(src, true);              // the 10s warning starts as the host call starts, not during undo
+      res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
+    }
     if (!res) { status = 'error'; detail = 'no response'; }
     else if (res.needsConfirm && res.handle) {  // item 3 / W1: hold the text in session; confirm with /yes
       await setPendingGuess({ text: item.text, label: String(res.label || ''), handle: String(res.handle || ''),
@@ -1890,8 +1918,32 @@ async function handleItem(item, src) {
   const patch = { status, detail };
   if (res && res.contact) { patch.contactName = String(res.contact).slice(0, 40); patch.routedBy = String(res.routedBy || ''); }
   await updateEvent(item.key, patch);
+  if (res) await ackTab(src);
   if (res && res.ui) await applyUi(res, src, seenAt);
   if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
+}
+
+// v1.4.24: a relay-chat bubble we still cannot call outbound, but that quotes a message or carries
+// the owner's "You sent" label. Post a reason. A plain inbound bubble stays quiet.
+async function noticeUnknown(item, src) {
+  const cfg = await getConfig(false);
+  if (!cfg.ok || !cfg.relayConversationId || item.conversationId !== cfg.relayConversationId) return;
+  if (!item.quotedText && !item.youSent) return;
+  if (!item.text || item.text === '[no text]') return;
+  if (await isDuplicate(item.key)) { await ackTab(src); return; }
+  await addEvent({ kind: 'reply', key: item.key, contactName: '', textLength: (item.text || '').length, status: 'skipped', detail: 'direction unknown' });
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: 'other' }); } catch (e) { /* host down */ }
+  await ackTab(src);
+}
+
+async function handleUnacked(sig) {
+  const cfg = await getConfig(false);
+  const conv = String((sig && sig.conversationId) || '');
+  if (cfg.ok && cfg.relayConversationId && conv && conv !== cfg.relayConversationId) return;
+  const key = 'unacked:' + String((sig && sig.id) || conv || 'relay').replace(/[^a-zA-Z0-9:_-]/g, '').slice(0, 40);
+  if (await isDuplicate(key)) return;
+  await addEvent({ kind: 'reply', key, contactName: '', status: 'skipped', detail: 'no host ack' });
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'unacked' }); } catch (e) { /* host down */ }
 }
 
 // v1.4.2: the owner put a thumbs-up / thumbs-down on the newest pending prompt (content.js checks the
@@ -1946,6 +1998,11 @@ function sanitizeItem(raw) {
   const mc = Number(raw.mediaCount);
   if (Number.isInteger(mc) && mc > 0) out.mediaCount = Math.min(10, mc);   // v1.4.6: how many photos, nothing else
   if (raw.refuse) { out.refuse = String(raw.refuse).slice(0, 40); out.textLength = Number(raw.textLength) || 0; out.limit = Number(raw.limit) || 4000; }
+  if (raw.youSent === true) out.youSent = true;
+  if (typeof raw.quoteLabel === 'string' && !/[\r\n]/.test(raw.quoteLabel)) {
+    const ql = raw.quoteLabel.trim().slice(0, 80);
+    if (ql) out.quoteLabel = ql;
+  }
   return out;
 }
 
@@ -1980,6 +2037,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'relay-signal' && msg.signal && sender.tab) {
     if (msg.signal.status === 'wrong_account') setWrongAccount(true).catch(() => {});
     else if (msg.signal.status === 'account_ok') setWrongAccount(false).catch(() => {});
+    else if (msg.signal.status === 'unacked') handleUnacked(msg.signal).catch(() => {});
     return false;
   }
   if (msg.type === 'relay-ui-tick' && sender.tab) {   // v1.4.6: pick up queued reactions (ids only)
@@ -2007,6 +2065,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 function boot() {
   try { chrome.alarms.create('relay-refresh', { periodInMinutes: 1 }); } catch (e) { /* tests */ }
   getConfig(true).catch(() => {});
+  ensureContentScripts().catch(() => {});
+}
+// v1.4.24: a service-worker restart does not reattach a content script that died when the extension
+// reloaded. Inject content.js into open x.com tabs (the page guard makes a second copy a no-op).
+// Reload a chat tab once only if that inject fails. Do not reload on the minute alarm after that.
+const reinjectedTabs = new Set();
+async function ensureContentScripts() {
+  if (!chrome.tabs || !chrome.tabs.query) return;
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({ url: ['https://x.com/*'] }); } catch (e) { return; }
+  for (const t of tabs || []) {
+    if (!t || typeof t.id !== 'number') continue;
+    let injected = false;
+    if (chrome.scripting && chrome.scripting.executeScript) {
+      try {
+        await chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: true }, files: ['content.js'] });
+        injected = true;
+      } catch (e) { injected = false; }
+    }
+    if (injected || reinjectedTabs.has(t.id)) continue;
+    const url = String(t.url || '');
+    if (!/^https:\/\/x\.com\/(?:i\/chat|messages)\//.test(url)) continue;
+    reinjectedTabs.add(t.id);
+    try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
+  }
 }
 // On install or update, reload any open X Chat tabs so the new content script is the one running.
 async function reloadChatTabs() {
@@ -2023,14 +2106,14 @@ async function onGuessExpiry() {
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_expired', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }
 if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a => {
-  if (a.name === 'relay-refresh') getConfig(true).catch(() => {});
+  if (a.name === 'relay-refresh') { getConfig(true).catch(() => {}); ensureContentScripts().catch(() => {}); }
   else if (a.name === 'relay-guess-expiry') onGuessExpiry().catch(() => {});
   else if (a.name === 'relay-test-expiry') onTestExpiry().catch(() => {});
 });
 chrome.runtime.onInstalled.addListener(details => { boot(); if (!details || details.reason === 'install' || details.reason === 'update') reloadChatTabs(); });
 chrome.runtime.onStartup.addListener(boot);
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=454503bc49f0ca5cc5bfe3a69aab3ebd3bb6d49f71a2d0361ccf849395e01cda nl=1
+@@@@ FILE extension/content.js mode=644 sha256=599311739a6ffa548913419da7ba7f7bdcf75a6c64022f0f6d056a6fba19f69b nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -2133,6 +2216,7 @@ chrome.runtime.onStartup.addListener(boot);
     maxNewPerBatch: 3,         // a batch bigger than this = history/initial load
     dupWindowMs: 3000,
     freshMs: 120000,           // a bubble with a time[datetime] older than this is history, not new
+    ackMs: 10000,              // v1.4.24: a typed relay-chat send with no host ack posts a warning
     emptyTextRetries: 3,
     emptyRetryDelayMs: 400,
     urlPollMs: 1000,
@@ -2729,6 +2813,7 @@ chrome.runtime.onStartup.addListener(boot);
       // it like a testid so an own jumbo-emoji row is still outbound. The class is what X sets;
       // computed style covers an inline style with no class. data-send-status is "sent" on
       // received rows too and is not a direction signal.
+      let rowEnd = false, rowStart = false;
       {
         const rs = style(entry);
         const jc = (rs && rs.justifyContent) || '';
@@ -2737,19 +2822,43 @@ chrome.runtime.onStartup.addListener(boot);
         const cls = entry.classList;
         const clsEnd = !!(cls && cls.contains('justify-end'));
         const clsStart = !!(cls && cls.contains('justify-start'));
-        let rowEnd = false, rowStart = false;
         if (clsEnd !== clsStart) { rowEnd = clsEnd; rowStart = clsStart; }
         else if (!clsEnd) { rowEnd = endish(jc); rowStart = startish(jc); }
         if (rowEnd && !rowStart) { score += W.testId; signals.push('row:+' + W.testId + '(justify-end)'); }
         else if (rowStart && !rowEnd) { score -= W.testId; signals.push('row:-' + W.testId + '(justify-start)'); }
       }
 
+      // v1.4.24: X's screen-reader label on the owner's row is a hidden span whose whole text is
+      // "You sent". A text reply often has no justify-end class, and a background tab has no rects,
+      // so the score stayed 0 and the service worker dropped it with no notice. A bare "You" is not
+      // enough. A justify-start row stays inbound.
+      let youSent = false;
+      if (!rowStart) {
+        walkElements(entry, el => {
+          if (youSent || !isHiddenEl(el)) return;
+          const t = normSpaces(el.textContent || '').replace(/\s+/g, ' ').trim();
+          if (/^you sent$/i.test(t)) youSent = true;
+        });
+      }
+      if (youSent) {
+        score += W.testId;
+        if (score < W.testId) score = W.testId;
+        signals.push('sr:+' + W.testId + '(you sent)');
+      }
+
+      const quotedText = entryQuote(entry);
+      // A native-reply preview on a row that is not clearly someone else's (justify-start) is the
+      // owner's reply. Hidden screen-reader text stays out of quotedText (visibleText skips it).
+      if (quotedText && !rowStart && score > -cfg.decisionThreshold && score < W.testId) {
+        score = W.testId;
+        signals.push('preview:+' + W.testId);
+      }
+
       const direction = score >= cfg.decisionThreshold ? 'outbound' : score <= -cfg.decisionThreshold ? 'inbound' : 'unknown';
       signals.push('score:' + score);
       const key = conv + '|id:uuid=' + uuid;
-      const quotedText = entryQuote(entry);
       if (quotedText) signals.push('quote:' + quotedText.length);
-      return { conv, uuid, text, quotedText, timeIso: entryTimeIso(entry), key, direction, score, signals, textEl, bubbleEl: bubble && bubble.el, ref };
+      return { conv, uuid, text, quotedText, timeIso: entryTimeIso(entry), key, direction, score, signals, textEl, bubbleEl: bubble && bubble.el, ref, youSent };
     }
 
     // ---------- baseline / flush ----------
@@ -2890,6 +2999,115 @@ chrome.runtime.onStartup.addListener(boot);
       }
     }
 
+    // v1.4.24: a quoted body with no "Name:" prefix. The sender is the nearest preceding
+    // "💬 name · time" header, and only when every match names that one person.
+    const HEADER_LINE_RE = /^\s*\u{1F4AC}\s*(.+?)\s*\u00b7\s*\d{1,2}:\d{2}\s*[AaPp]\.?[Mm]\.?\s*$/u;
+    function normBody(s) {
+      return normSpaces(s).replace(/\s+/g, ' ').trim().toLowerCase().replace(/(?:\u2026|\.\.\.)\s*$/, '').replace(/\s+$/, '');
+    }
+    function headerLabelOf(entry) {
+      const m = HEADER_LINE_RE.exec(normSpaces(entryText(entry).text).replace(/\s+/g, ' ').trim());
+      if (!m) return '';
+      return m[1].replace(/[\r\n]/g, '').trim().slice(0, 80);
+    }
+    function headerBefore(entries, index) {
+      for (let i = index - 1; i >= 0; i--) {
+        const lab = headerLabelOf(entries[i]);
+        if (lab) return lab;
+      }
+      return '';
+    }
+    function referencedUuid(entry) {
+      const own = String(uuidOf(entry) || '').toLowerCase();
+      const textEl = bodyEl(entry);
+      let other = '';
+      const consider = el => {
+        if (!el || other || (textEl && el !== textEl && deepContains(textEl, el))) return;
+        for (const at of ['data-testid', 'href', 'data-message-id', 'data-reply-to', 'aria-describedby']) {
+          const v = el.getAttribute && el.getAttribute(at);
+          const m = v && UUID_ANY_RE.exec(v);
+          if (m && m[1].toLowerCase() !== own) { other = m[1].toLowerCase(); return; }
+        }
+      };
+      consider(entry);   // X puts the replied-to id on the message row itself; walkElements starts at the children
+      walkElements(entry, consider);
+      return other;
+    }
+    function quoteMatchKeys(quoted) {
+      const n = normBody(quoted);
+      const keys = [];
+      if (n.length >= 4) keys.push(n);
+      const sp = n.indexOf(' ');
+      if (sp > 0 && sp <= 40 && n.length - sp - 1 >= 4) keys.push(n.slice(sp + 1));
+      return keys;
+    }
+    function matchingLabels(entries, idx, keys, exact) {
+      const labels = [];
+      for (let i = idx - 1; i >= 0; i--) {
+        let a;
+        try { a = analyze(entries[i]); } catch (err) { continue; }
+        if (!a || a.direction === 'outbound') continue;
+        const body = normBody(a.text);
+        if (body.length < 4 || headerLabelOf(entries[i])) continue;
+        const hit = exact ? keys.some(k => body === k) : keys.some(k => k.length >= 12 && body.indexOf(k) === 0);
+        if (!hit) continue;
+        labels.push(headerBefore(entries, i));
+      }
+      return labels;
+    }
+    function oneLabel(labels) {
+      const uniq = [];
+      labels.forEach(l => { if (uniq.indexOf(l) < 0) uniq.push(l); });
+      if (uniq.length === 1 && uniq[0]) return uniq[0];
+      return '';
+    }
+    function quoteLabelFrom(entry, quoted) {
+      const keys = quoteMatchKeys(quoted);
+      const all = allEntries();
+      const idx = all.indexOf(entry);
+      if (idx < 0) return '';
+      const ref = referencedUuid(entry);
+      if (ref) {
+        const j = all.findIndex(e => e !== entry && String(uuidOf(e) || '').toLowerCase() === ref);
+        if (j < 0) return '';
+        return headerBefore(all, j);
+      }
+      if (!keys.length) return '';
+      const exactLabels = matchingLabels(all, idx, keys, true);
+      const exact = oneLabel(exactLabels);
+      if (exact) return exact;
+      if (exactLabels.length) return '';   // matches disagreed, or none had a header
+      const longs = keys.filter(k => k.length >= 12);
+      if (!longs.length) return '';
+      return oneLabel(matchingLabels(all, idx, longs, false));
+    }
+
+    // v1.4.24: every typed send in the relay chat must get a host ack. Otherwise the background
+    // posts one fixed warning. History and other chats never arm this.
+    let ackTimer = null, ackGen = 0;
+    function relayChatHere() {
+      const st = getState() || {};
+      const conv = conversationId();
+      const filter = normalizeFilter(st.conversationFilter);
+      return !!(conv && filter && filter === conv);
+    }
+    function armUnacked() {
+      if (!relayChatHere()) return;
+      const gen = ++ackGen;
+      if (ackTimer) win.clearTimeout(ackTimer);
+      const ms = Number(cfg.ackMs) > 0 ? Number(cfg.ackMs) : 10000;
+      ackTimer = win.setTimeout(() => {
+        if (gen !== ackGen) return;
+        ackTimer = null;
+        try { onStatus({ status: 'unacked', conversationId: conversationId(), id: String(gen) }); } catch (e) { /* ignore */ }
+      }, ms);
+    }
+    function noteHostAck(hold) {
+      if (hold) { armUnacked(); return; }
+      ackGen++;
+      if (ackTimer) { win.clearTimeout(ackTimer); ackTimer = null; }
+    }
+
     function flush() { try { flushInner(); } finally { flushCache = null; } }
     function flushInner() {
       const roots = Array.from(pending);
@@ -2998,6 +3216,14 @@ chrome.runtime.onStartup.addListener(boot);
         const typedBad = a.direction === 'outbound' ? typedMismatch(rawText) : false;
         const item = { ts, conversationId: conv, direction: a.direction, text: a.text, signals: a.signals, score: a.score, key: a.key, source };
         if (a.quotedText) item.quotedText = a.quotedText;
+        if (a.youSent) item.youSent = true;
+        if (a.direction === 'outbound' && a.quotedText) {
+          try {
+            const lab = quoteLabelFrom(e, a.quotedText);
+            if (lab) item.quoteLabel = lab;
+          } catch (err) { /* a missed label asks "Who is this for?" rather than guessing */ }
+        }
+        if (a.direction === 'outbound' && !UI_TAG_RE.test(a.text || '')) armUnacked();
         if (typedBad) item.typedMismatch = true;      // v1.4.14: what we read is not what he typed: never sent
         if (a.direction !== 'inbound') { try { item.quoteProbe = structureOf(e); } catch (err) { /* diagnostics only */ } }
         if (cardUrls.length) item.cards = cardUrls.length;
@@ -3022,6 +3248,7 @@ chrome.runtime.onStartup.addListener(boot);
         const t = realNow();
         typed = typed.filter(x => t - x.at < 30000).slice(-4);
         typed.push({ n: typedNorm(v), at: t });
+        armUnacked();   // v1.4.24: even if this bubble is never emitted, the owner hears why
       } catch (e) { /* never block his send */ }
     }
     function typedMismatch(text) {
@@ -3609,6 +3836,7 @@ chrome.runtime.onStartup.addListener(boot);
       },
       stop() {
         if (observer) observer.disconnect();
+        noteHostAck(false);
         [urlTimer, shadowTimer].forEach(t => t && win.clearInterval(t));
         [flushTimer, scanTimer].forEach(t => t && win.clearTimeout(t));
         observer = null; urlTimer = null; flushTimer = null; shadowTimer = null; scanTimer = null;
@@ -3625,6 +3853,7 @@ chrome.runtime.onStartup.addListener(boot);
       uiReact: (uuid, emoji, opt) => uiSerial(() => uiReactNow(uuid, emoji, opt)),   // v1.4.6
       uiType: text => uiSerial(() => uiTypeNow(text)),
       uiAwaitUndo: (uuid, ms) => uiAwaitUndoNow(uuid, ms),
+      noteHostAck,                     // v1.4.24: background ack cancels the unacked warning
       uiClearPrompt: clearPrompt,
       uiMediaInfo, uiMediaChunk, uiMediaRelease,  // v1.4.6 attachments
       _mediaOf: mediaOf,
@@ -3805,6 +4034,10 @@ chrome.runtime.onStartup.addListener(boot);
       try { sendResponse({ ok: true, from: role, structure: mainDetector.pageStructure() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
       return false;
     }
+    if (msg && msg.type === 'relay-ack') {                // v1.4.24: the host answered this send
+      if (mainDetector) mainDetector.noteHostAck(!!msg.hold);
+      return false;
+    }
     if (msg && msg.type === 'relay-ui') {                 // v1.4.6: background asks for one UI action
       if (!mainDetector || !mainDetector.hasEntries()) return false;
       if (state.paused) { sendResponse({ ok: false, step: 'paused' }); return false; }
@@ -3827,17 +4060,18 @@ chrome.runtime.onStartup.addListener(boot);
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=1b952baeb569b5f2cc06175782fd7b33d6210dc43d1c24c61858da363bc929ea nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=775060861a03000540fbf966c4ee074aaa482c89f66f58932efe3a2b30169563 nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.21",
+  "version": "1.4.24",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
     "storage",
     "nativeMessaging",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
     "https://x.com/*"
@@ -4044,17 +4278,17 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=ddc967f8e84a4c36292408ad66ccd271040b7b340ac1c2c6a8b0fcfb5314f5a9 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=e81a8a837d8c284c0f836aaf985f480bfbc0f7585e1bcfb2cff5a5c83dbba500 nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.23.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.24.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
 
   {"type":"get_config"}  -> {"ok":true,"version","paused","dryRun","relayConversationId",
                              "contacts":[{name,label,handle}],"ownerXHandle","senderXHandle","pendingSelfTest"}
-  {"type":"send","text","quotedText"?,"conversationId","ts"}
+  {"type":"send","text","quotedText"?,"quoteLabel"?,"conversationId","ts"}
                          -> {"ok":bool,"dryRun":bool,"contact":label,"routedBy":"quote"|"prefix"|"recent",
                              "sent"?,"delivered"?,"skipped"?,"error"?,"needsTarget"?}
   {"type":"selftest","id"} -> runs a self-test requested by `relayctl selftest`
@@ -5354,7 +5588,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if not cfg['contacts'] and not cfg['relayAll']:
         return refuse('no contacts in config', textLength=len(text))
 
-    route = rc.route_reply(text, quoted[:500], cfg, rc.load_roster(), now())
+    qlabel = _quote_label(msg)
+    route = rc.route_reply(text, quoted[:500], cfg, rc.load_roster(), now(), quote_label=qlabel)
     probe = msg.get('quoteProbe')
     if isinstance(probe, str) and probe:
         # v1.4.3 quote diagnostics: text-free page structure around the owner's bubble (tags, roles,
@@ -5362,6 +5597,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         rc.log_event('quote_probe', quoteSeen=bool(quoted.strip()), quoteResolved=route.get('by') == 'quote',
                      routedBy=route.get('by') or '', needsTarget=bool(route.get('needsTarget')),
                      confirmed=bool(msg.get('confirmed')), fingerprint=rc.clean_probe(probe),
+                     quoteLabelSeen=bool(qlabel),
                      cards=msg.get('cards') if isinstance(msg.get('cards'), int) and 0 < msg.get('cards') <= 5 else 0)
     confirmed = bool(msg.get('confirmed'))
     hint = msg.get('handle')
@@ -5763,6 +5999,18 @@ def handle_test(msg, cfg, runner, sleeper, now, poster):
                                 'extVersion': msg.get('extVersion')}, cfg, runner, sleeper, now, poster)
 
 
+def _quote_label(msg):
+    """v1.4.24: a sender label the extension read off the 💬 header above the quoted bubble. Label only."""
+    ql = msg.get('quoteLabel') if isinstance(msg, dict) else ''
+    if not isinstance(ql, str) or '\n' in ql or '\r' in ql:
+        return ''
+    return re.sub(r'\s+', ' ', ql).strip()[:80]
+
+
+# v1.4.24: the extension saw the owner's send and the host never answered. Exact line, via status detail.
+UNACKED_LINE = '\u26a0\ufe0f Didn\u2019t send. Reload X Chat and retype.'
+
+
 # v1.4.21: the extension saw a reply and will not send it. Fixed sentences, never the message.
 _SKIP_REASON = {
     'empty': 'There was nothing to send.',
@@ -5776,6 +6024,10 @@ _SKIP_REASON = {
 def handle_signal(msg, cfg, now, poster):
     """A browser-side condition (item 6) the host turns into one body-free webhook. No message text."""
     status = str(msg.get('status') or '')
+    if status == 'unacked':
+        rc.log_event('signal', status='unacked')
+        notify(cfg, poster, {'type': 'status', 'detail': UNACKED_LINE, 'at': rc.iso_utc(now())})
+        return {'ok': True}
     if status == 'skipped':
         raw = re.sub(r'[^a-z_]', '', str(msg.get('reason') or '').lower())[:40]
         reason = raw if raw in _SKIP_REASON else 'other'
@@ -5925,7 +6177,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=887cd2cf46053ae98a0b850297c6d828c5fa4736d33ad848c314187d128560a3 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=8d8b02a037c41c91b3d5ed8ac81983ca90d65a36cd5d1327cbc0776f620a2273 nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -5988,7 +6240,7 @@ STATE_PATH = os.path.join(rc.APP_DIR, 'watch_state.json')
 STATUS_PATH = os.path.join(rc.APP_DIR, 'status.json')
 JOBS_DIR = os.path.join(rc.APP_DIR, 'jobs')
 NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')
-UI_ACK_GRACE_S = 10.0       # v1.4.6: wait this long for the extension's \u2705 before a text confirmation
+UI_ACK_GRACE_S = 16.0       # v1.4.24: the ✅ attempt can take ~12s. Wait past that so a placed reaction still suppresses the → line.
 MIRROR_GRACE_S = 20.0       # v1.4.6: a mirrored tapback not shown in X by then is posted as a text line
 SPAM_SUMMARY_EVERY_S = 3600  # v1.4.6: "N texts went to Spam" (counts only) at most hourly
 PREFS_TTL_S = 600
@@ -6757,8 +7009,8 @@ class Watcher:
 
     def _after_post(self, m, t):
         self._last_route, self._last_route_at = m.get('route'), t
-        if m.get('quiet'):
-            try:   # routing for a native quote of an unprefixed line: keyed HMACs of its text, never the text
+        if not m.get('reaction'):
+            try:   # v1.4.24: every relayed body, not only quiet lines. A native Reply quotes the body.
                 rc.record_quote_keys(m['text'], m.get('route', ''), t)
             except Exception:
                 pass
@@ -7534,7 +7786,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=d905cf65e2bc682cb1d9ec2a78f37b527c391c33c53a4677b86aac09e1c5d2e2 nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=2183e3d3f6d41323837d1e2ef2aefe4e2d08af4d8b537976d7d847185122d8d0 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7560,8 +7812,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.23'
-EXTENSION_VERSION = '1.4.21'   # v1.4.23 does not change the extension (no reload)
+VERSION = '1.4.24'
+EXTENSION_VERSION = '1.4.24'   # v1.4.24 changes the extension (reload it; open chats are reinjected)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -7582,7 +7834,7 @@ def with_host_lock(fn):
         fcntl.flock(lock, fcntl.LOCK_EX)
         return fn()
 ECHO_STORE_PATH = os.path.join(APP_DIR, 'relayed_echo.json')   # HMACs of recently relayed inbound text; never bodies
-QUOTE_KEYS_PATH = os.path.join(APP_DIR, 'quote_keys.json')     # v1.4.6: HMACs of unprefixed (quiet) lines -> route; never bodies
+QUOTE_KEYS_PATH = os.path.join(APP_DIR, 'quote_keys.json')     # v1.4.6/v1.4.24: HMACs of relayed bodies -> route; never bodies
 QUOTE_KEYS_TTL_S = 2 * 86400
 ECHO_TTL_S = 3600
 ECHO_MIN_LEN = 20   # only guard against bouncing back a substantial body; short replies ('ok') are never echoes
@@ -8488,7 +8740,7 @@ def _maybe_confirm_directive(res, target, form, name, live):
     return res
 
 
-def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
+def route_reply(text, quoted, cfg, roster, now, allow_empty=False, quote_label=''):
     """Decide who an owner reply goes to. Priority: (1) the quoted relay message, (2) a leading
     "<label or name>:" prefix (stripped before sending), (3) the most recent sender within
     replyWindowMinutes unless another wrote within ambiguousSeconds. Recipients: contacts; with
@@ -8561,6 +8813,16 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
             q_handle, q_status = next(iter(hits)), 'match'
         elif len(hits) > 1:
             q_status = 'ambiguous'
+    # v1.4.24: the extension names the sender from the 💬 header above the quoted bubble. Used only when
+    # the quote text itself did not resolve. An ambiguous quote (or an ambiguous label) is never overridden.
+    if q_status == 'none' and quote_label and '\n' not in str(quote_label) and '\r' not in str(quote_label):
+        lab = re.sub(r'\s+', ' ', str(quote_label)).strip()[:80]
+        if lab:
+            hits = {h for h in (contact_keys(d).get(lab.lower()) or ()) if h in by_handle}
+            if len(hits) == 1:
+                q_handle, q_status = next(iter(hits)), 'match'
+            elif len(hits) > 1:
+                q_status = 'ambiguous'
     p_handle, rest, p_status = parse_prefix(text, cfg, d)
     # Conversational addressing (v1.3.5, item A): when there is no "<Name>:" colon prefix, try the
     # directive forms ("text Sam ...", "tell Sam: ...", "Sam, ...", "@Sam ..."). A resolved directive
@@ -9583,7 +9845,7 @@ def upload_staged(media, cfg, requester=_request, rand=secrets.token_bytes):
         out.append(item)
     return out, failed
 @@@@ END
-@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=807ae37bf9b25f687c346582bc5c632138fdd920172d6feaa68695cc11d3a997 nl=1
+@@@@ FILE mac-helper/relay_echo.py mode=644 sha256=7386b426614e06e9be1260dff85837b3472a2ea9987a28ce73020d72af176494 nl=1
 """iMessage Relay v1.4.8 -- echo guard + bot-output detection.
 Split out of relay_common.py so each file stays under 1000 lines. Always reached through relay_common
 (rc.is_echoed_inbound, rc.looks_like_bot_output, rc.record_relayed_text, ...); relay_common re-exports
@@ -9774,30 +10036,18 @@ def record_quote_keys(text, route, at=None, path=None):
     rc.write_json_atomic(p, {'entries': items[-1000:]}, mode=0o600)
 
 
-def lookup_quote(quoted, cfg=None, at=None, path=None):
-    """Routes (handles / group keys) whose recorded quiet line matches the quote. The quote may start with
-    the bot account's name; that is dropped first, as in parse_quote."""
-    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()
-    sender = ((cfg or {}).get('senderXHandle') or '').lstrip('@')
-    for drop in ('@' + sender, sender):
-        if sender and q.lower().startswith(drop.lower()):
-            q = q[len(drop):].lstrip(' \u00b7-')
-            break
-    norm = _quote_norm(q)
+def _qall(norm):
+    return hmac.new(_echo_secret(), ('qall:' + norm).encode('utf-8'), hashlib.sha256).hexdigest()[:32]
+
+
+def _lookup_recorded(norm, entries):
+    """Routes whose stored hashes match norm. Full text wins; else the longest shared prefix."""
     if len(norm) < 4:
         return set()
-    full = hmac.new(_echo_secret(), ('qall:' + norm).encode('utf-8'), hashlib.sha256).hexdigest()[:32]
-    pref = set()
-    for n in QUOTE_PREFIXES:
-        if len(norm) >= n:
-            pref.add(hmac.new(_echo_secret(), ('q%d:' % n + norm[:n]).encode('utf-8'), hashlib.sha256).hexdigest()[:32])
-    at = time.time() if at is None else at
-    entries = [e for e in (rc.read_json(path or rc.QUOTE_KEYS_PATH, {}) or {}).get('entries', [])
-               if isinstance(e, dict) and at - float(e.get('at', 0)) < rc.QUOTE_KEYS_TTL_S]
+    full = _qall(norm)
     exact = {e['r'] for e in entries if full in set(e.get('k') or [])}
     if exact:
         return exact
-    # a truncated preview: the LONGEST shared prefix decides
     for n in sorted(QUOTE_PREFIXES, reverse=True):
         if len(norm) < n:
             continue
@@ -9805,6 +10055,33 @@ def lookup_quote(quoted, cfg=None, at=None, path=None):
         hits = {e['r'] for e in entries if h in set(e.get('k') or [])}
         if hits:
             return hits
+    return set()
+
+
+def lookup_quote(quoted, cfg=None, at=None, path=None):
+    """Routes (handles / group keys) whose recorded relayed body matches the quote. The quote may start
+    with the bot account's name; that is dropped first, as in parse_quote. A miss (not an ambiguous hit)
+    also tries the quote with its first short token removed, and only an exact full-text hit on that
+    remainder counts. Several routes, or two variants that disagree, stay a set: the caller does not guess."""
+    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()
+    sender = ((cfg or {}).get('senderXHandle') or '').lstrip('@')
+    for drop in ('@' + sender, sender):
+        if sender and q.lower().startswith(drop.lower()):
+            q = q[len(drop):].lstrip(' \u00b7-')
+            break
+    norm = _quote_norm(q)
+    at = time.time() if at is None else at
+    entries = [e for e in (rc.read_json(path or rc.QUOTE_KEYS_PATH, {}) or {}).get('entries', [])
+               if isinstance(e, dict) and at - float(e.get('at', 0)) < rc.QUOTE_KEYS_TTL_S]
+    primary = _lookup_recorded(norm, entries)
+    if primary:
+        return primary
+    parts = norm.split(' ', 1)
+    if len(parts) == 2 and 1 <= len(parts[0]) <= 40 and len(parts[1]) >= 4:
+        # X's reply preview leads with a chrome word ("iMessage") or the sender handle. Only the
+        # remainder's full hash counts, so a truncated preview cannot attach to the wrong person.
+        full = _qall(parts[1])
+        return {e['r'] for e in entries if full in set(e.get('k') or [])}
     return set()
 @@@@ END
 @@@@ FILE mac-helper/relay_header.py mode=644 sha256=45cb6cebd092112dc06dde635545c438ac954df5efff89a925f6d91b2b1c28fa nl=1
@@ -14739,7 +15016,7 @@ if __name__ == '__main__':
   ["", ""]
 ]
 @@@@ END
-@@@@ FILE tests/js/bgui.test.js mode=644 sha256=5f3f2bfa8956bd05b01c76e885ebb48bd428f067009cbb694e63cbe8f8dfd3ff nl=1
+@@@@ FILE tests/js/bgui.test.js mode=644 sha256=e68ad24a07daf3e5d602a62f6d7470e398a8245f22bd76b90d05383f310f8759 nl=1
 /* v1.4.6: background.js UI flow — ✅ on a sent reply is acked to the host, ❓ / 🤖 prompt acks, the relay's
  * own 🤖 text is never sent, the undo window cancels a send, queued reactions are polled. Fictional names. */
 'use strict';
@@ -14811,9 +15088,12 @@ function boot(opts) {
     const b = boot({ send: () => ({ ok: false, needsConfirm: true, handle: '+15555550123', label: 'Jordan', reason: 'guessed',
                                     ui: { react: [{ emoji: '\u2753', uuid: UU, noteId: 'cc33' }], type: [{ text: '\u{1F916} Who\u2019s this for?', noteId: 'dd44' }] } }) });
     await b.reply('see you soon');
-    const acts = b.tabMsgs.map(x => x.m.action + ':' + (x.m.emoji || x.m.text));
+    const ui = b.tabMsgs.filter(x => x.m.type !== 'relay-ack');
+    const acts = ui.map(x => x.m.action + ':' + (x.m.emoji || x.m.text));
     assert.deepStrictEqual(acts, ['react:\u2753', 'type:\u{1F916} Who\u2019s this for?']);
-    assert.strictEqual(b.tabMsgs[0].m.prompt, true);
+    assert.strictEqual(ui[0].m.prompt, true);
+    const acks = b.tabMsgs.filter(x => x.m.type === 'relay-ack');
+    assert.ok(acks.length >= 1 && acks[acks.length - 1].m.hold === false, 'a prompt is a final host ack');
     assert.deepStrictEqual(b.host.filter(m => m.type === 'ui_ack').map(m => m.noteId), ['cc33', 'dd44']);
   });
 
@@ -16186,7 +16466,7 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/native.test.js mode=644 sha256=d986dfb274466d0ee38bd3e3cb25ba36d5ce4608c951482c5d259f69c473fef9 nl=1
+@@@@ FILE tests/js/native.test.js mode=644 sha256=e261efd195b67d06908a325d2cee314f666d258b762f74a22d0557fbc0fa1e2e nl=1
 /* Background (service worker) tests: config from the host (get_config), reply gating,
  * handle normalization, popup status, self-test relay, and "no bodies in storage". Run:
  *   NODE_PATH=/path/to/node_modules node tests/js/native.test.js
@@ -16198,7 +16478,7 @@ const BG = fs.readFileSync(path.join(__dirname, '../../extension/background.js')
 const CONV = '1111-2222';
 
 function env(opts = {}) {
-  const store = {}, listeners = [], nativeCalls = [], badge = {};
+  const store = {}, listeners = [], nativeCalls = [], badge = {}, scripts = [], reloads = [];
   let hostConfig = Object.assign({ ok: true, version: '1.3.2', paused: false, dryRun: true,
     relayConversationId: CONV, contacts: [{ name: 'Test Contact', label: 'Test', handle: '15555550123' }] }, opts.config || {});
   const local = {
@@ -16219,7 +16499,19 @@ function env(opts = {}) {
     storage: { local, session: { async get() { return {}; }, async set() {} }, onChanged: { addListener() {} } },
     action: { async setBadgeText(o) { badge.text = o.text; }, async setBadgeBackgroundColor() {} },
     alarms: { create() {}, onAlarm: { addListener() {} } },
-    tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} } },
+    tabs: {
+      onUpdated: { addListener() {} }, onRemoved: { addListener() {} },
+      query: async () => (opts.tabList || []),
+      reload: async id => { reloads.push(id); },
+      sendMessage: async () => null,
+    },
+    scripting: opts.noScripting ? undefined : {
+      executeScript: async req => {
+        if (opts.scriptFail) throw new Error('inject failed');
+        scripts.push(req);
+        return [];
+      },
+    },
   };
   const ctx = { chrome, console: { log() {}, warn() {} } };
   vm.runInNewContext(BG, ctx);
@@ -16231,7 +16523,7 @@ function env(opts = {}) {
   const ask = msg => new Promise(res => listeners.forEach(f => f(msg, { id: 'ext' }, res)));
   const sends = () => nativeCalls.filter(c => c.msg.type === 'send').map(c => c.msg);
   const signal = sig => listeners.forEach(f => f({ type: 'relay-signal', signal: sig }, { id: 'ext', tab: { id: 1 } }, () => {}));
-  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
+  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, scripts, reloads, setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
 }
 let passed = 0, failed = 0;
 async function test(name, fn) { try { await fn(); passed++; console.log('PASS', name); } catch (e) { failed++; console.log('FAIL', name, '\n   ', e.stack.split('\n').slice(0, 2).join(' | ')); } }
@@ -16281,7 +16573,9 @@ async function test(name, fn) { try { await fn(); passed++; console.log('PASS', 
     e.send({ text: '[no text]' });
     await sleep(100);
     assert.strictEqual(e.sends().length, 0);
-    assert.deepStrictEqual(e.store.events.map(i => i.detail), ['direction score 2 < 3', 'stale item', 'empty text']);
+    assert.deepStrictEqual(e.store.events.map(i => i.detail).sort(), ['direction score 2 < 3', 'empty text', 'stale item']);
+    const skipped = e.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'skipped').map(c => c.msg.reason).sort();
+    assert.deepStrictEqual(skipped, ['empty', 'other', 'other']);
     assert.ok(!JSON.stringify(e.store).includes('9999-1111'), 'other conversation id not stored');
   });
 
@@ -16396,6 +16690,74 @@ async function test(name, fn) { try { await fn(); passed++; console.log('PASS', 
     assert.strictEqual(ev.status, 'refused');
     assert.ok(/too long to relay/.test(ev.detail));
     assert.strictEqual(ev.textLength, 5000);
+  });
+
+  await test('quoteLabel rides on the send; a newline label is dropped and never stored', async () => {
+    const e = env();
+    e.send({ text: 'sounds good', quotedText: 'picnic at the lake', quoteLabel: '  Sam  ', key: 'ql1' });
+    e.send({ text: 'again please', quotedText: 'other body here', quoteLabel: 'Sam\nJordan', key: 'ql2' });
+    e.send({ text: 'third one ok', quotedText: 'third body here', quoteLabel: 'S'.repeat(100), key: 'ql3' });
+    await sleep(100);
+    assert.strictEqual(e.sends()[0].quoteLabel, 'Sam');
+    assert.ok(!('quoteLabel' in e.sends()[1]), 'a newline is not a label');
+    assert.strictEqual(e.sends()[2].quoteLabel.length, 80);
+    const dump = JSON.stringify(e.store);
+    assert.ok(!dump.includes('picnic') && !dump.includes('Sam') && !dump.includes('sounds good'));
+  });
+
+  await test('an unknown relay-chat reply that quotes something posts one skip reason', async () => {
+    const e = env();
+    e.send({ direction: 'unknown', score: 0, quotedText: 'picnic at the lake', youSent: true, text: 'ok sure', key: 'unk1' });
+    e.send({ direction: 'unknown', score: 0, text: 'plain bubble', key: 'unk2' });
+    await sleep(80);
+    assert.strictEqual(e.sends().length, 0);
+    const skipped = e.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'skipped');
+    assert.strictEqual(skipped.length, 1);
+    assert.strictEqual(skipped[0].msg.reason, 'other');
+    assert.strictEqual(e.store.events.length, 1);
+    assert.strictEqual(e.store.events[0].detail, 'direction unknown');
+    assert.ok(!JSON.stringify(e.store).includes('picnic') && !JSON.stringify(e.store).includes('ok sure'));
+  });
+
+  await test('an unacked signal asks the host once and ignores another chat', async () => {
+    const e = env();
+    e.signal({ status: 'unacked', conversationId: CONV, id: '3' });
+    e.signal({ status: 'unacked', conversationId: CONV, id: '3' });
+    e.signal({ status: 'unacked', conversationId: '9999-0000', id: '9' });
+    await sleep(80);
+    const u = e.nativeCalls.filter(c => c.msg && c.msg.type === 'signal' && c.msg.status === 'unacked');
+    assert.strictEqual(u.length, 1);
+    assert.deepStrictEqual(Object.keys(u[0].msg).sort(), ['status', 'type']);
+    assert.strictEqual(e.store.events.filter(x => x.detail === 'no host ack').length, 1);
+    assert.ok(!JSON.stringify(e.store).includes('9999-0000'));
+  });
+
+  await test('open x.com tabs get content.js in every frame; a failed inject reloads a chat once', async () => {
+    const e = env({ tabList: [
+      { id: 7, url: 'https://x.com/i/chat/111-222' },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await e.ctx.ensureContentScripts();
+    assert.strictEqual(e.scripts.length, 2);
+    assert.strictEqual(e.scripts[0].target.tabId, 7);
+    assert.strictEqual(e.scripts[0].target.allFrames, true);
+    assert.strictEqual(e.scripts[0].files.length, 1);
+    assert.strictEqual(e.scripts[0].files[0], 'content.js');
+    assert.strictEqual(e.reloads.length, 0);
+    await e.ctx.ensureContentScripts();
+    assert.strictEqual(e.scripts.length, 4, 'a later pass injects again; the page guard is a no-op');
+    assert.strictEqual(e.reloads.length, 0);
+
+    const bad = env({ scriptFail: true, tabList: [
+      { id: 7, url: 'https://x.com/i/chat/abc' },
+      { id: 9, url: 'https://x.com/messages/1' },
+      { id: 8, url: 'https://x.com/home' },
+    ] });
+    await bad.ctx.ensureContentScripts();
+    assert.deepStrictEqual(bad.reloads.slice().sort(), [7, 9]);
+    await bad.ctx.ensureContentScripts();
+    assert.deepStrictEqual(bad.reloads.slice().sort(), [7, 9], 'each chat tab reloads once');
+    assert.strictEqual(bad.scripts.length, 0);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
@@ -16936,7 +17298,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=4946e2c1a8d80c806da83e0673142789c647559ece13ff7d2e174cf83275cfcc nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=1fcbf9d63c1e63fe837c18bb2285691579c043a63017e4c5a5cc71a716d6b5be nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -16991,10 +17353,10 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.14');
+  assert.strictEqual(m.version, '1.4.24');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
-  assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'storage']);
+  assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'scripting', 'storage']);
   for (const f of ['options.html', 'options.js']) assert.ok(!fs.existsSync(path.join(EXT, f)), f + ' removed');
 
   await sleep(2800); // real CONFIG.settleMs = 2500
@@ -17762,7 +18124,7 @@ const THUMB = '<img alt="Image" src="https://pbs.twimg.com/media/Fabc123?format=
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/xreply.test.js mode=644 sha256=73a035526010540da315c2137104c007cc58fcd8cdf05628f500e10dd1c4cebe nl=1
+@@@@ FILE tests/js/xreply.test.js mode=644 sha256=ce8485c9d5cd2155dce84a644d0c4f4eaa163f9545fcfea229abb6f43410ac92 nl=1
 /* v1.4.4: X Chat's real native Reply markup, rebuilt from a v1.4.3 quote_probe fingerprint. Run:
  *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
  */
@@ -17892,6 +18254,142 @@ function xRow(doc, n, opts = {}) {
     assert.ok(/3\.div#article\{tabindex,aria-labelledby,aria-describedby\} 4\.div@message-text-<self>\{id\}/.test(fp), fp);
     det.stop();
   });
+  function textRow(doc, n, text, inbound) {
+    const e = doc.createElement('div');
+    e.setAttribute('data-testid', 'message-' + uuid(n));
+    if (inbound) e.classList.add('justify-start');
+    const span = doc.createElement('span');
+    span.setAttribute('data-testid', 'message-text-' + uuid(n));
+    span.textContent = text;
+    e.appendChild(span);
+    return e;
+  }
+
+  await test('hidden You sent makes a text reply outbound with no layout', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    panel(doc).appendChild(xRow(doc, 5, { quoted: 'Jordan: (I got it)', text: 'ok' }));
+    await sleep(80);
+    assert.strictEqual(logs.length, 1);
+    assert.strictEqual(logs[0].direction, 'outbound');
+    assert.ok(logs[0].score >= 3, logs[0].signals.join(' '));
+    assert.ok(logs[0].signals.some(s => s.indexOf('sr:+3') === 0), logs[0].signals.join(' '));
+    assert.ok(!/You sent/.test(logs[0].quotedText || ''));
+    det.stop();
+  });
+
+  await test('justify-start stays inbound even with You sent and a preview', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    const row = xRow(doc, 6, { quoted: 'Jordan: (I got it)', text: 'ok' });
+    row.classList.add('justify-start');
+    panel(doc).appendChild(row);
+    await sleep(80);
+    assert.strictEqual(logs[0].direction, 'inbound');
+    assert.ok(logs[0].score <= -3, logs[0].signals.join(' '));
+    assert.ok(!logs[0].quoteLabel);
+    det.stop();
+  });
+
+  await test('an unprefixed quote under one header names that sender', async () => {
+    const { doc, det, logs } = setup(undefined, undefined, { config: { maxNewPerBatch: 8 } });
+    await sleep(200);
+    const p = panel(doc);
+    p.appendChild(textRow(doc, 7, '\u{1F4AC} Sam \u00b7 7:20 PM', true));
+    p.appendChild(textRow(doc, 8, 'picnic at the lake saturday', true));
+    p.appendChild(xRow(doc, 9, { quoted: 'picnic at the lake saturday', text: 'sounds good' }));
+    await sleep(80);
+    const reply = logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(reply.length, 1);
+    assert.strictEqual(reply[0].quoteLabel, 'Sam');
+    assert.ok(!/Sam:/.test(reply[0].quotedText || ''), JSON.stringify(reply[0].quotedText));
+    det.stop();
+  });
+
+  await test('the same body under two headers does not guess a sender', async () => {
+    const { doc, det, logs } = setup(undefined, undefined, { config: { maxNewPerBatch: 8 } });
+    await sleep(200);
+    const p = panel(doc);
+    p.appendChild(textRow(doc, 10, '\u{1F4AC} Sam \u00b7 7:20 PM', true));
+    p.appendChild(textRow(doc, 11, 'picnic at the lake saturday', true));
+    p.appendChild(textRow(doc, 12, '\u{1F4AC} Jordan \u00b7 7:21 PM', true));
+    p.appendChild(textRow(doc, 13, 'picnic at the lake saturday', true));
+    p.appendChild(xRow(doc, 14, { quoted: 'picnic at the lake saturday', text: 'sounds good' }));
+    await sleep(80);
+    const reply = logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(reply.length, 1);
+    assert.ok(!reply[0].quoteLabel, JSON.stringify(reply[0].quoteLabel));
+    det.stop();
+  });
+
+  await test('a typed send with no host ack posts one unacked status; an ack cancels it', async () => {
+    const s = setup(undefined, undefined, { state: { conversationFilter: '111-222' }, config: { ackMs: 50 } });
+    await sleep(200);
+    const box = s.doc.createElement('div');
+    box.setAttribute('data-testid', 'dm-composer-textarea');
+    box.textContent = 'hello there';
+    s.doc.body.appendChild(box);
+    box.dispatchEvent(new s.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(20);
+    assert.strictEqual(s.statuses.length, 0);
+    await sleep(70);
+    assert.strictEqual(s.statuses.length, 1);
+    assert.strictEqual(s.statuses[0].status, 'unacked');
+    assert.strictEqual(s.statuses[0].conversationId, '111-222');
+    assert.ok(!s.statuses[0].text);
+    await sleep(70);
+    assert.strictEqual(s.statuses.length, 1, 'fires once');
+    s.det.stop();
+
+    const s2 = setup(undefined, undefined, { state: { conversationFilter: '111-222' }, config: { ackMs: 50 } });
+    await sleep(200);
+    const box2 = s2.doc.createElement('div');
+    box2.setAttribute('data-testid', 'dm-composer-textarea');
+    box2.textContent = 'hello there';
+    s2.doc.body.appendChild(box2);
+    box2.dispatchEvent(new s2.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    s2.det.noteHostAck(false);
+    await sleep(80);
+    assert.strictEqual(s2.statuses.length, 0);
+    s2.det.stop();
+  });
+
+  await test('a hold ack restarts the unacked clock', async () => {
+    const s = setup(undefined, undefined, { state: { conversationFilter: '111-222' }, config: { ackMs: 80 } });
+    await sleep(200);
+    const box = s.doc.createElement('div');
+    box.setAttribute('data-testid', 'dm-composer-textarea');
+    box.textContent = 'hello there';
+    s.doc.body.appendChild(box);
+    box.dispatchEvent(new s.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(40);
+    s.det.noteHostAck(true);
+    await sleep(50);
+    assert.strictEqual(s.statuses.length, 0, 'the first clock was reset');
+    await sleep(50);
+    assert.strictEqual(s.statuses.length, 1);
+    assert.strictEqual(s.statuses[0].status, 'unacked');
+    s.det.stop();
+  });
+
+  await test('a reply that points at one message uses that bubble header only', async () => {
+    const { doc, det, logs } = setup(undefined, undefined, { config: { maxNewPerBatch: 8 } });
+    await sleep(200);
+    const p = panel(doc);
+    p.appendChild(textRow(doc, 20, '\u{1F4AC} Sam \u00b7 7:20 PM', true));
+    p.appendChild(textRow(doc, 21, 'picnic at the lake saturday', true));
+    p.appendChild(textRow(doc, 22, '\u{1F4AC} Jordan \u00b7 7:21 PM', true));
+    p.appendChild(textRow(doc, 23, 'picnic at the lake saturday', true));
+    const row = xRow(doc, 24, { quoted: 'picnic at the lake saturday', text: 'sounds good' });
+    row.setAttribute('data-reply-to', uuid(21));
+    p.appendChild(row);
+    await sleep(80);
+    const reply = logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(reply.length, 1);
+    assert.strictEqual(reply[0].quoteLabel, 'Sam');
+    det.stop();
+  });
+
   console.log(passed + ' passed, ' + failed + ' failed (v1.4.4 real X Reply markup)');
   process.exit(failed ? 1 : 0);
 })();
@@ -23906,7 +24404,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=d4349ee06606a931f5301be5a3944c162b70b00a4ad702de94d8069b4b67485e nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=10cce5439e428fba309c4b23c42935140e27dc2ca0acbb7aed7c12c972f16f27 nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -24035,7 +24533,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.23 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.24 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -24065,7 +24563,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.23 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.24 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -24149,7 +24647,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.23 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.24 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -25324,7 +25822,7 @@ class Batching(test_watch.Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v146.py mode=644 sha256=99787aeeaab0d703166c047049b822c521a5b3551e127b41db9f2b3838783c0f nl=1
+@@@@ FILE tests/py/test_v146.py mode=644 sha256=fc8a472b69c91af5a9e092b7fea98092a13947faf041f5ed220e2f270239f00f nl=1
 """v1.4.6: fast feedback in the owner's X tab (✅ / ❓ / 🤖 prompts / 👀 / mirrored tapbacks), the relay
 ignoring its own output, undo, quiet names (+ quote routing), follow-messages spam mode, STOP-footer
 cleanup, the one-post overnight recap. Fictional names only."""
@@ -25488,6 +25986,24 @@ class HostIgnoresItsOwnOutput(HostBase):
         self.assertEqual(r['undoSeconds'], 10, 'clamped')
 
 
+class UnackedWarning(HostBase):
+    def test_unacked_posts_the_reload_line_verbatim(self):
+        line = '\u26a0\ufe0f Didn\u2019t send. Reload X Chat and retype.'
+        r = self.req({'type': 'signal', 'status': 'unacked'})
+        self.assertTrue(r.get('ok'))
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(self.posts[0]['type'], 'status')
+        self.assertEqual(self.posts[0]['detail'], line)
+        ev = rp.format_event(self.posts[0])
+        self.assertEqual(ev['lines'][0]['text'], line)
+        self.assertNotIn('Not sent.', ev['lines'][0]['text'])
+        with open(self.m.rc.LOG_PATH, encoding='utf-8') as f:
+            log = f.read()
+        self.assertIn('"status": "unacked"', log)
+        self.assertNotIn('Reload', log)
+        self.assertNotIn('retype', log)
+
+
 class UiQueue(unittest.TestCase):
     def setUp(self):
         self.tmp = tmpdir()
@@ -25553,6 +26069,18 @@ class WatchConfirm(WatchBase):
         self.now += 15
         self.w.tick()
         self.assertEqual(self.types().count('sent'), 1, 'no ack -> the old text confirmation')
+
+    def test_an_ack_at_twelve_seconds_still_suppresses_the_line(self):
+        # The ✅ attempt can take ~12s, past the old 10s grace. Wait, then a placed reaction posts nothing.
+        pid = self.sent(ago=12)
+        self.w.tick()
+        self.assertNotIn('sent', self.types())
+        self.assertEqual(len(self.m.rc.load_pending()), 1)
+        self.m.rc.update_pending(pid, uiConfirmed=True)
+        self.now += 10
+        self.w.tick()
+        self.assertNotIn('sent', self.types())
+        self.assertEqual(self.m.rc.load_pending(), [])
 
     def test_failed_reaction_posts_at_once(self):
         self.sent(ago=2, uiFailed=True)
@@ -25842,10 +26370,10 @@ class QuietNames(test_watch.Base):
         self.w.tick()
         self.assertFalse(self.msgs()[-1].get('quiet'))
 
-    def route(self, quoted, text='sounds good'):
+    def route(self, quoted, text='sounds good', quote_label=''):
         rc = self.m.rc
         cfg = rc.sanitize_config(self.cfg)
-        return rc.route_reply(text, quoted, cfg, rc.load_roster(), self.now + 5)
+        return rc.route_reply(text, quoted, cfg, rc.load_roster(), self.now + 5, quote_label=quote_label)
 
     def test_native_quote_of_an_unprefixed_line_routes_to_its_sender(self):
         for h, t in ((SAM, 'first from sam'), (SAM, 'are we still on for the picnic saturday'), (ALLOWED, 'unrelated')):
@@ -25871,6 +26399,59 @@ class QuietNames(test_watch.Base):
             self.w.tick()
         raw = open(self.m.rc.QUOTE_KEYS_PATH).read()
         self.assertNotIn('picnic', raw)
+
+    def test_the_first_line_body_is_keyed_and_a_chrome_word_matches_only_in_full(self):
+        body = 'picnic at the lake saturday'
+        self.db.add(ALLOWED, text=body)
+        self.w.tick()
+        self.assertFalse(self.msgs()[-1].get('quiet'))
+        r = self.route(body)
+        self.assertEqual((r['contact']['handle'], r['by']), (ALLOWED, 'quote'))
+        r = self.route('iMessage ' + body)
+        self.assertEqual((r['contact']['handle'], r['by']), (ALLOWED, 'quote'))
+        r = self.route('iMessage picnic at the lake satur')   # chrome word plus a truncated body: not a prefix guess
+        self.assertNotEqual(r.get('by'), 'quote')
+
+    def test_two_senders_stay_ambiguous_with_a_chrome_word_and_a_label(self):
+        body = 'call me when you can please'
+        self.db.add(SAM, text=body)
+        self.w.tick()
+        self.db.add(ALLOWED, text=body)
+        self.w.tick()
+        for q in (body, 'iMessage ' + body):
+            r = self.route(q, quote_label='Sam')
+            self.assertTrue(r.get('needsTarget'), q)
+            self.assertNotIn('contact', r)
+
+    def test_a_header_label_routes_when_the_quote_is_not_keyed(self):
+        r = self.route('zzzz never relayed body', quote_label='Sam')
+        self.assertEqual((r['contact']['handle'], r['by']), (SAM, 'quote'))
+
+    def test_a_shared_first_name_is_not_a_guess(self):
+        self.cfg['contacts'] = [
+            {'name': 'Sam Ellis', 'handle': '15555550150'},
+            {'name': 'Sam Ortiz', 'handle': '15555550123'},
+        ]
+        r = self.route('zzzz never relayed body', quote_label='Sam')
+        self.assertTrue(r.get('needsTarget'))
+        self.assertNotIn('contact', r)
+
+    def test_a_resolved_body_beats_a_different_header_label(self):
+        self.db.add(SAM, text='picnic at the lake saturday')
+        self.w.tick()
+        r = self.route('picnic at the lake saturday', quote_label='Jordan')
+        self.assertEqual((r['contact']['handle'], r['by']), (SAM, 'quote'))
+
+    def test_a_reaction_line_is_not_quote_keyed(self):
+        self.db.add(SAM, text='bring the salad please')
+        self.w.tick()
+        with open(self.m.rc.QUOTE_KEYS_PATH, encoding='utf-8') as fh:
+            n = len(json.load(fh)['entries'])
+        self.db.add(SAM, text='Liked', assoc=2001, assoc_guid='p:0/whatever')
+        self.w.tick()
+        with open(self.m.rc.QUOTE_KEYS_PATH, encoding='utf-8') as fh:
+            self.assertEqual(len(json.load(fh)['entries']), n)
+        self.assertNotEqual(self.route('Liked').get('by'), 'quote')
 
 
 class RecapAndFormatting(unittest.TestCase):
@@ -26396,7 +26977,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=015180a83ff0be5fc51d460c0d18fb3a08d1997033b1dd7dc6e03b71278fe653 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=8e63cfe42f8f3c76c027ef583636fea8f6f436acf24764d85954a1986cd5cfc6 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -26589,7 +27170,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.23')
+        self.assertEqual(m.rc.VERSION, '1.4.24')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

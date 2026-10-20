@@ -208,12 +208,14 @@ async function isDuplicate(key) {
 }
 
 // A reply the content script refused to forward (over the host length limit): owner notice, no host call.
-async function handleRefusal(item) {
-  if (await isDuplicate(item.key)) return;
+async function handleRefusal(item, src) {
+  if (await isDuplicate(item.key)) { await ackTab(src); return; }
   await addEvent({
     kind: 'reply', key: item.key, contactName: '', textLength: item.textLength || 0,
     status: 'refused', detail: 'reply too long to relay (' + (item.textLength || 0) + ' chars, limit ' + (item.limit || 4000) + ') — nothing sent, shorten it',
   });
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: 'other' }); } catch (e) { /* host down */ }
+  await ackTab(src);
 }
 
 let pendingGuessMem = null;   // fallback store when chrome.storage.session is unavailable
@@ -247,6 +249,7 @@ async function handleCancel(item, g) {
   }
   await addEvent({ kind: 'reply', key: item.key, contactName: g.label || '', status: 'skipped', detail: 'cancelled' });
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_cancelled', label: g.label || '' }); } catch (e) { /* host may be down */ }
+  await ackTab(uiSrc);
 }
 
 function pickOption(options, t) {
@@ -288,6 +291,7 @@ async function handleYes(item, nameArg, src) {
   const patch = { status, detail };
   if (res && res.contact) { patch.contactName = String(res.contact).slice(0, 40); patch.routedBy = String(res.routedBy || ''); }
   await updateEvent(item.key, patch);
+  if (res) await ackTab(useSrc);
   if (res && res.ui) await applyUi(res, useSrc, seenAt);
   if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
 }
@@ -308,6 +312,12 @@ async function tabUi(src, msg) {
   const opts = typeof src.frameId === 'number' ? { frameId: src.frameId } : undefined;
   try { return await withTimeout(chrome.tabs.sendMessage(src.tabId, Object.assign({ type: 'relay-ui' }, msg), opts), UI_TIMEOUT_MS); }
   catch (e) { return null; }
+}
+// v1.4.24: tell the tab the host has this send (hold resets the 10s warning; otherwise it cancels).
+async function ackTab(src, hold) {
+  if (!src || typeof src.tabId !== 'number' || !chrome.tabs || !chrome.tabs.sendMessage) return;
+  const opts = typeof src.frameId === 'number' ? { frameId: src.frameId } : undefined;
+  try { await chrome.tabs.sendMessage(src.tabId, { type: 'relay-ack', hold: !!hold }, opts); } catch (e) { /* tab gone */ }
 }
 async function hostAck(ack) { try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({ type: 'ui_ack' }, ack)); } catch (e) { /* host down */ } }
 async function applyUi(res, src, seenAt) {
@@ -426,7 +436,7 @@ function testSummary(steps) {
 
 // The owner typed "/test" in the relay chat. Runs even while paused or with no contacts (it never
 // sends a reply). Every step is time-boxed so a missing piece is reported as failed, not a hang.
-async function handleTest(item, sendArg) {
+async function handleTest(item, sendArg, src) {
   const cfg = await getConfig(true);
   if (cfg.ok && (!cfg.relayConversationId || item.conversationId !== cfg.relayConversationId)) return;   // not the relay chat
   if (!(Number(item.score) >= MIN_NATIVE_SCORE)) return;
@@ -451,16 +461,19 @@ async function handleTest(item, sendArg) {
   }
   if (!res || res.command !== 'test') {
     await updateEvent(item.key, { status: 'test-failed', detail: 'host refused /test: ' + String((res && res.error) || 'no response').slice(0, 120) });
+    if (res) await ackTab(src);
     return;
   }
   if (!res.webhookAccepted) {
     await updateEvent(item.key, { status: 'test-failed', detail: testSummary(res.steps) + ' (nothing could reach X Chat)' });
+    await ackTab(src);
     return;
   }
   await setPendingTest({ testId: String(res.testId || testId), tag: String(res.tag || '').slice(0, 6), key: item.key,
                          conversationId: item.conversationId, at: Date.now() });
   try { if (chrome.alarms) chrome.alarms.create('relay-test-expiry', { delayInMinutes: TEST_ROUTINE_WINDOW_MS / 60000 }); } catch (e) { /* tests */ }
   await updateEvent(item.key, { status: 'test-waiting', detail: testSummary(res.steps) + '; waiting for the routine report' });
+  await ackTab(src);
 }
 
 // A bubble in the relay chat that is NOT the owner's: is it the routine's report for the pending test?
@@ -489,11 +502,15 @@ async function handleItem(item, src) {
   if (src) uiSrc = src;
   const seenAt = Date.now();
   if (UI_TAG_RE.test(String(item.text || ''))) return;   // v1.4.6: a prompt the relay typed itself, never a reply
-  if (item.refuse) { await handleRefusal(item); return; }
-  if (item.direction !== 'outbound') { await maybeTestReport(item); return; }
+  if (item.refuse) { await handleRefusal(item, src); return; }
+  if (item.direction !== 'outbound') {
+    const reported = await maybeTestReport(item);
+    if (!reported && item.direction === 'unknown') await noticeUnknown(item, src);
+    return;
+  }
   const tm = TEST_RE.exec(String(item.text || ''));
   if (tm) {                                   // "/test [send]": end-to-end check, never a reply (v1.3.8)
-    await handleTest(item, tm[1]);
+    await handleTest(item, tm[1], src);
     return;
   }
   if (item.typedMismatch) {                   // v1.4.14: the bubble read back differs from what he typed: never send it
@@ -502,6 +519,7 @@ async function handleItem(item, src) {
     const xu = uuidFromKey(item.key);
     if (xu && src) await tabUi(src, { action: 'react', uuid: xu, emoji: '\u26A0\uFE0F' });
     try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'typed_mismatch' }); } catch (e) { /* host down */ }
+    await ackTab(src);
     return;
   }
   const pickText = String(item.text || '').trim().replace(/[.)!]+$/, '');
@@ -542,18 +560,17 @@ async function handleItem(item, src) {
   const xUuid = uuidFromKey(item.key);
   if (d.skip) {
     await addEvent(Object.assign(ev, { status: 'skipped', detail: d.skip }));
-    // v1.4.10: a ⚠️ reaction on the bubble. History and a low direction score stay quiet.
-    // v1.4.21: the reaction can fail, so those same skips also post a ⚠️ line. Never the text.
-    const quietSkip = /^(stale item|direction score)/.test(d.skip);
-    if (xUuid && src && cfg.uiReactions !== false && !quietSkip) {
+    // v1.4.24: an outbound reply in the relay chat always posts a reason, including a low direction
+    // score and a stale bubble. History never reaches this (the content script does not emit it).
+    if (xUuid && src && cfg.uiReactions !== false) {
       await tabUi(src, { action: 'react', uuid: xUuid, emoji: '\u26A0\uFE0F' });
     }
-    if (!quietSkip) {
-      try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: skipReason(d.skip) }); } catch (e) { /* host down */ }
-    }
+    try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: skipReason(d.skip) }); } catch (e) { /* host down */ }
+    await ackTab(src);
     return;
   }
   const payload = { type: 'send', text: item.text || '', quotedText: item.quotedText || '', conversationId: item.conversationId, ts: item.ts };
+  if (item.quoteLabel) payload.quoteLabel = String(item.quoteLabel).slice(0, 80);
   if (cfg.uiReactions !== false && xUuid && src) { payload.ui = true; payload.xUuid = xUuid; }
   if (item.quoteProbe) payload.quoteProbe = item.quoteProbe;
   if (item.cards) payload.cards = item.cards;
@@ -571,19 +588,24 @@ async function handleItem(item, src) {
       try { pre = await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({}, payload, { preflight: true })); } catch (e) { pre = null; }
       if (pre && !pre.held) {
         res = pre; viaPreflight = true;
+        await ackTab(src);                  // v1.4.24: a prompt is the host ack
         undoP.then(async u => {             // 🗑️ during the window still cancels the held reply behind a prompt
           if (!(u && u.trashed)) return;
           const g = await getPendingGuess();
           if (g && g.xUuid === xUuid) await clearPendingGuess();
           await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
         }).catch(() => {});
-      } else if (pre && pre.held) delete payload.quoteProbe;     // logged once, by the preflight
+      } else if (pre && pre.held) {
+        delete payload.quoteProbe;          // logged once, by the preflight
+        await ackTab(src, true);            // host saw it; the send itself is still ahead of the undo window
+      }
     }
     if (!viaPreflight) {
       const u = await undoP;
       if (u && u.trashed) {
         await updateEvent(item.key, { status: 'cancelled', detail: 'undone with \u{1F5D1}\uFE0F' });
         try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'undo_cancelled' }); } catch (e) { /* host down */ }
+        await ackTab(src);
         return;
       }
       await updateEvent(item.key, { status: 'sending' });
@@ -601,7 +623,10 @@ async function handleItem(item, src) {
   if (!viaPreflight) console.log(LOG_PREFIX, 'forwarding reply to host', { conversationId: item.conversationId, textLength: (item.text || '').length, quoted: !!item.quotedText,
                                                       attachments: (payload.attachments || []).length });
   try {
-    if (!viaPreflight) res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
+    if (!viaPreflight) {
+      await ackTab(src, true);              // the 10s warning starts as the host call starts, not during undo
+      res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, payload);
+    }
     if (!res) { status = 'error'; detail = 'no response'; }
     else if (res.needsConfirm && res.handle) {  // item 3 / W1: hold the text in session; confirm with /yes
       await setPendingGuess({ text: item.text, label: String(res.label || ''), handle: String(res.handle || ''),
@@ -628,8 +653,32 @@ async function handleItem(item, src) {
   const patch = { status, detail };
   if (res && res.contact) { patch.contactName = String(res.contact).slice(0, 40); patch.routedBy = String(res.routedBy || ''); }
   await updateEvent(item.key, patch);
+  if (res) await ackTab(src);
   if (res && res.ui) await applyUi(res, src, seenAt);
   if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
+}
+
+// v1.4.24: a relay-chat bubble we still cannot call outbound, but that quotes a message or carries
+// the owner's "You sent" label. Post a reason. A plain inbound bubble stays quiet.
+async function noticeUnknown(item, src) {
+  const cfg = await getConfig(false);
+  if (!cfg.ok || !cfg.relayConversationId || item.conversationId !== cfg.relayConversationId) return;
+  if (!item.quotedText && !item.youSent) return;
+  if (!item.text || item.text === '[no text]') return;
+  if (await isDuplicate(item.key)) { await ackTab(src); return; }
+  await addEvent({ kind: 'reply', key: item.key, contactName: '', textLength: (item.text || '').length, status: 'skipped', detail: 'direction unknown' });
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skipped', reason: 'other' }); } catch (e) { /* host down */ }
+  await ackTab(src);
+}
+
+async function handleUnacked(sig) {
+  const cfg = await getConfig(false);
+  const conv = String((sig && sig.conversationId) || '');
+  if (cfg.ok && cfg.relayConversationId && conv && conv !== cfg.relayConversationId) return;
+  const key = 'unacked:' + String((sig && sig.id) || conv || 'relay').replace(/[^a-zA-Z0-9:_-]/g, '').slice(0, 40);
+  if (await isDuplicate(key)) return;
+  await addEvent({ kind: 'reply', key, contactName: '', status: 'skipped', detail: 'no host ack' });
+  try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'unacked' }); } catch (e) { /* host down */ }
 }
 
 // v1.4.2: the owner put a thumbs-up / thumbs-down on the newest pending prompt (content.js checks the
@@ -684,6 +733,11 @@ function sanitizeItem(raw) {
   const mc = Number(raw.mediaCount);
   if (Number.isInteger(mc) && mc > 0) out.mediaCount = Math.min(10, mc);   // v1.4.6: how many photos, nothing else
   if (raw.refuse) { out.refuse = String(raw.refuse).slice(0, 40); out.textLength = Number(raw.textLength) || 0; out.limit = Number(raw.limit) || 4000; }
+  if (raw.youSent === true) out.youSent = true;
+  if (typeof raw.quoteLabel === 'string' && !/[\r\n]/.test(raw.quoteLabel)) {
+    const ql = raw.quoteLabel.trim().slice(0, 80);
+    if (ql) out.quoteLabel = ql;
+  }
   return out;
 }
 
@@ -718,6 +772,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'relay-signal' && msg.signal && sender.tab) {
     if (msg.signal.status === 'wrong_account') setWrongAccount(true).catch(() => {});
     else if (msg.signal.status === 'account_ok') setWrongAccount(false).catch(() => {});
+    else if (msg.signal.status === 'unacked') handleUnacked(msg.signal).catch(() => {});
     return false;
   }
   if (msg.type === 'relay-ui-tick' && sender.tab) {   // v1.4.6: pick up queued reactions (ids only)
@@ -745,6 +800,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 function boot() {
   try { chrome.alarms.create('relay-refresh', { periodInMinutes: 1 }); } catch (e) { /* tests */ }
   getConfig(true).catch(() => {});
+  ensureContentScripts().catch(() => {});
+}
+// v1.4.24: a service-worker restart does not reattach a content script that died when the extension
+// reloaded. Inject content.js into open x.com tabs (the page guard makes a second copy a no-op).
+// Reload a chat tab once only if that inject fails. Do not reload on the minute alarm after that.
+const reinjectedTabs = new Set();
+async function ensureContentScripts() {
+  if (!chrome.tabs || !chrome.tabs.query) return;
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({ url: ['https://x.com/*'] }); } catch (e) { return; }
+  for (const t of tabs || []) {
+    if (!t || typeof t.id !== 'number') continue;
+    let injected = false;
+    if (chrome.scripting && chrome.scripting.executeScript) {
+      try {
+        await chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: true }, files: ['content.js'] });
+        injected = true;
+      } catch (e) { injected = false; }
+    }
+    if (injected || reinjectedTabs.has(t.id)) continue;
+    const url = String(t.url || '');
+    if (!/^https:\/\/x\.com\/(?:i\/chat|messages)\//.test(url)) continue;
+    reinjectedTabs.add(t.id);
+    try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
+  }
 }
 // On install or update, reload any open X Chat tabs so the new content script is the one running.
 async function reloadChatTabs() {
@@ -761,7 +841,7 @@ async function onGuessExpiry() {
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_expired', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }
 if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a => {
-  if (a.name === 'relay-refresh') getConfig(true).catch(() => {});
+  if (a.name === 'relay-refresh') { getConfig(true).catch(() => {}); ensureContentScripts().catch(() => {}); }
   else if (a.name === 'relay-guess-expiry') onGuessExpiry().catch(() => {});
   else if (a.name === 'relay-test-expiry') onTestExpiry().catch(() => {});
 });

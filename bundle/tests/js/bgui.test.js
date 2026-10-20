@@ -69,9 +69,12 @@ function boot(opts) {
     const b = boot({ send: () => ({ ok: false, needsConfirm: true, handle: '+15555550123', label: 'Jordan', reason: 'guessed',
                                     ui: { react: [{ emoji: '\u2753', uuid: UU, noteId: 'cc33' }], type: [{ text: '\u{1F916} Who\u2019s this for?', noteId: 'dd44' }] } }) });
     await b.reply('see you soon');
-    const acts = b.tabMsgs.map(x => x.m.action + ':' + (x.m.emoji || x.m.text));
+    const ui = b.tabMsgs.filter(x => x.m.type !== 'relay-ack');
+    const acts = ui.map(x => x.m.action + ':' + (x.m.emoji || x.m.text));
     assert.deepStrictEqual(acts, ['react:\u2753', 'type:\u{1F916} Who\u2019s this for?']);
-    assert.strictEqual(b.tabMsgs[0].m.prompt, true);
+    assert.strictEqual(ui[0].m.prompt, true);
+    const acks = b.tabMsgs.filter(x => x.m.type === 'relay-ack');
+    assert.ok(acks.length >= 1 && acks[acks.length - 1].m.hold === false, 'a prompt is a final host ack');
     assert.deepStrictEqual(b.host.filter(m => m.type === 'ui_ack').map(m => m.noteId), ['cc33', 'dd44']);
   });
 

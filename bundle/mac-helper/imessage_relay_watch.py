@@ -60,7 +60,7 @@ STATE_PATH = os.path.join(rc.APP_DIR, 'watch_state.json')
 STATUS_PATH = os.path.join(rc.APP_DIR, 'status.json')
 JOBS_DIR = os.path.join(rc.APP_DIR, 'jobs')
 NOTIFY_RETRY_DIR = os.path.join(rc.APP_DIR, 'notify_retry')
-UI_ACK_GRACE_S = 10.0       # v1.4.6: wait this long for the extension's \u2705 before a text confirmation
+UI_ACK_GRACE_S = 16.0       # v1.4.24: the ✅ attempt can take ~12s. Wait past that so a placed reaction still suppresses the → line.
 MIRROR_GRACE_S = 20.0       # v1.4.6: a mirrored tapback not shown in X by then is posted as a text line
 SPAM_SUMMARY_EVERY_S = 3600  # v1.4.6: "N texts went to Spam" (counts only) at most hourly
 PREFS_TTL_S = 600
@@ -829,8 +829,8 @@ class Watcher:
 
     def _after_post(self, m, t):
         self._last_route, self._last_route_at = m.get('route'), t
-        if m.get('quiet'):
-            try:   # routing for a native quote of an unprefixed line: keyed HMACs of its text, never the text
+        if not m.get('reaction'):
+            try:   # v1.4.24: every relayed body, not only quiet lines. A native Reply quotes the body.
                 rc.record_quote_keys(m['text'], m.get('route', ''), t)
             except Exception:
                 pass

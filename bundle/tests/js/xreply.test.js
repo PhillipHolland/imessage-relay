@@ -127,6 +127,142 @@ function xRow(doc, n, opts = {}) {
     assert.ok(/3\.div#article\{tabindex,aria-labelledby,aria-describedby\} 4\.div@message-text-<self>\{id\}/.test(fp), fp);
     det.stop();
   });
+  function textRow(doc, n, text, inbound) {
+    const e = doc.createElement('div');
+    e.setAttribute('data-testid', 'message-' + uuid(n));
+    if (inbound) e.classList.add('justify-start');
+    const span = doc.createElement('span');
+    span.setAttribute('data-testid', 'message-text-' + uuid(n));
+    span.textContent = text;
+    e.appendChild(span);
+    return e;
+  }
+
+  await test('hidden You sent makes a text reply outbound with no layout', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    panel(doc).appendChild(xRow(doc, 5, { quoted: 'Jordan: (I got it)', text: 'ok' }));
+    await sleep(80);
+    assert.strictEqual(logs.length, 1);
+    assert.strictEqual(logs[0].direction, 'outbound');
+    assert.ok(logs[0].score >= 3, logs[0].signals.join(' '));
+    assert.ok(logs[0].signals.some(s => s.indexOf('sr:+3') === 0), logs[0].signals.join(' '));
+    assert.ok(!/You sent/.test(logs[0].quotedText || ''));
+    det.stop();
+  });
+
+  await test('justify-start stays inbound even with You sent and a preview', async () => {
+    const { doc, det, logs } = setup();
+    await sleep(200);
+    const row = xRow(doc, 6, { quoted: 'Jordan: (I got it)', text: 'ok' });
+    row.classList.add('justify-start');
+    panel(doc).appendChild(row);
+    await sleep(80);
+    assert.strictEqual(logs[0].direction, 'inbound');
+    assert.ok(logs[0].score <= -3, logs[0].signals.join(' '));
+    assert.ok(!logs[0].quoteLabel);
+    det.stop();
+  });
+
+  await test('an unprefixed quote under one header names that sender', async () => {
+    const { doc, det, logs } = setup(undefined, undefined, { config: { maxNewPerBatch: 8 } });
+    await sleep(200);
+    const p = panel(doc);
+    p.appendChild(textRow(doc, 7, '\u{1F4AC} Sam \u00b7 7:20 PM', true));
+    p.appendChild(textRow(doc, 8, 'picnic at the lake saturday', true));
+    p.appendChild(xRow(doc, 9, { quoted: 'picnic at the lake saturday', text: 'sounds good' }));
+    await sleep(80);
+    const reply = logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(reply.length, 1);
+    assert.strictEqual(reply[0].quoteLabel, 'Sam');
+    assert.ok(!/Sam:/.test(reply[0].quotedText || ''), JSON.stringify(reply[0].quotedText));
+    det.stop();
+  });
+
+  await test('the same body under two headers does not guess a sender', async () => {
+    const { doc, det, logs } = setup(undefined, undefined, { config: { maxNewPerBatch: 8 } });
+    await sleep(200);
+    const p = panel(doc);
+    p.appendChild(textRow(doc, 10, '\u{1F4AC} Sam \u00b7 7:20 PM', true));
+    p.appendChild(textRow(doc, 11, 'picnic at the lake saturday', true));
+    p.appendChild(textRow(doc, 12, '\u{1F4AC} Jordan \u00b7 7:21 PM', true));
+    p.appendChild(textRow(doc, 13, 'picnic at the lake saturday', true));
+    p.appendChild(xRow(doc, 14, { quoted: 'picnic at the lake saturday', text: 'sounds good' }));
+    await sleep(80);
+    const reply = logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(reply.length, 1);
+    assert.ok(!reply[0].quoteLabel, JSON.stringify(reply[0].quoteLabel));
+    det.stop();
+  });
+
+  await test('a typed send with no host ack posts one unacked status; an ack cancels it', async () => {
+    const s = setup(undefined, undefined, { state: { conversationFilter: '111-222' }, config: { ackMs: 50 } });
+    await sleep(200);
+    const box = s.doc.createElement('div');
+    box.setAttribute('data-testid', 'dm-composer-textarea');
+    box.textContent = 'hello there';
+    s.doc.body.appendChild(box);
+    box.dispatchEvent(new s.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(20);
+    assert.strictEqual(s.statuses.length, 0);
+    await sleep(70);
+    assert.strictEqual(s.statuses.length, 1);
+    assert.strictEqual(s.statuses[0].status, 'unacked');
+    assert.strictEqual(s.statuses[0].conversationId, '111-222');
+    assert.ok(!s.statuses[0].text);
+    await sleep(70);
+    assert.strictEqual(s.statuses.length, 1, 'fires once');
+    s.det.stop();
+
+    const s2 = setup(undefined, undefined, { state: { conversationFilter: '111-222' }, config: { ackMs: 50 } });
+    await sleep(200);
+    const box2 = s2.doc.createElement('div');
+    box2.setAttribute('data-testid', 'dm-composer-textarea');
+    box2.textContent = 'hello there';
+    s2.doc.body.appendChild(box2);
+    box2.dispatchEvent(new s2.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    s2.det.noteHostAck(false);
+    await sleep(80);
+    assert.strictEqual(s2.statuses.length, 0);
+    s2.det.stop();
+  });
+
+  await test('a hold ack restarts the unacked clock', async () => {
+    const s = setup(undefined, undefined, { state: { conversationFilter: '111-222' }, config: { ackMs: 80 } });
+    await sleep(200);
+    const box = s.doc.createElement('div');
+    box.setAttribute('data-testid', 'dm-composer-textarea');
+    box.textContent = 'hello there';
+    s.doc.body.appendChild(box);
+    box.dispatchEvent(new s.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(40);
+    s.det.noteHostAck(true);
+    await sleep(50);
+    assert.strictEqual(s.statuses.length, 0, 'the first clock was reset');
+    await sleep(50);
+    assert.strictEqual(s.statuses.length, 1);
+    assert.strictEqual(s.statuses[0].status, 'unacked');
+    s.det.stop();
+  });
+
+  await test('a reply that points at one message uses that bubble header only', async () => {
+    const { doc, det, logs } = setup(undefined, undefined, { config: { maxNewPerBatch: 8 } });
+    await sleep(200);
+    const p = panel(doc);
+    p.appendChild(textRow(doc, 20, '\u{1F4AC} Sam \u00b7 7:20 PM', true));
+    p.appendChild(textRow(doc, 21, 'picnic at the lake saturday', true));
+    p.appendChild(textRow(doc, 22, '\u{1F4AC} Jordan \u00b7 7:21 PM', true));
+    p.appendChild(textRow(doc, 23, 'picnic at the lake saturday', true));
+    const row = xRow(doc, 24, { quoted: 'picnic at the lake saturday', text: 'sounds good' });
+    row.setAttribute('data-reply-to', uuid(21));
+    p.appendChild(row);
+    await sleep(80);
+    const reply = logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(reply.length, 1);
+    assert.strictEqual(reply[0].quoteLabel, 'Sam');
+    det.stop();
+  });
+
   console.log(passed + ' passed, ' + failed + ' failed (v1.4.4 real X Reply markup)');
   process.exit(failed ? 1 : 0);
 })();

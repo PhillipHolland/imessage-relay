@@ -23,8 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.23'
-EXTENSION_VERSION = '1.4.21'   # v1.4.23 does not change the extension (no reload)
+VERSION = '1.4.24'
+EXTENSION_VERSION = '1.4.24'   # v1.4.24 changes the extension (reload it; open chats are reinjected)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -45,7 +45,7 @@ def with_host_lock(fn):
         fcntl.flock(lock, fcntl.LOCK_EX)
         return fn()
 ECHO_STORE_PATH = os.path.join(APP_DIR, 'relayed_echo.json')   # HMACs of recently relayed inbound text; never bodies
-QUOTE_KEYS_PATH = os.path.join(APP_DIR, 'quote_keys.json')     # v1.4.6: HMACs of unprefixed (quiet) lines -> route; never bodies
+QUOTE_KEYS_PATH = os.path.join(APP_DIR, 'quote_keys.json')     # v1.4.6/v1.4.24: HMACs of relayed bodies -> route; never bodies
 QUOTE_KEYS_TTL_S = 2 * 86400
 ECHO_TTL_S = 3600
 ECHO_MIN_LEN = 20   # only guard against bouncing back a substantial body; short replies ('ok') are never echoes
@@ -951,7 +951,7 @@ def _maybe_confirm_directive(res, target, form, name, live):
     return res
 
 
-def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
+def route_reply(text, quoted, cfg, roster, now, allow_empty=False, quote_label=''):
     """Decide who an owner reply goes to. Priority: (1) the quoted relay message, (2) a leading
     "<label or name>:" prefix (stripped before sending), (3) the most recent sender within
     replyWindowMinutes unless another wrote within ambiguousSeconds. Recipients: contacts; with
@@ -1024,6 +1024,16 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
             q_handle, q_status = next(iter(hits)), 'match'
         elif len(hits) > 1:
             q_status = 'ambiguous'
+    # v1.4.24: the extension names the sender from the 💬 header above the quoted bubble. Used only when
+    # the quote text itself did not resolve. An ambiguous quote (or an ambiguous label) is never overridden.
+    if q_status == 'none' and quote_label and '\n' not in str(quote_label) and '\r' not in str(quote_label):
+        lab = re.sub(r'\s+', ' ', str(quote_label)).strip()[:80]
+        if lab:
+            hits = {h for h in (contact_keys(d).get(lab.lower()) or ()) if h in by_handle}
+            if len(hits) == 1:
+                q_handle, q_status = next(iter(hits)), 'match'
+            elif len(hits) > 1:
+                q_status = 'ambiguous'
     p_handle, rest, p_status = parse_prefix(text, cfg, d)
     # Conversational addressing (v1.3.5, item A): when there is no "<Name>:" colon prefix, try the
     # directive forms ("text Sam ...", "tell Sam: ...", "Sam, ...", "@Sam ..."). A resolved directive

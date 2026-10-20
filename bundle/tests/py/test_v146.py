@@ -161,6 +161,24 @@ class HostIgnoresItsOwnOutput(HostBase):
         self.assertEqual(r['undoSeconds'], 10, 'clamped')
 
 
+class UnackedWarning(HostBase):
+    def test_unacked_posts_the_reload_line_verbatim(self):
+        line = '\u26a0\ufe0f Didn\u2019t send. Reload X Chat and retype.'
+        r = self.req({'type': 'signal', 'status': 'unacked'})
+        self.assertTrue(r.get('ok'))
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(self.posts[0]['type'], 'status')
+        self.assertEqual(self.posts[0]['detail'], line)
+        ev = rp.format_event(self.posts[0])
+        self.assertEqual(ev['lines'][0]['text'], line)
+        self.assertNotIn('Not sent.', ev['lines'][0]['text'])
+        with open(self.m.rc.LOG_PATH, encoding='utf-8') as f:
+            log = f.read()
+        self.assertIn('"status": "unacked"', log)
+        self.assertNotIn('Reload', log)
+        self.assertNotIn('retype', log)
+
+
 class UiQueue(unittest.TestCase):
     def setUp(self):
         self.tmp = tmpdir()
@@ -226,6 +244,18 @@ class WatchConfirm(WatchBase):
         self.now += 15
         self.w.tick()
         self.assertEqual(self.types().count('sent'), 1, 'no ack -> the old text confirmation')
+
+    def test_an_ack_at_twelve_seconds_still_suppresses_the_line(self):
+        # The ✅ attempt can take ~12s, past the old 10s grace. Wait, then a placed reaction posts nothing.
+        pid = self.sent(ago=12)
+        self.w.tick()
+        self.assertNotIn('sent', self.types())
+        self.assertEqual(len(self.m.rc.load_pending()), 1)
+        self.m.rc.update_pending(pid, uiConfirmed=True)
+        self.now += 10
+        self.w.tick()
+        self.assertNotIn('sent', self.types())
+        self.assertEqual(self.m.rc.load_pending(), [])
 
     def test_failed_reaction_posts_at_once(self):
         self.sent(ago=2, uiFailed=True)
@@ -515,10 +545,10 @@ class QuietNames(test_watch.Base):
         self.w.tick()
         self.assertFalse(self.msgs()[-1].get('quiet'))
 
-    def route(self, quoted, text='sounds good'):
+    def route(self, quoted, text='sounds good', quote_label=''):
         rc = self.m.rc
         cfg = rc.sanitize_config(self.cfg)
-        return rc.route_reply(text, quoted, cfg, rc.load_roster(), self.now + 5)
+        return rc.route_reply(text, quoted, cfg, rc.load_roster(), self.now + 5, quote_label=quote_label)
 
     def test_native_quote_of_an_unprefixed_line_routes_to_its_sender(self):
         for h, t in ((SAM, 'first from sam'), (SAM, 'are we still on for the picnic saturday'), (ALLOWED, 'unrelated')):
@@ -544,6 +574,59 @@ class QuietNames(test_watch.Base):
             self.w.tick()
         raw = open(self.m.rc.QUOTE_KEYS_PATH).read()
         self.assertNotIn('picnic', raw)
+
+    def test_the_first_line_body_is_keyed_and_a_chrome_word_matches_only_in_full(self):
+        body = 'picnic at the lake saturday'
+        self.db.add(ALLOWED, text=body)
+        self.w.tick()
+        self.assertFalse(self.msgs()[-1].get('quiet'))
+        r = self.route(body)
+        self.assertEqual((r['contact']['handle'], r['by']), (ALLOWED, 'quote'))
+        r = self.route('iMessage ' + body)
+        self.assertEqual((r['contact']['handle'], r['by']), (ALLOWED, 'quote'))
+        r = self.route('iMessage picnic at the lake satur')   # chrome word plus a truncated body: not a prefix guess
+        self.assertNotEqual(r.get('by'), 'quote')
+
+    def test_two_senders_stay_ambiguous_with_a_chrome_word_and_a_label(self):
+        body = 'call me when you can please'
+        self.db.add(SAM, text=body)
+        self.w.tick()
+        self.db.add(ALLOWED, text=body)
+        self.w.tick()
+        for q in (body, 'iMessage ' + body):
+            r = self.route(q, quote_label='Sam')
+            self.assertTrue(r.get('needsTarget'), q)
+            self.assertNotIn('contact', r)
+
+    def test_a_header_label_routes_when_the_quote_is_not_keyed(self):
+        r = self.route('zzzz never relayed body', quote_label='Sam')
+        self.assertEqual((r['contact']['handle'], r['by']), (SAM, 'quote'))
+
+    def test_a_shared_first_name_is_not_a_guess(self):
+        self.cfg['contacts'] = [
+            {'name': 'Sam Ellis', 'handle': '15555550150'},
+            {'name': 'Sam Ortiz', 'handle': '15555550123'},
+        ]
+        r = self.route('zzzz never relayed body', quote_label='Sam')
+        self.assertTrue(r.get('needsTarget'))
+        self.assertNotIn('contact', r)
+
+    def test_a_resolved_body_beats_a_different_header_label(self):
+        self.db.add(SAM, text='picnic at the lake saturday')
+        self.w.tick()
+        r = self.route('picnic at the lake saturday', quote_label='Jordan')
+        self.assertEqual((r['contact']['handle'], r['by']), (SAM, 'quote'))
+
+    def test_a_reaction_line_is_not_quote_keyed(self):
+        self.db.add(SAM, text='bring the salad please')
+        self.w.tick()
+        with open(self.m.rc.QUOTE_KEYS_PATH, encoding='utf-8') as fh:
+            n = len(json.load(fh)['entries'])
+        self.db.add(SAM, text='Liked', assoc=2001, assoc_guid='p:0/whatever')
+        self.w.tick()
+        with open(self.m.rc.QUOTE_KEYS_PATH, encoding='utf-8') as fh:
+            self.assertEqual(len(json.load(fh)['entries']), n)
+        self.assertNotEqual(self.route('Liked').get('by'), 'quote')
 
 
 class RecapAndFormatting(unittest.TestCase):
