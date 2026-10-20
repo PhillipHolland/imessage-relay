@@ -1041,6 +1041,139 @@
       return oneLabel(matchingLabels(all, idx, longs, false));
     }
 
+    // v1.4.29: Mail in X Chat posts into this same 1:1 chat as the relay bot. A native Reply whose
+    // quoted parent is from that sender and whose text starts with an envelope or a warning is left
+    // for Mail in X Chat. A relay warning is skipped only when it is that parent, not when it is posted.
+    const MAIL_BOT_ID = '2111240665258438656';
+    function opensMailCard(text) {
+      const t = String(text || '').trim();
+      return t.startsWith('\u2709') || t.startsWith('\u26A0');
+    }
+    function mailNorm(s) {
+      return normBody(s).replace(/[\uFE0E\uFE0F]/g, '');
+    }
+    function mailKeys(quoted) {
+      const n = mailNorm(quoted);
+      const keys = [];
+      if (n.length >= 4) keys.push(n);
+      const sp = n.indexOf(' ');
+      if (sp > 0 && sp <= 40 && n.length - sp - 1 >= 4) keys.push(n.slice(sp + 1));
+      return keys;
+    }
+    function idDigits(v) {
+      const s = String(v == null ? '' : v).trim();
+      return /^\d{4,20}$/.test(s) ? s : '';
+    }
+    function reactSender(el) {
+      let found = '';
+      const dig = (obj, depth) => {
+        if (found || !obj || typeof obj !== 'object' || depth > 3) return;
+        for (const k of ['senderId', 'sender_id', 'userId', 'user_id']) {
+          const id = idDigits(obj[k]);
+          if (id) { found = id; return; }
+        }
+        if (depth < 2) {
+          if (obj.sender) dig(obj.sender, depth + 1);
+          if (obj.message) dig(obj.message, depth + 1);
+        }
+      };
+      try {
+        const keys = Object.keys(el);
+        for (let i = 0; i < keys.length && !found; i++) {
+          const k = keys[i];
+          if (k.indexOf('__reactProps') === 0) dig(el[k], 0);
+          else if (k.indexOf('__reactFiber') === 0 || k.indexOf('__reactInternalInstance') === 0) {
+            let f = el[k];
+            const seenF = new Set();
+            for (let n = 0; f && n < 25 && !seenF.has(f) && !found; n++, f = f.return) {
+              seenF.add(f);
+              dig(f.memoizedProps, 0);
+              dig(f.pendingProps, 0);
+            }
+          }
+        }
+      } catch (e) { /* no fiber */ }
+      return found;
+    }
+    function explicitSender(entry) {
+      const names = ['data-sender-id', 'data-user-id', 'data-userid', 'data-senderid'];
+      let found = '';
+      const take = el => {
+        if (found || !el || !el.getAttribute) return;
+        for (let i = 0; i < names.length; i++) {
+          const id = idDigits(el.getAttribute(names[i]));
+          if (id) { found = id; return; }
+        }
+        const href = String(el.getAttribute('href') || '');
+        const m = /(?:\/i\/user\/|\/user\/|[?&](?:user_id|sender_id|senderId)=)(\d{4,20})\b/.exec(href);
+        if (m) found = m[1];
+      };
+      take(entry);
+      if (!found) walkElements(entry, take);
+      return found || reactSender(entry);
+    }
+    function convPair() {
+      const m = /^(\d{1,20})-(\d{1,20})$/.exec(conversationId());
+      return m ? [m[1], m[2]] : null;
+    }
+    function senderIdOf(entry) {
+      const explicit = explicitSender(entry);
+      if (explicit) return explicit;
+      const ids = convPair();
+      if (!ids) return '';
+      const owner = String(cfg.ownerXUserId || '').replace(/\D/g, '');
+      if (!owner || ids.indexOf(owner) < 0 || owner === MAIL_BOT_ID) return '';
+      let a;
+      try { a = analyze(entry); } catch (e) { return ''; }
+      if (a.direction === 'inbound') return ids[0] === owner ? ids[1] : ids[0];
+      if (a.direction === 'outbound' || a.youSent) return owner;
+      return '';
+    }
+    function mailCardEntry(entry) {
+      let text = '';
+      try { text = entryText(entry).text; } catch (e) { return false; }
+      if (!opensMailCard(text)) return false;
+      return senderIdOf(entry) === MAIL_BOT_ID;
+    }
+    // Same parent the quote is resolved against: a replied-to id, else one earlier bubble whose
+    // text is the quote (the preview's leading word, such as the bot name, is allowed).
+    function quotedParents(entry, quoted) {
+      const all = allEntries();
+      const idx = all.indexOf(entry);
+      if (idx < 0) return [];
+      const ref = referencedUuid(entry);
+      if (ref) {
+        const j = all.findIndex(e => e !== entry && String(uuidOf(e) || '').toLowerCase() === ref);
+        return j >= 0 ? [all[j]] : [];
+      }
+      const keys = mailKeys(quoted);
+      if (!keys.length) return [];
+      const hitsFor = (list, exact) => {
+        const hits = [];
+        for (let i = idx - 1; i >= 0; i--) {
+          let a;
+          try { a = analyze(all[i]); } catch (err) { continue; }
+          if (!a || a.direction === 'outbound') continue;
+          const body = mailNorm(a.text);
+          if (body.length < 4 || headerLabelOf(all[i])) continue;
+          const hit = exact ? list.some(k => body === k) : list.some(k => k.length >= 12 && body.indexOf(k) === 0);
+          if (hit) hits.push(all[i]);
+        }
+        return hits;
+      };
+      const exactHits = hitsFor(keys, true);
+      if (exactHits.length) return exactHits;
+      const longs = keys.filter(k => k.length >= 12);
+      if (!longs.length) return [];
+      return hitsFor(longs, false);
+    }
+    function isMailCardReply(entry, quoted) {
+      const hits = quotedParents(entry, quoted);
+      if (!hits.length) return false;
+      for (let i = 0; i < hits.length; i++) if (!mailCardEntry(hits[i])) return false;
+      return true;
+    }
+
     // v1.4.24: every typed send in the relay chat must get a host ack. Otherwise the background
     // posts one fixed warning. History and other chats never arm this.
     let ackTimer = null, ackGen = 0;
@@ -1338,6 +1471,21 @@
 
         lastEls[a.direction] = e;
         lastEls.any = e;
+
+        // v1.4.29: native Reply to a mail card (or a relay warning that starts with ⚠️) from
+        // the relay bot. No send, no check, no refusal. The fingerprint has no message text.
+        if (a.direction === 'outbound' && a.quotedText) {
+          let mail = false;
+          try { mail = isMailCardReply(quoteEntry, a.quotedText); } catch (err) { mail = false; }
+          if (mail) {
+            seen.add(a.uuid);
+            noteHostAck(false);
+            let fp = '';
+            try { fp = structureOf(e); } catch (err) { fp = ''; }
+            try { onStatus({ status: 'skip_mail_card', fingerprint: fp }); } catch (err) { /* ignore */ }
+            continue;
+          }
+        }
 
         // Item 10: refuse an over-limit reply (owner notice) instead of truncating.
         if (a.text.length > cfg.maxTextLength) {

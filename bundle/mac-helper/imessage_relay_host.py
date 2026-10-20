@@ -1780,6 +1780,10 @@ _SKIP_REASON = {
 def handle_signal(msg, cfg, now, poster):
     """A browser-side condition (item 6) the host turns into one body-free webhook. No message text."""
     status = str(msg.get('status') or '')
+    if status == 'skip_mail_card':
+        # v1.4.29: native Reply to a mail card. One fingerprint. No webhook, no warning, no text.
+        rc.log_event('skip_mail_card', fingerprint=rc.clean_probe(msg.get('fingerprint')))
+        return {'ok': True}
     if status == 'unacked':
         rc.log_event('signal', status='unacked')
         notify(cfg, poster, {'type': 'status', 'detail': UNACKED_LINE, 'at': rc.iso_utc(now())})

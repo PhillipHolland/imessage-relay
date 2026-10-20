@@ -209,6 +209,23 @@ class Outbound(HostBase):
         self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
         self.assertNotIn('Jordan:', read_log())
 
+    def test_skip_mail_card_logs_fingerprint_only(self):
+        secret = 'Note for Jordan about Saturday'
+        fp = 'E=0.div@message-<self>{data-dm-message-row,data-send-status}'
+        r = self.req({'type': 'signal', 'status': 'skip_mail_card', 'fingerprint': fp,
+                      'text': secret, 'quotedText': secret, 'body': secret})
+        self.assertTrue(r.get('ok'), r)
+        self.assertEqual(self.posts, [])
+        log = read_log()
+        evs = [json.loads(line) for line in log.splitlines() if '"skip_mail_card"' in line]
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(set(evs[0]), {'ts', 'event', 'fingerprint'})
+        self.assertEqual(evs[0]['event'], 'skip_mail_card')
+        self.assertIn('data-dm-message-row', evs[0]['fingerprint'])
+        self.assertNotIn('quote_probe', log)
+        self.assertNotIn(secret, log)
+        self.assertNotIn('"text"', log)
+
     def test_photo_held_logs_counts_only(self):
         r = self.req({'type': 'signal', 'status': 'photo_held', 'count': 1, 'bytes': 12,
                       'kinds': ['png', 'nope', 'jpeg']})

@@ -23,8 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.28'
-EXTENSION_VERSION = '1.4.28'   # v1.4.28 changes the extension
+VERSION = '1.4.29'
+EXTENSION_VERSION = '1.4.29'   # v1.4.29 changes the extension
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')

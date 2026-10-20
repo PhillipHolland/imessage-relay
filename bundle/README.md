@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.28
+# iMessage Relay v1.4.29
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,6 +22,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.29 (Chrome extension 1.4.29 + Mac helper; `relay_post.py` does not change): a native Reply to a Mail in X Chat card is not sent as an iMessage. Those cards are in the relay chat and start with ✉️ or ⚠️. Nothing is texted, and the chat gets no check mark and no warning. A reply to a normal relay card still sends, including one from that same sender that does not start with those marks. A relay warning that starts with ⚠️ is skipped only when it is the message you reply to. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.28 (Chrome extension 1.4.28 + Mac helper; `relay_post.py` does not change): a photo X Chat draws as its own bubble still goes with the text from that same send. A name prefix on its own ("Alex:") sends the photo with no caption. If the photo never goes out, the chat says so, and says "⚠️ photo didn’t send" when it does not know who it was for. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.27 (Chrome extension 1.4.27 + Mac helper; `relay_post.py` does not change): a photo you attach in the relay chat is sent to the same person as the text. A caption in the same bubble goes with it. A photo alone pairs with the next text within about 20 seconds, or follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.26 (Chrome extension 1.4.26 + Mac helper; `relay_post.py` does not change): a ✅ on your own sent message is placed from the hover tray. The "+" opens the emoji picker, and a twemoji chip counts as placed. A background or unfocused X Chat tab is injected again after the extension reloads. If that script is not running, or a fresh self-send is not picked up, the chat posts the reload warning instead of staying silent. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -173,7 +174,8 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.28)
+## Limits (v1.4.29)
+- A native Reply to a Mail in X Chat card (the card starts with ✉️ or ⚠️) is not sent. A reply to a normal relay card still sends. A relay warning that starts with ⚠️ is skipped only when you reply to that warning.
 - A photo X Chat splits into its own bubble is sent with the text from that same send. "Alex:" on its own sends the photo with no caption. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages, or "⚠️ photo didn’t send" when there is no name.
 - A photo you attach is sent with its caption, or with the next text within about 20 seconds. A photo alone follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages.
 - A native Reply that quotes only the message body goes to that sender when one person sent it, or when the 💬 header above that bubble names one person. Two matches ask who it is for.

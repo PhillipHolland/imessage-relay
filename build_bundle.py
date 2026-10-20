@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.28, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.29, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=e021b02a6338c856363eada57e338a7fcad35d4d183126fd398c61184aef21a1 nl=1
-# iMessage Relay v1.4.28
+@@@@ FILE README.md mode=644 sha256=b91bab4e58fdb71bebe5500594d1aeed09a37df7649c801bb9244ef4c666d12d nl=1
+# iMessage Relay v1.4.29
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.29 (Chrome extension 1.4.29 + Mac helper; `relay_post.py` does not change): a native Reply to a Mail in X Chat card is not sent as an iMessage. Those cards are in the relay chat and start with ✉️ or ⚠️. Nothing is texted, and the chat gets no check mark and no warning. A reply to a normal relay card still sends, including one from that same sender that does not start with those marks. A relay warning that starts with ⚠️ is skipped only when it is the message you reply to. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.28 (Chrome extension 1.4.28 + Mac helper; `relay_post.py` does not change): a photo X Chat draws as its own bubble still goes with the text from that same send. A name prefix on its own ("Alex:") sends the photo with no caption. If the photo never goes out, the chat says so, and says "⚠️ photo didn’t send" when it does not know who it was for. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.27 (Chrome extension 1.4.27 + Mac helper; `relay_post.py` does not change): a photo you attach in the relay chat is sent to the same person as the text. A caption in the same bubble goes with it. A photo alone pairs with the next text within about 20 seconds, or follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.26 (Chrome extension 1.4.26 + Mac helper; `relay_post.py` does not change): a ✅ on your own sent message is placed from the hover tray. The "+" opens the emoji picker, and a twemoji chip counts as placed. A background or unfocused X Chat tab is injected again after the extension reloads. If that script is not running, or a fresh self-send is not picked up, the chat posts the reload warning instead of staying silent. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -192,7 +193,8 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.28)
+## Limits (v1.4.29)
+- A native Reply to a Mail in X Chat card (the card starts with ✉️ or ⚠️) is not sent. A reply to a normal relay card still sends. A relay warning that starts with ⚠️ is skipped only when you reply to that warning.
 - A photo X Chat splits into its own bubble is sent with the text from that same send. "Alex:" on its own sends the photo with no caption. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages, or "⚠️ photo didn’t send" when there is no name.
 - A photo you attach is sent with its caption, or with the next text within about 20 seconds. A photo alone follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages.
 - A native Reply that quotes only the message body goes to that sender when one person sent it, or when the 💬 header above that bubble names one person. Two matches ask who it is for.
@@ -1343,7 +1345,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=9c6958c8e8b54ee13384115b655244fd6c17d6f28e786d3967c0a03d1a605b3b nl=1
+@@@@ FILE extension/background.js mode=644 sha256=604f0d3bc2d66b57d164e9413a5aa69a839d607d3296eae7a287ad25e3405df3 nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -2181,6 +2183,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     else if (msg.signal.status === 'unacked') handleUnacked(msg.signal).catch(() => {});
     else if (msg.signal.status === 'photo_miss') {
       try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_miss' }); } catch (e) { /* host down */ }
+    } else if (msg.signal.status === 'skip_mail_card') {
+      // v1.4.29: a reply to a mail card. Fingerprint only. No check mark, no refusal, no message text.
+      const fp = String(msg.signal.fingerprint || '').replace(/[^A-Za-z0-9#@\[\]{},.:;<>|_\-!+=/ ()]/g, '').slice(0, 4000);
+      try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skip_mail_card', fingerprint: fp }); } catch (e) { /* host down */ }
     } else if (msg.signal.status === 'photo_held') {
       // v1.4.28: counts only. Kinds stay on the allow-list. No message text, no image bytes.
       const count = Math.max(0, Math.min(10, Number(msg.signal.count) || 0));
@@ -2377,7 +2383,7 @@ chrome.runtime.onStartup.addListener(boot);
 // onStartup does not fire. Tests omit getURL, so they do not inject on load.
 try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot(); } catch (e) { /* tests */ }
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=5bca0ac7cf1fd9fa4e3a5072372011ffd9de8aceee622e7bc543595a8ac594d3 nl=1
+@@@@ FILE extension/content.js mode=644 sha256=914df56ac5c0a810e7dcb6608ce068ce9f62ebf3cf034cc40a79dc999267d0d8 nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -3421,6 +3427,139 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
       return oneLabel(matchingLabels(all, idx, longs, false));
     }
 
+    // v1.4.29: Mail in X Chat posts into this same 1:1 chat as the relay bot. A native Reply whose
+    // quoted parent is from that sender and whose text starts with an envelope or a warning is left
+    // for Mail in X Chat. A relay warning is skipped only when it is that parent, not when it is posted.
+    const MAIL_BOT_ID = '2111240665258438656';
+    function opensMailCard(text) {
+      const t = String(text || '').trim();
+      return t.startsWith('\u2709') || t.startsWith('\u26A0');
+    }
+    function mailNorm(s) {
+      return normBody(s).replace(/[\uFE0E\uFE0F]/g, '');
+    }
+    function mailKeys(quoted) {
+      const n = mailNorm(quoted);
+      const keys = [];
+      if (n.length >= 4) keys.push(n);
+      const sp = n.indexOf(' ');
+      if (sp > 0 && sp <= 40 && n.length - sp - 1 >= 4) keys.push(n.slice(sp + 1));
+      return keys;
+    }
+    function idDigits(v) {
+      const s = String(v == null ? '' : v).trim();
+      return /^\d{4,20}$/.test(s) ? s : '';
+    }
+    function reactSender(el) {
+      let found = '';
+      const dig = (obj, depth) => {
+        if (found || !obj || typeof obj !== 'object' || depth > 3) return;
+        for (const k of ['senderId', 'sender_id', 'userId', 'user_id']) {
+          const id = idDigits(obj[k]);
+          if (id) { found = id; return; }
+        }
+        if (depth < 2) {
+          if (obj.sender) dig(obj.sender, depth + 1);
+          if (obj.message) dig(obj.message, depth + 1);
+        }
+      };
+      try {
+        const keys = Object.keys(el);
+        for (let i = 0; i < keys.length && !found; i++) {
+          const k = keys[i];
+          if (k.indexOf('__reactProps') === 0) dig(el[k], 0);
+          else if (k.indexOf('__reactFiber') === 0 || k.indexOf('__reactInternalInstance') === 0) {
+            let f = el[k];
+            const seenF = new Set();
+            for (let n = 0; f && n < 25 && !seenF.has(f) && !found; n++, f = f.return) {
+              seenF.add(f);
+              dig(f.memoizedProps, 0);
+              dig(f.pendingProps, 0);
+            }
+          }
+        }
+      } catch (e) { /* no fiber */ }
+      return found;
+    }
+    function explicitSender(entry) {
+      const names = ['data-sender-id', 'data-user-id', 'data-userid', 'data-senderid'];
+      let found = '';
+      const take = el => {
+        if (found || !el || !el.getAttribute) return;
+        for (let i = 0; i < names.length; i++) {
+          const id = idDigits(el.getAttribute(names[i]));
+          if (id) { found = id; return; }
+        }
+        const href = String(el.getAttribute('href') || '');
+        const m = /(?:\/i\/user\/|\/user\/|[?&](?:user_id|sender_id|senderId)=)(\d{4,20})\b/.exec(href);
+        if (m) found = m[1];
+      };
+      take(entry);
+      if (!found) walkElements(entry, take);
+      return found || reactSender(entry);
+    }
+    function convPair() {
+      const m = /^(\d{1,20})-(\d{1,20})$/.exec(conversationId());
+      return m ? [m[1], m[2]] : null;
+    }
+    function senderIdOf(entry) {
+      const explicit = explicitSender(entry);
+      if (explicit) return explicit;
+      const ids = convPair();
+      if (!ids) return '';
+      const owner = String(cfg.ownerXUserId || '').replace(/\D/g, '');
+      if (!owner || ids.indexOf(owner) < 0 || owner === MAIL_BOT_ID) return '';
+      let a;
+      try { a = analyze(entry); } catch (e) { return ''; }
+      if (a.direction === 'inbound') return ids[0] === owner ? ids[1] : ids[0];
+      if (a.direction === 'outbound' || a.youSent) return owner;
+      return '';
+    }
+    function mailCardEntry(entry) {
+      let text = '';
+      try { text = entryText(entry).text; } catch (e) { return false; }
+      if (!opensMailCard(text)) return false;
+      return senderIdOf(entry) === MAIL_BOT_ID;
+    }
+    // Same parent the quote is resolved against: a replied-to id, else one earlier bubble whose
+    // text is the quote (the preview's leading word, such as the bot name, is allowed).
+    function quotedParents(entry, quoted) {
+      const all = allEntries();
+      const idx = all.indexOf(entry);
+      if (idx < 0) return [];
+      const ref = referencedUuid(entry);
+      if (ref) {
+        const j = all.findIndex(e => e !== entry && String(uuidOf(e) || '').toLowerCase() === ref);
+        return j >= 0 ? [all[j]] : [];
+      }
+      const keys = mailKeys(quoted);
+      if (!keys.length) return [];
+      const hitsFor = (list, exact) => {
+        const hits = [];
+        for (let i = idx - 1; i >= 0; i--) {
+          let a;
+          try { a = analyze(all[i]); } catch (err) { continue; }
+          if (!a || a.direction === 'outbound') continue;
+          const body = mailNorm(a.text);
+          if (body.length < 4 || headerLabelOf(all[i])) continue;
+          const hit = exact ? list.some(k => body === k) : list.some(k => k.length >= 12 && body.indexOf(k) === 0);
+          if (hit) hits.push(all[i]);
+        }
+        return hits;
+      };
+      const exactHits = hitsFor(keys, true);
+      if (exactHits.length) return exactHits;
+      const longs = keys.filter(k => k.length >= 12);
+      if (!longs.length) return [];
+      return hitsFor(longs, false);
+    }
+    function isMailCardReply(entry, quoted) {
+      const hits = quotedParents(entry, quoted);
+      if (!hits.length) return false;
+      for (let i = 0; i < hits.length; i++) if (!mailCardEntry(hits[i])) return false;
+      return true;
+    }
+
     // v1.4.24: every typed send in the relay chat must get a host ack. Otherwise the background
     // posts one fixed warning. History and other chats never arm this.
     let ackTimer = null, ackGen = 0;
@@ -3718,6 +3857,21 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
 
         lastEls[a.direction] = e;
         lastEls.any = e;
+
+        // v1.4.29: native Reply to a mail card (or a relay warning that starts with ⚠️) from
+        // the relay bot. No send, no check, no refusal. The fingerprint has no message text.
+        if (a.direction === 'outbound' && a.quotedText) {
+          let mail = false;
+          try { mail = isMailCardReply(quoteEntry, a.quotedText); } catch (err) { mail = false; }
+          if (mail) {
+            seen.add(a.uuid);
+            noteHostAck(false);
+            let fp = '';
+            try { fp = structureOf(e); } catch (err) { fp = ''; }
+            try { onStatus({ status: 'skip_mail_card', fingerprint: fp }); } catch (err) { /* ignore */ }
+            continue;
+          }
+        }
 
         // Item 10: refuse an over-limit reply (owner notice) instead of truncating.
         if (a.text.length > cfg.maxTextLength) {
@@ -4785,11 +4939,11 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
   });
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=4fd1e98f92ddf67d6edd526a2b554ebe3456141b9f7651963a88eedc9967dfc5 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=3261559dd9c7bda57f0df159125dac76a50242086191f07d34a7a2a25c69c2ed nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.28",
+  "version": "1.4.29",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -5003,7 +5157,7 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=8a713c485fe940927e294210a6477f3049a5f1e430996d97934a1920b8405a3a nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=532088a915650ad6d6abfd57bf2fbcdc0d2f9998527f6157d6ea706aeba5dbd8 nl=1
 #!/usr/bin/python3
 """
 com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.24.
@@ -6786,6 +6940,10 @@ _SKIP_REASON = {
 def handle_signal(msg, cfg, now, poster):
     """A browser-side condition (item 6) the host turns into one body-free webhook. No message text."""
     status = str(msg.get('status') or '')
+    if status == 'skip_mail_card':
+        # v1.4.29: native Reply to a mail card. One fingerprint. No webhook, no warning, no text.
+        rc.log_event('skip_mail_card', fingerprint=rc.clean_probe(msg.get('fingerprint')))
+        return {'ok': True}
     if status == 'unacked':
         rc.log_event('signal', status='unacked')
         notify(cfg, poster, {'type': 'status', 'detail': UNACKED_LINE, 'at': rc.iso_utc(now())})
@@ -8567,7 +8725,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=97a8e786eb78a9343cfed75d4db4681bdb70843cfa9dd1fe5d12b4561c3be34a nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=1108ff4a49458752614395afc7ce7cc34100b6daf9e49be4899fb52bed1e79c0 nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -8593,8 +8751,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.28'
-EXTENSION_VERSION = '1.4.28'   # v1.4.28 changes the extension
+VERSION = '1.4.29'
+EXTENSION_VERSION = '1.4.29'   # v1.4.29 changes the extension
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -18413,7 +18571,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=dcea40135f2870e5b57feffa69407627f4d60d9def0fea0d13daa4962508841a nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=a6222e89cfd11b4c5a8adbc6ded8ef3aefd5910681e9a0294ee756f801b73932 nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -18468,7 +18626,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.28');
+  assert.strictEqual(m.version, '1.4.29');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'scripting', 'storage']);
@@ -19454,7 +19612,7 @@ const THUMB = '<img alt="Image" src="https://pbs.twimg.com/media/Fabc123?format=
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/xreply.test.js mode=644 sha256=ce8485c9d5cd2155dce84a644d0c4f4eaa163f9545fcfea229abb6f43410ac92 nl=1
+@@@@ FILE tests/js/xreply.test.js mode=644 sha256=6f1ec45b7ff2c333b926f6f6c809931d4e4a63214bb39cc5be3e38304d723703 nl=1
 /* v1.4.4: X Chat's real native Reply markup, rebuilt from a v1.4.3 quote_probe fingerprint. Run:
  *   NODE_PATH=/path/to/node_modules node tests/js/detect.test.js
  */
@@ -19718,6 +19876,71 @@ function xRow(doc, n, opts = {}) {
     assert.strictEqual(reply.length, 1);
     assert.strictEqual(reply[0].quoteLabel, 'Sam');
     det.stop();
+  });
+
+  // v1.4.29: Mail in X Chat cards in the relay conversation. The parent is inbound from the
+  // other participant (2111240665258438656). Fictional names only. No message text in the status.
+  const RELAY_URL = 'https://x.com/i/chat/8475752-2111240665258438656';
+  const RELAY_ID = '8475752-2111240665258438656';
+  async function replyToCard(parentText, replyText, n) {
+    const s = setup(undefined, RELAY_URL, {
+      state: { conversationFilter: RELAY_ID },
+      config: { maxNewPerBatch: 8, ownerXUserId: '8475752', ackMs: 80 },
+    });
+    await sleep(200);
+    const box = s.doc.createElement('div');
+    box.setAttribute('data-testid', 'dm-composer-textarea');
+    box.textContent = replyText;
+    s.doc.body.appendChild(box);
+    box.dispatchEvent(new s.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    const p = panel(s.doc);
+    p.appendChild(textRow(s.doc, n, parentText, true));
+    p.appendChild(xRow(s.doc, n + 1, { quoted: parentText, text: replyText }));
+    await sleep(40);
+    return s;
+  }
+  function assertSkipped(s, secret) {
+    assert.strictEqual(s.logs.filter(i => i.direction === 'outbound').length, 0);
+    const skips = s.statuses.filter(st => st.status === 'skip_mail_card');
+    assert.strictEqual(skips.length, 1);
+    assert.deepStrictEqual(Object.keys(skips[0]).sort(), ['fingerprint', 'status']);
+    assert.ok(/^E=/.test(skips[0].fingerprint), skips[0].fingerprint);
+    assert.ok(!s.statuses.some(st => st.status === 'unacked' || st.status === 'skipped'));
+    const blob = JSON.stringify(s.statuses);
+    assert.ok(blob.indexOf(secret) < 0, blob);
+    assert.ok(blob.indexOf('\u2705') < 0);
+    assert.ok(blob.indexOf('\u26A0') < 0);
+  }
+
+  await test('a native Reply to a mail card that starts with an envelope is not sent', async () => {
+    const parent = '\u2709\uFE0F Note for Jordan about Saturday';
+    const s = await replyToCard(parent, 'Sounds good', 40);
+    await sleep(80);
+    assertSkipped(s, 'Note for Jordan');
+    assert.ok(JSON.stringify(s.statuses).indexOf('Sounds good') < 0);
+    s.det.stop();
+  });
+
+  await test('a native Reply to a mail card that starts with a warning is not sent', async () => {
+    const parent = '\u26A0\uFE0F Mail from Sam could not be opened';
+    const s = await replyToCard(parent, 'I will check', 50);
+    await sleep(80);
+    assertSkipped(s, 'could not be opened');
+    assert.ok(JSON.stringify(s.statuses).indexOf('I will check') < 0);
+    s.det.stop();
+  });
+
+  await test('a native Reply to a normal relay card from that sender still routes', async () => {
+    const parent = 'Alex: picnic at the lake saturday';
+    const s = await replyToCard(parent, 'sounds good', 60);
+    const out = s.logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(out.length, 1, JSON.stringify(s.logs.map(i => i.direction + ':' + (i.text || ''))));
+    assert.strictEqual(out[0].text, 'sounds good');
+    assert.ok(String(out[0].quotedText || '').indexOf(parent) >= 0, JSON.stringify(out[0].quotedText));
+    assert.ok(out[0].quoteProbe && /^E=/.test(out[0].quoteProbe));
+    assert.ok(!s.statuses.some(st => st.status === 'skip_mail_card' || st.status === 'skipped'));
+    s.det.noteHostAck(false);
+    s.det.stop();
   });
 
   console.log(passed + ' passed, ' + failed + ' failed (v1.4.4 real X Reply markup)');
@@ -25815,7 +26038,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=43a80df1f491e23e1f3da013eba12e36518e7b444547392470d66bcc0d8d9977 nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=87ed555f045f67621d0b090d395ff62ce6eeb42c87c522037f3a33ec6b729eda nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -25944,7 +26167,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.28 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.29 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -25974,7 +26197,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.28 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.29 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -26058,7 +26281,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.28 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.29 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -27941,7 +28164,7 @@ class Cards(HostBase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v146_media.py mode=644 sha256=6857e4e99ddd64cc21a5e947643ae132941058fd8dede00a5daaafbda8f32883 nl=1
+@@@@ FILE tests/py/test_v146_media.py mode=644 sha256=75c011f0bd367dc8262f3ee35a84a59c4f9ecad67091c57b8d23fdb48f100eec nl=1
 """v1.4.6: attachments both ways (1:1 photos in, his photos/files out). In-flight temp files only (mode
 600), deleted right after use or on error; logs carry counts, sizes and types only. Fictional names only."""
 import base64
@@ -28152,6 +28375,23 @@ class Outbound(HostBase):
         self.assertEqual(self.posts[-1]['type'], 'status')
         self.assertEqual(self.posts[-1]['detail'], PHOTO % 'Jordan')
         self.assertNotIn('Jordan:', read_log())
+
+    def test_skip_mail_card_logs_fingerprint_only(self):
+        secret = 'Note for Jordan about Saturday'
+        fp = 'E=0.div@message-<self>{data-dm-message-row,data-send-status}'
+        r = self.req({'type': 'signal', 'status': 'skip_mail_card', 'fingerprint': fp,
+                      'text': secret, 'quotedText': secret, 'body': secret})
+        self.assertTrue(r.get('ok'), r)
+        self.assertEqual(self.posts, [])
+        log = read_log()
+        evs = [json.loads(line) for line in log.splitlines() if '"skip_mail_card"' in line]
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(set(evs[0]), {'ts', 'event', 'fingerprint'})
+        self.assertEqual(evs[0]['event'], 'skip_mail_card')
+        self.assertIn('data-dm-message-row', evs[0]['fingerprint'])
+        self.assertNotIn('quote_probe', log)
+        self.assertNotIn(secret, log)
+        self.assertNotIn('"text"', log)
 
     def test_photo_held_logs_counts_only(self):
         r = self.req({'type': 'signal', 'status': 'photo_held', 'count': 1, 'bytes': 12,
@@ -28468,7 +28708,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=c4de462cf36bc4166a0edc19cb922eea2419c2b678e305c98a034db0bcf31819 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=14c5fb8c1aa8a61185abb5dbae311dc44e9244cc1dfa31c51f169a594c13ea13 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -28661,7 +28901,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.28')
+        self.assertEqual(m.rc.VERSION, '1.4.29')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)

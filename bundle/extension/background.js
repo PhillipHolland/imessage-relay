@@ -835,6 +835,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     else if (msg.signal.status === 'unacked') handleUnacked(msg.signal).catch(() => {});
     else if (msg.signal.status === 'photo_miss') {
       try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_miss' }); } catch (e) { /* host down */ }
+    } else if (msg.signal.status === 'skip_mail_card') {
+      // v1.4.29: a reply to a mail card. Fingerprint only. No check mark, no refusal, no message text.
+      const fp = String(msg.signal.fingerprint || '').replace(/[^A-Za-z0-9#@\[\]{},.:;<>|_\-!+=/ ()]/g, '').slice(0, 4000);
+      try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skip_mail_card', fingerprint: fp }); } catch (e) { /* host down */ }
     } else if (msg.signal.status === 'photo_held') {
       // v1.4.28: counts only. Kinds stay on the allow-list. No message text, no image bytes.
       const count = Math.max(0, Math.min(10, Number(msg.signal.count) || 0));

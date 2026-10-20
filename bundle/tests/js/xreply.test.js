@@ -263,6 +263,71 @@ function xRow(doc, n, opts = {}) {
     det.stop();
   });
 
+  // v1.4.29: Mail in X Chat cards in the relay conversation. The parent is inbound from the
+  // other participant (2111240665258438656). Fictional names only. No message text in the status.
+  const RELAY_URL = 'https://x.com/i/chat/8475752-2111240665258438656';
+  const RELAY_ID = '8475752-2111240665258438656';
+  async function replyToCard(parentText, replyText, n) {
+    const s = setup(undefined, RELAY_URL, {
+      state: { conversationFilter: RELAY_ID },
+      config: { maxNewPerBatch: 8, ownerXUserId: '8475752', ackMs: 80 },
+    });
+    await sleep(200);
+    const box = s.doc.createElement('div');
+    box.setAttribute('data-testid', 'dm-composer-textarea');
+    box.textContent = replyText;
+    s.doc.body.appendChild(box);
+    box.dispatchEvent(new s.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    const p = panel(s.doc);
+    p.appendChild(textRow(s.doc, n, parentText, true));
+    p.appendChild(xRow(s.doc, n + 1, { quoted: parentText, text: replyText }));
+    await sleep(40);
+    return s;
+  }
+  function assertSkipped(s, secret) {
+    assert.strictEqual(s.logs.filter(i => i.direction === 'outbound').length, 0);
+    const skips = s.statuses.filter(st => st.status === 'skip_mail_card');
+    assert.strictEqual(skips.length, 1);
+    assert.deepStrictEqual(Object.keys(skips[0]).sort(), ['fingerprint', 'status']);
+    assert.ok(/^E=/.test(skips[0].fingerprint), skips[0].fingerprint);
+    assert.ok(!s.statuses.some(st => st.status === 'unacked' || st.status === 'skipped'));
+    const blob = JSON.stringify(s.statuses);
+    assert.ok(blob.indexOf(secret) < 0, blob);
+    assert.ok(blob.indexOf('\u2705') < 0);
+    assert.ok(blob.indexOf('\u26A0') < 0);
+  }
+
+  await test('a native Reply to a mail card that starts with an envelope is not sent', async () => {
+    const parent = '\u2709\uFE0F Note for Jordan about Saturday';
+    const s = await replyToCard(parent, 'Sounds good', 40);
+    await sleep(80);
+    assertSkipped(s, 'Note for Jordan');
+    assert.ok(JSON.stringify(s.statuses).indexOf('Sounds good') < 0);
+    s.det.stop();
+  });
+
+  await test('a native Reply to a mail card that starts with a warning is not sent', async () => {
+    const parent = '\u26A0\uFE0F Mail from Sam could not be opened';
+    const s = await replyToCard(parent, 'I will check', 50);
+    await sleep(80);
+    assertSkipped(s, 'could not be opened');
+    assert.ok(JSON.stringify(s.statuses).indexOf('I will check') < 0);
+    s.det.stop();
+  });
+
+  await test('a native Reply to a normal relay card from that sender still routes', async () => {
+    const parent = 'Alex: picnic at the lake saturday';
+    const s = await replyToCard(parent, 'sounds good', 60);
+    const out = s.logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(out.length, 1, JSON.stringify(s.logs.map(i => i.direction + ':' + (i.text || ''))));
+    assert.strictEqual(out[0].text, 'sounds good');
+    assert.ok(String(out[0].quotedText || '').indexOf(parent) >= 0, JSON.stringify(out[0].quotedText));
+    assert.ok(out[0].quoteProbe && /^E=/.test(out[0].quoteProbe));
+    assert.ok(!s.statuses.some(st => st.status === 'skip_mail_card' || st.status === 'skipped'));
+    s.det.noteHostAck(false);
+    s.det.stop();
+  });
+
   console.log(passed + ' passed, ' + failed + ' failed (v1.4.4 real X Reply markup)');
   process.exit(failed ? 1 : 0);
 })();
