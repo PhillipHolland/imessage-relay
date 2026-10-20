@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.16.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.17.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -1164,7 +1164,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         r = handle_bare_confirm(bw, quoted, cfg, now, poster)
         if r is not None:                     # a confirm/cancel word answered a prompt: never an iMessage
             return r
-    if '\u2022\u2022\u2022' in text or re.search(r'Reply 1\u2013\d, or no|Reply yes within 2 min', text):
+    if '\u2022\u2022\u2022' in text or re.search(r'Reply 1\u2013\d, or no|Reply yes within 2 min', text) or rc.HEADER_LINE_RE.match(text):
         # v1.4.15: text that came from a prompt or a masked preview row is never his reply
         rc.log_event('refused_prompt_text', textLength=len(text))
         notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That text looks like a relay prompt, not your reply, '

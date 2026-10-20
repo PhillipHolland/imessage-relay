@@ -69,7 +69,7 @@ SETTABLE = {
     'spamMode': ('follow-messages', 'tag', 'off'),    # v1.4.5; v1.4.6 follow-messages (default)
     'batchWebhooks': 'bool',                          # v1.4.5
     'uiReactions': 'bool', 'uiPrompts': 'bool', 'readReceipts': 'bool', 'mirrorTapbacks': 'bool',   # v1.4.6
-    'stripOptOut': 'bool', 'relayAttachments': 'bool', 'quietNamesSeconds': int, 'undoSeconds': int,                            # v1.4.6
+    'stripOptOut': 'bool', 'relayAttachments': 'bool', 'quietNamesSeconds': int, 'undoSeconds': int, 'headerGapMinutes': int,                            # v1.4.6
 }
 
 

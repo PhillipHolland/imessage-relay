@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.9 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.17 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -87,6 +87,9 @@ STDOUT (one JSON object):
   counts-only line to <state dir>/media.log: not_requested, routine_media_off, no_drop, no_key, bad_url,
   fetch_failed, size_mismatch, decrypt_failed, sha_mismatch, no_media_helper, prepare_failed,
   upload_ready, attached, missing_after_upload.
+  v1.4.17: a silent "\U0001f4ac <label> \u00b7 7:20 PM" header line (body:false, should_notify false, never threaded) goes
+  before a text from a different person than the last one, or the same person after headerGapMinutes (0 = off).
+  header_state.json keeps only a key hash and a time.
   v1.4.9: a photo line is never "quiet" (it always starts "Jordan:"; a photo-only message's caption is
   "Jordan:", its notice "Jordan: 📷 Photo couldn't be relayed …"). With "media_off" the routine may add
   "media_error": "<call>_<http status>" (e.g. "initialize_403", "append_413", "file_ref"), logged as
@@ -125,6 +128,58 @@ KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
 KEY_CACHE_TTL_S = 6 * 3600          # after 6 h the routine fetches keys again (a rotated key heals by then)
 KEY_CACHE_MAX_BYTES = 512 * 1024
 NEED_KEYS = ['conversation_key_events', 'signing_keys']
+
+
+HEADER_ICON = '\U0001f4ac'
+HEADER_STATE = 'header_state.json'
+HEADER_GAP_DEFAULT_MIN = 30
+
+
+def _hdr_meta(m):
+    """v1.4.17: body-free facts for a conversation header: who (group label, else handle/label), when."""
+    g = m.get('group') or {}
+    gl = str(g.get('label') or g.get('name') or '').strip()
+    who = ('g:' + gl) if gl else ('h:' + str(m.get('handle') or _label(m)))
+    try:
+        import datetime as _dt
+        at = _dt.datetime.fromisoformat(str(m.get('receivedAt') or '').replace('Z', '+00:00')).timestamp()
+    except Exception:
+        at = None
+    t = re.sub(r'[^0-9: APM]', '', str(m.get('localTime') or ''))[:8].strip()
+    return {'key': who, 'label': gl or _label(m), 'at': at, 'time': t, 'reaction': bool(m.get('reaction'))}
+
+
+def header_text(meta):
+    return HEADER_ICON + ' ' + meta['label'] + ((GROUP_SEP + meta['time']) if meta['time'] else '')
+
+
+def _hkey(who):
+    import hashlib
+    return hashlib.sha256(('imr-hdr:' + who).encode('utf-8')).hexdigest()[:24]
+
+
+def add_headers(lines, gap_min, state, now=None):
+    """Insert a silent header line before a relayed text from a different person than the previous one,
+    or from the same person after gap_min minutes (0 = off). `state` is {"k": key hash, "at": epoch}
+    (no names, no text); returns (lines, new_state)."""
+    try:
+        gap = max(0.0, float(gap_min)) * 60.0
+    except (TypeError, ValueError):
+        gap = HEADER_GAP_DEFAULT_MIN * 60.0
+    if not gap:
+        return lines, state
+    now = time.time() if now is None else now
+    st = dict(state or {})
+    out = []
+    for ln in lines:
+        meta = ln.get('hdr')
+        if meta and not meta['reaction']:
+            k, at = _hkey(meta['key']), meta['at'] or now
+            if st.get('k') != k or at - float(st.get('at') or 0) >= gap:
+                out.append({'id': ln['id'] + '#hdr', 'text': header_text(meta), 'body': False, 'header': True})
+            st = {'k': k, 'at': at}
+        out.append(ln)
+    return out, st
 
 
 def _message_line(m):
@@ -976,6 +1031,21 @@ def process(req, runner=None):
 
     if not conv:
         return {'action': 'error', 'reason': 'no relay conversation_id'}
+    # v1.4.17: conversation headers (silent, label + time only); state saved only when the sends are built
+    hdr_path = os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', HEADER_STATE)
+    hdr_state = None
+    if ev['kind'] in ('message', 'batch'):
+        try:
+            with open(hdr_path) as fh:
+                old = json.load(fh)
+        except (OSError, ValueError):
+            old = {}
+        src = [payload] if ev['kind'] == 'message' else (payload.get('messages') or [])[:BATCH_MAX]
+        metas = {str(m.get('id') or (str(payload.get('id') or '') + '#' + str(i))) if ev['kind'] == 'batch'
+                 else str(payload.get('id') or ''): _hdr_meta(m) for i, m in enumerate(src)}
+        lines = [dict(ln, hdr=metas.get(ln['id'])) for ln in lines]
+        lines, hdr_state = add_headers(lines, payload.get('headerGapMinutes', 0),   # set by a v1.4.17+ Mac
+                                       old if isinstance(old, dict) else {})
 
     xchat = dict(req.get('xchat') or {})
     # v1.4.5 speed: the keys come from the request (then cached) or from the key cache. With neither,
@@ -1091,7 +1161,7 @@ def process(req, runner=None):
             # body lines (relayed texts) notify and never thread; status/confirmation lines are silent
             # and thread under the owner's bubble when a reply_to was supplied.
             notify = bool(ln.get('body'))
-            rt = None if notify else reply_to
+            rt = None if notify or ln.get('header') else reply_to
             entries = line_media.get(ln['id'])
             snd = encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner, reply_to=rt, should_notify=notify,
                                media=[e for _, e, _ in entries] if entries else None)
@@ -1120,6 +1190,15 @@ def process(req, runner=None):
     # succeeds instead (see SKILL.md). The Mac retries each POST until it gets a 2xx, so a committed
     # id is what prevents a retried webhook from being re-sent.
     ids = [ln['id'] for ln in lines]
+    if hdr_state:
+        try:
+            os.makedirs(os.path.dirname(hdr_path) or '.', exist_ok=True)
+            tmp = hdr_path + '.tmp'
+            with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as fh:
+                json.dump({'k': hdr_state.get('k'), 'at': hdr_state.get('at')}, fh)
+            os.replace(tmp, hdr_path)
+        except OSError:
+            pass                                 # a missed header is cosmetic
     if not req.get('defer_commit'):
         dd.commit(ids)
     res = {'action': 'send', 'sends': sends, 'encrypted': True, 'posted_kind': ev['kind'], 'ack_ids': ids}

@@ -23,8 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.16'
-EXTENSION_VERSION = '1.4.16'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
+VERSION = '1.4.17'
+EXTENSION_VERSION = '1.4.17'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -81,6 +81,7 @@ DEFAULT_CONFIG = {
     'readReceipts': True,          # v1.4.6: \u2705 -> \U0001f440 when a 1:1 reply shows read (only if they share receipts)
     'mirrorTapbacks': True,        # v1.4.6: their tapback on a relayed reply -> that reaction on HIS X message
     'quietNamesSeconds': 600,      # v1.4.6: "Name:" only when the sender changes within this window (0 = always)
+    'headerGapMinutes': 30,        # v1.4.17: 💬 header before a new person / same person after this gap (0 = off)
     'undoSeconds': 5,              # v1.4.6: \U0001f5d1\ufe0f on his own reply within this cancels it (0-10; 0 = off)
     'stripOptOut': True,           # v1.4.6: drop "Reply STOP to opt out" footers on texts tagged spam / unknown
     'relayAttachments': True,      # v1.4.6: 1:1 photos both ways (in-flight temp files only, never stored)
@@ -293,6 +294,7 @@ def sanitize_config(user):
         cfg[k] = truthy(cfg.get(k), True)
     cfg['quietNamesSeconds'] = _clamp_int(cfg.get('quietNamesSeconds'), 600, 0, 3600)
     cfg['undoSeconds'] = _clamp_int(cfg.get('undoSeconds'), 5, 0, 10)
+    cfg['headerGapMinutes'] = _clamp_int(cfg.get('headerGapMinutes'), 30, 0, 1440)
     cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
     sm = str(cfg.get('spamMode') or 'follow-messages').strip().lower()
@@ -751,6 +753,9 @@ def parse_prefix(text, cfg, directory=None):
     return next(iter(hits)), text[m.end():], 'match'
 
 
+HEADER_LINE_RE = re.compile(r'^\s*\U0001f4ac\s*(.+?)\s*\u00b7\s*\d{1,2}:\d{2}\s*[AaPp]\.?[Mm]\.?\s*$')
+
+
 def parse_quote(quoted, cfg, directory=None):
     """Best effort: which entry a quoted (replied-to) relay message came from. The quote may
     start with the sender account's name, so the earliest "<key>:" (or "<group> ·") in its first
@@ -765,6 +770,14 @@ def parse_quote(quoted, cfg, directory=None):
             q = q[len(drop):].lstrip(' \u00b7-')
             break
     keys = contact_keys(d)
+    # v1.4.17: a conversation header "💬 <label> · 7:20 PM" names who it is for; status 'header'
+    # (route_reply maps it to that person but the host always asks "Send to <label>?" first)
+    mh = HEADER_LINE_RE.match(q)
+    if mh:
+        hits = keys.get(mh.group(1).strip().lower())
+        if not hits:
+            return None, 'none'
+        return (None, 'ambiguous') if len(hits) > 1 else (next(iter(hits)), 'header')
     # the bot's own send confirmation, "\u2192 <label> \u2713" (optionally "(not confirmed...)"), names its recipient
     mconf = re.match(r'^\s*\u2192\s*(.+?)\s*(?:\u2713|\(|$)', q)
     if mconf:
@@ -934,7 +947,15 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
     def need(reason, msg=None):
         return {'error': msg or ask_for_name_message(cfg, d), 'needsTarget': True, 'reason': reason}
 
+    header_q = False
+
     def deliver(e, body, by):
+        r = _deliver(e, body, by)
+        if header_q and by == 'quote' and r.get('contact'):
+            r['confirm'] = {'reason': 'directive', 'altLabel': None}   # v1.4.17: a quoted header always asks first
+        return r
+
+    def _deliver(e, body, by):
         if e['kind'] == 'group':
             # v1.4.5: a group is reached ONLY by its exact name or a quote of its message (never a bare
             # reply), only under relay-all (the same opt-in that relays it), and the host ALWAYS asks first.
@@ -973,6 +994,8 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                       key=lambda e: -e['lastInboundAt'])
 
     q_handle, q_status = parse_quote(quoted, cfg, d)
+    if q_status == 'header':
+        header_q, q_status = True, 'match'
     if q_status == 'none' and re.sub(r'\s+', '', str(quoted or '')):
         # v1.4.6 quiet names: a quoted line that carried no "Name:" (same sender as the line above it) is
         # found by keyed HMACs of its text, recorded when it was relayed. Several people -> ambiguous.

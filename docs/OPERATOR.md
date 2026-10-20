@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.16)
+# iMessage Relay: operator reference (v1.4.17)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -844,6 +844,8 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.17**: v1.4.17 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new conversation is easy to spot. Before a relayed text from a different person than the last one, or the same person after 30 min (`RC set headerGapMinutes N`, 0 = off), a separate silent line "💬 Alex · 7:20 PM" (label + your local time, no text) is posted; groups use the group label. "Name: text" lines are unchanged. Quote-replying to a header asks "Send to Alex?" first; a typed header line is refused. The routine keeps only a key hash and a time (header_state.json).
+
 **v1.4.16**: he ✅ after a send lands again: v1.4.15 typed the picker search word into X Chat's chat-list Search box (it existed before the picker opened), so the full picker never showed ✅ ('no-emoji'). Only a search box that appears with the picker is used; quick row, full picker and search are tried in one 40 ms poll (no fixed 1.2 s waits); twemoji images match by codepoint. Prompts show at once: during the undo window the extension asks the host (preflight, never sends) and a pick / Contacts / "reply to …?" prompt no longer waits out undoSeconds; a reply that would go out still waits the full window and a 🗑️ still cancels it.
 
 **v1.4.15 (Mac helper only)**: conversational guardrails. Within 10 minutes of any prompt, a short reply (up to 4 characters, digits, last 4, emoji only, an email start) is only ever a prompt answer: one that matches no choice gets "That isn't one of the choices" and nothing is sent. Text that came from a prompt or masked preview row is refused. A last-texter (recent) reply within 10 minutes of a prompt always asks first.

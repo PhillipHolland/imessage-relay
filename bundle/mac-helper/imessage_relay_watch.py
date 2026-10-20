@@ -731,6 +731,12 @@ class Watcher:
     def public(m):
         p = {'id': m['id'], 'contactName': m['contactName'], 'label': m['label'], 'handle': m['handle'],
              'text': m['text'], 'receivedAt': m['receivedAt']}
+        try:   # v1.4.17: the owner's local clock time for relay_post's conversation header (no text)
+            import datetime as _dt
+            lt = _dt.datetime.fromisoformat(str(m['receivedAt']).replace('Z', '+00:00')).astimezone()
+            p['localTime'] = lt.strftime('%I:%M %p').lstrip('0')
+        except Exception:
+            pass
         if m.get('group'):
             p['group'] = dict(m['group'])
         if m.get('reaction'):
@@ -859,7 +865,7 @@ class Watcher:
                     self._last_route, self._last_route_at = m.get('route'), t
                 self._last_route, self._last_route_at = saved
                 payload = {'type': 'batch', 'count': len(chunk), 'messages': [self.public(m) for m in chunk],
-                           'untrusted': True}
+                           'untrusted': True, 'headerGapMinutes': cfg.get('headerGapMinutes', 30)}
                 if not self.post(cfg, payload):
                     failed = True
                     break
@@ -873,7 +879,7 @@ class Watcher:
                 continue
             m = self.retry[0]
             self._quiet(m, cfg, t)
-            if not self.post(cfg, dict(type='message', untrusted=True, **self.public(m))):
+            if not self.post(cfg, dict(type='message', untrusted=True, headerGapMinutes=cfg.get('headerGapMinutes', 30), **self.public(m))):
                 failed = True
                 break
             self.retry.pop(0)                           # remove immediately after 2xx, before bookkeeping

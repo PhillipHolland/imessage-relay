@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_bundle.py: iMessage Relay v1.4.16, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.17, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -16,8 +16,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=e7d6c30165c8a3dc2aa0491536d7db4bde21adabc85f0730c779296873d62ce6 nl=1
-# iMessage Relay v1.4.16
+@@@@ FILE README.md mode=644 sha256=4d5442227fa1ed734ba67522e5c2cb500bd725d3b87f6d84b31d39265f0b6f8a nl=1
+# iMessage Relay v1.4.17
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -41,6 +41,11 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "📷 Photo".
+- v1.4.17 (Mac helper + routine relay_post.py; extension stays 1.4.16): a new conversation is easy to spot. Before a
+  relayed text from a different person than the last one, or the same person after 30 min (`RC set headerGapMinutes N`,
+  0 = off), a separate silent line "💬 Alex · 7:20 PM" (label + your local time, no text) is posted; groups use the
+  group label. "Name: text" lines are unchanged. Quote-replying to a header asks "Send to Alex?" first; a typed
+  header line is refused. The routine keeps only a key hash and a time (header_state.json).
 - v1.4.16: the ✅ after a send lands again: v1.4.15 typed the picker search word into X Chat's chat-list
   Search box (it existed before the picker opened), so the full picker never showed ✅ ('no-emoji'). Only a search
   box that appears with the picker is used; quick row, full picker and search are tried in one 40 ms poll (no fixed
@@ -161,7 +166,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver a digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.16)
+## Limits (v1.4.17)
 - Replies are seen in Chrome on the Mac: keep a tab open on the relay chat (replies sent from a
   phone show up there too). Exclude x.com from Chrome Memory Saver.
 - One relay chat for all contacts. Reply-quote detection depends on X Chat's markup (best
@@ -3853,10 +3858,10 @@ __PROGRAM_ARGUMENTS__
   "defaultCountryCode": "1"
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=3c60d847d14a1f1f2487a22077a9cbb1401b5576076df75da342ebc83812e449 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=f4548ecfb7984cf04a9958b5aeab8c57f0bf00679448d3d2ce2cca658092f26d nl=1
 #!/usr/bin/python3
 """
-com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.16.
+com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.17.
 
 Chrome starts this process and talks to it over stdin/stdout: a 4-byte length (native byte
 order, little-endian on Macs) followed by UTF-8 JSON. Requests:
@@ -5020,7 +5025,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         r = handle_bare_confirm(bw, quoted, cfg, now, poster)
         if r is not None:                     # a confirm/cancel word answered a prompt: never an iMessage
             return r
-    if '\u2022\u2022\u2022' in text or re.search(r'Reply 1\u2013\d, or no|Reply yes within 2 min', text):
+    if '\u2022\u2022\u2022' in text or re.search(r'Reply 1\u2013\d, or no|Reply yes within 2 min', text) or rc.HEADER_LINE_RE.match(text):
         # v1.4.15: text that came from a prompt or a masked preview row is never his reply
         rc.log_event('refused_prompt_text', textLength=len(text))
         notify(cfg, poster, {'type': 'status', 'detail': '\u26a0\ufe0f That text looks like a relay prompt, not your reply, '
@@ -5592,7 +5597,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=35c2aeff547f104c846749de31ebf9e02ffa8bbaaed3583ddf569414fda91f20 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=9abb7c1b82ff457d546b1a869ec5fea56bc7c00f5b950ce9c5b868aa86dc7bd1 nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -6326,6 +6331,12 @@ class Watcher:
     def public(m):
         p = {'id': m['id'], 'contactName': m['contactName'], 'label': m['label'], 'handle': m['handle'],
              'text': m['text'], 'receivedAt': m['receivedAt']}
+        try:   # v1.4.17: the owner's local clock time for relay_post's conversation header (no text)
+            import datetime as _dt
+            lt = _dt.datetime.fromisoformat(str(m['receivedAt']).replace('Z', '+00:00')).astimezone()
+            p['localTime'] = lt.strftime('%I:%M %p').lstrip('0')
+        except Exception:
+            pass
         if m.get('group'):
             p['group'] = dict(m['group'])
         if m.get('reaction'):
@@ -6454,7 +6465,7 @@ class Watcher:
                     self._last_route, self._last_route_at = m.get('route'), t
                 self._last_route, self._last_route_at = saved
                 payload = {'type': 'batch', 'count': len(chunk), 'messages': [self.public(m) for m in chunk],
-                           'untrusted': True}
+                           'untrusted': True, 'headerGapMinutes': cfg.get('headerGapMinutes', 30)}
                 if not self.post(cfg, payload):
                     failed = True
                     break
@@ -6468,7 +6479,7 @@ class Watcher:
                 continue
             m = self.retry[0]
             self._quiet(m, cfg, t)
-            if not self.post(cfg, dict(type='message', untrusted=True, **self.public(m))):
+            if not self.post(cfg, dict(type='message', untrusted=True, headerGapMinutes=cfg.get('headerGapMinutes', 30), **self.public(m))):
                 failed = True
                 break
             self.retry.pop(0)                           # remove immediately after 2xx, before bookkeeping
@@ -6996,7 +7007,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=ea414f8f88891632628eb40763aed58148d82a0b319c81fbbb478b19cd63bb6a nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=7f03ec9c13ff7ad400d4aa4a7b9cbf9c14eca0e0362ba8d6b4d3f848c763267d nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -7022,8 +7033,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = '1.4.16'
-EXTENSION_VERSION = '1.4.16'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
+VERSION = '1.4.17'
+EXTENSION_VERSION = '1.4.17'   # v1.4.14: a short number is read as typed; read-back mismatch refused (reload + Cmd+R)
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -7080,6 +7091,7 @@ DEFAULT_CONFIG = {
     'readReceipts': True,          # v1.4.6: \u2705 -> \U0001f440 when a 1:1 reply shows read (only if they share receipts)
     'mirrorTapbacks': True,        # v1.4.6: their tapback on a relayed reply -> that reaction on HIS X message
     'quietNamesSeconds': 600,      # v1.4.6: "Name:" only when the sender changes within this window (0 = always)
+    'headerGapMinutes': 30,        # v1.4.17: 💬 header before a new person / same person after this gap (0 = off)
     'undoSeconds': 5,              # v1.4.6: \U0001f5d1\ufe0f on his own reply within this cancels it (0-10; 0 = off)
     'stripOptOut': True,           # v1.4.6: drop "Reply STOP to opt out" footers on texts tagged spam / unknown
     'relayAttachments': True,      # v1.4.6: 1:1 photos both ways (in-flight temp files only, never stored)
@@ -7292,6 +7304,7 @@ def sanitize_config(user):
         cfg[k] = truthy(cfg.get(k), True)
     cfg['quietNamesSeconds'] = _clamp_int(cfg.get('quietNamesSeconds'), 600, 0, 3600)
     cfg['undoSeconds'] = _clamp_int(cfg.get('undoSeconds'), 5, 0, 10)
+    cfg['headerGapMinutes'] = _clamp_int(cfg.get('headerGapMinutes'), 30, 0, 1440)
     cn = str(cfg.get('confirmNewContacts') or 'exact-skip').strip().lower()   # (v1.4.2: also nickname/typo rules)
     cfg['confirmNewContacts'] = cn if cn in ('exact-skip', 'always') else 'exact-skip'
     sm = str(cfg.get('spamMode') or 'follow-messages').strip().lower()
@@ -7750,6 +7763,9 @@ def parse_prefix(text, cfg, directory=None):
     return next(iter(hits)), text[m.end():], 'match'
 
 
+HEADER_LINE_RE = re.compile(r'^\s*\U0001f4ac\s*(.+?)\s*\u00b7\s*\d{1,2}:\d{2}\s*[AaPp]\.?[Mm]\.?\s*$')
+
+
 def parse_quote(quoted, cfg, directory=None):
     """Best effort: which entry a quoted (replied-to) relay message came from. The quote may
     start with the sender account's name, so the earliest "<key>:" (or "<group> ·") in its first
@@ -7764,6 +7780,14 @@ def parse_quote(quoted, cfg, directory=None):
             q = q[len(drop):].lstrip(' \u00b7-')
             break
     keys = contact_keys(d)
+    # v1.4.17: a conversation header "💬 <label> · 7:20 PM" names who it is for; status 'header'
+    # (route_reply maps it to that person but the host always asks "Send to <label>?" first)
+    mh = HEADER_LINE_RE.match(q)
+    if mh:
+        hits = keys.get(mh.group(1).strip().lower())
+        if not hits:
+            return None, 'none'
+        return (None, 'ambiguous') if len(hits) > 1 else (next(iter(hits)), 'header')
     # the bot's own send confirmation, "\u2192 <label> \u2713" (optionally "(not confirmed...)"), names its recipient
     mconf = re.match(r'^\s*\u2192\s*(.+?)\s*(?:\u2713|\(|$)', q)
     if mconf:
@@ -7933,7 +7957,15 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
     def need(reason, msg=None):
         return {'error': msg or ask_for_name_message(cfg, d), 'needsTarget': True, 'reason': reason}
 
+    header_q = False
+
     def deliver(e, body, by):
+        r = _deliver(e, body, by)
+        if header_q and by == 'quote' and r.get('contact'):
+            r['confirm'] = {'reason': 'directive', 'altLabel': None}   # v1.4.17: a quoted header always asks first
+        return r
+
+    def _deliver(e, body, by):
         if e['kind'] == 'group':
             # v1.4.5: a group is reached ONLY by its exact name or a quote of its message (never a bare
             # reply), only under relay-all (the same opt-in that relays it), and the host ALWAYS asks first.
@@ -7972,6 +8004,8 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False):
                       key=lambda e: -e['lastInboundAt'])
 
     q_handle, q_status = parse_quote(quoted, cfg, d)
+    if q_status == 'header':
+        header_q, q_status = True, 'match'
     if q_status == 'none' and re.sub(r'\s+', '', str(quoted or '')):
         # v1.4.6 quiet names: a quoted line that carried no "Name:" (same sender as the line above it) is
         # found by keyed HMACs of its text, recorded when it was relayed. Several people -> ambiguous.
@@ -10184,7 +10218,7 @@ def map_unread(path=None, now=None, max_age_s=86400):
     return [(g, v) for g, v in sorted(ent.items(), key=lambda kv: -kv[1]['at'])
             if v.get('dm') and not v.get('read') and v.get('rowid') is not None and now - v['at'] < max_age_s]
 @@@@ END
-@@@@ FILE mac-helper/relayctl.py mode=755 sha256=93d15bbc12847ea63fd667124b65fe12be29e91c864b6ae4cd9b07d2c7151c12 nl=1
+@@@@ FILE mac-helper/relayctl.py mode=755 sha256=53490f0559f2cd710487deea84bfe7d3dd724918743fdf3b1cc2ab4b6e879b9f nl=1
 #!/usr/bin/python3
 """
 relayctl: the one command the bot (or you) uses to operate iMessage Relay on the Mac.
@@ -10256,7 +10290,7 @@ SETTABLE = {
     'spamMode': ('follow-messages', 'tag', 'off'),    # v1.4.5; v1.4.6 follow-messages (default)
     'batchWebhooks': 'bool',                          # v1.4.5
     'uiReactions': 'bool', 'uiPrompts': 'bool', 'readReceipts': 'bool', 'mirrorTapbacks': 'bool',   # v1.4.6
-    'stripOptOut': 'bool', 'relayAttachments': 'bool', 'quietNamesSeconds': int, 'undoSeconds': int,                            # v1.4.6
+    'stripOptOut': 'bool', 'relayAttachments': 'bool', 'quietNamesSeconds': int, 'undoSeconds': int, 'headerGapMinutes': int,                            # v1.4.6
 }
 
 
@@ -11142,9 +11176,9 @@ if __name__ == '__main__':
     sys.argv = [WATCH] + sys.argv[1:]
     runpy.run_path(WATCH, run_name='__main__')
 @@@@ END
-@@@@ FILE routine/relay_post.py mode=644 sha256=0b509eb12babcc91d38957828f72cd14f40b08b2980d157921298a36bf43111a nl=1
+@@@@ FILE routine/relay_post.py mode=644 sha256=d0601923c59b01be647a038cbdaaa0b00dfc5fb01353dcb701e9027622d7e41b nl=1
 #!/usr/bin/env python3
-"""iMessage Relay v1.4.9 — routine helper (runs on the BOT's computer, not the Mac).
+"""iMessage Relay v1.4.17 — routine helper (runs on the BOT's computer, not the Mac).
 
 The webhook routine writes one Mac webhook payload to a unique request file and runs this script
 with `--in <file>` (the file is deleted right after it is read). The routine does nothing else:
@@ -11232,6 +11266,9 @@ STDOUT (one JSON object):
   counts-only line to <state dir>/media.log: not_requested, routine_media_off, no_drop, no_key, bad_url,
   fetch_failed, size_mismatch, decrypt_failed, sha_mismatch, no_media_helper, prepare_failed,
   upload_ready, attached, missing_after_upload.
+  v1.4.17: a silent "\U0001f4ac <label> \u00b7 7:20 PM" header line (body:false, should_notify false, never threaded) goes
+  before a text from a different person than the last one, or the same person after headerGapMinutes (0 = off).
+  header_state.json keeps only a key hash and a time.
   v1.4.9: a photo line is never "quiet" (it always starts "Jordan:"; a photo-only message's caption is
   "Jordan:", its notice "Jordan: 📷 Photo couldn't be relayed …"). With "media_off" the routine may add
   "media_error": "<call>_<http status>" (e.g. "initialize_403", "append_413", "file_ref"), logged as
@@ -11270,6 +11307,58 @@ KEY_CACHE_PATH = '~/.imessage-relay-routine/xchat_keys.json'
 KEY_CACHE_TTL_S = 6 * 3600          # after 6 h the routine fetches keys again (a rotated key heals by then)
 KEY_CACHE_MAX_BYTES = 512 * 1024
 NEED_KEYS = ['conversation_key_events', 'signing_keys']
+
+
+HEADER_ICON = '\U0001f4ac'
+HEADER_STATE = 'header_state.json'
+HEADER_GAP_DEFAULT_MIN = 30
+
+
+def _hdr_meta(m):
+    """v1.4.17: body-free facts for a conversation header: who (group label, else handle/label), when."""
+    g = m.get('group') or {}
+    gl = str(g.get('label') or g.get('name') or '').strip()
+    who = ('g:' + gl) if gl else ('h:' + str(m.get('handle') or _label(m)))
+    try:
+        import datetime as _dt
+        at = _dt.datetime.fromisoformat(str(m.get('receivedAt') or '').replace('Z', '+00:00')).timestamp()
+    except Exception:
+        at = None
+    t = re.sub(r'[^0-9: APM]', '', str(m.get('localTime') or ''))[:8].strip()
+    return {'key': who, 'label': gl or _label(m), 'at': at, 'time': t, 'reaction': bool(m.get('reaction'))}
+
+
+def header_text(meta):
+    return HEADER_ICON + ' ' + meta['label'] + ((GROUP_SEP + meta['time']) if meta['time'] else '')
+
+
+def _hkey(who):
+    import hashlib
+    return hashlib.sha256(('imr-hdr:' + who).encode('utf-8')).hexdigest()[:24]
+
+
+def add_headers(lines, gap_min, state, now=None):
+    """Insert a silent header line before a relayed text from a different person than the previous one,
+    or from the same person after gap_min minutes (0 = off). `state` is {"k": key hash, "at": epoch}
+    (no names, no text); returns (lines, new_state)."""
+    try:
+        gap = max(0.0, float(gap_min)) * 60.0
+    except (TypeError, ValueError):
+        gap = HEADER_GAP_DEFAULT_MIN * 60.0
+    if not gap:
+        return lines, state
+    now = time.time() if now is None else now
+    st = dict(state or {})
+    out = []
+    for ln in lines:
+        meta = ln.get('hdr')
+        if meta and not meta['reaction']:
+            k, at = _hkey(meta['key']), meta['at'] or now
+            if st.get('k') != k or at - float(st.get('at') or 0) >= gap:
+                out.append({'id': ln['id'] + '#hdr', 'text': header_text(meta), 'body': False, 'header': True})
+            st = {'k': k, 'at': at}
+        out.append(ln)
+    return out, st
 
 
 def _message_line(m):
@@ -12121,6 +12210,21 @@ def process(req, runner=None):
 
     if not conv:
         return {'action': 'error', 'reason': 'no relay conversation_id'}
+    # v1.4.17: conversation headers (silent, label + time only); state saved only when the sends are built
+    hdr_path = os.path.join(os.path.dirname(os.path.expanduser(dedupe_path)) or '.', HEADER_STATE)
+    hdr_state = None
+    if ev['kind'] in ('message', 'batch'):
+        try:
+            with open(hdr_path) as fh:
+                old = json.load(fh)
+        except (OSError, ValueError):
+            old = {}
+        src = [payload] if ev['kind'] == 'message' else (payload.get('messages') or [])[:BATCH_MAX]
+        metas = {str(m.get('id') or (str(payload.get('id') or '') + '#' + str(i))) if ev['kind'] == 'batch'
+                 else str(payload.get('id') or ''): _hdr_meta(m) for i, m in enumerate(src)}
+        lines = [dict(ln, hdr=metas.get(ln['id'])) for ln in lines]
+        lines, hdr_state = add_headers(lines, payload.get('headerGapMinutes', 0),   # set by a v1.4.17+ Mac
+                                       old if isinstance(old, dict) else {})
 
     xchat = dict(req.get('xchat') or {})
     # v1.4.5 speed: the keys come from the request (then cached) or from the key cache. With neither,
@@ -12236,7 +12340,7 @@ def process(req, runner=None):
             # body lines (relayed texts) notify and never thread; status/confirmation lines are silent
             # and thread under the owner's bubble when a reply_to was supplied.
             notify = bool(ln.get('body'))
-            rt = None if notify else reply_to
+            rt = None if notify or ln.get('header') else reply_to
             entries = line_media.get(ln['id'])
             snd = encrypt_line(conv, ln['text'], xchat, req.get('helper'), runner, reply_to=rt, should_notify=notify,
                                media=[e for _, e, _ in entries] if entries else None)
@@ -12265,6 +12369,15 @@ def process(req, runner=None):
     # succeeds instead (see SKILL.md). The Mac retries each POST until it gets a 2xx, so a committed
     # id is what prevents a retried webhook from being re-sent.
     ids = [ln['id'] for ln in lines]
+    if hdr_state:
+        try:
+            os.makedirs(os.path.dirname(hdr_path) or '.', exist_ok=True)
+            tmp = hdr_path + '.tmp'
+            with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as fh:
+                json.dump({'k': hdr_state.get('k'), 'at': hdr_state.get('at')}, fh)
+            os.replace(tmp, hdr_path)
+        except OSError:
+            pass                                 # a missed header is cosmetic
     if not req.get('defer_commit'):
         dd.commit(ids)
     res = {'action': 'send', 'sends': sends, 'encrypted': True, 'posted_kind': ev['kind'], 'ack_ids': ids}
@@ -20360,6 +20473,66 @@ class PendingPick(Base):
 
 del Base
 @@@@ END
+@@@@ FILE tests/py/test_v1417_header.py mode=644 sha256=ce0611bd3a2523dfdeef6aabf40919fbb671d440f3d8ede0b54c77be8d6229bf nl=1
+"""v1.4.17: conversation headers ("\U0001f4ac <label> \u00b7 7:20 PM") and their guardrails. Fictional names."""
+import os
+import sys
+import unittest
+
+from test_v140 import Base
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'routine'))
+import relay_post as rp  # noqa: E402
+
+T0 = 1_800_000_000
+
+
+def line(i, who, at, group=None, reaction=False):
+    m = {'id': 'm%d' % i, 'label': who, 'handle': '+1555555%04d' % (abs(hash(who)) % 10000), 'text': 'x',
+         'receivedAt': '', 'localTime': '7:20 PM'}
+    if group:
+        m['group'] = {'label': group}
+    if reaction:
+        m['reaction'] = True
+    ln = {'id': m['id'], 'text': rp._message_line(m), 'body': True, 'hdr': rp._hdr_meta(m)}
+    ln['hdr']['at'] = at
+    return ln
+
+
+class Headers(unittest.TestCase):
+    def test_person_change_and_gap(self):
+        lines = [line(1, 'Alex', T0), line(2, 'Alex', T0 + 60), line(3, 'Sam', T0 + 120), line(4, 'Alex', T0 + 180)]
+        out, st = rp.add_headers(lines, 30, {})
+        heads = [ln['text'] for ln in out if ln.get('header')]
+        self.assertEqual(heads, ['\U0001f4ac Alex \u00b7 7:20 PM', '\U0001f4ac Sam \u00b7 7:20 PM', '\U0001f4ac Alex \u00b7 7:20 PM'])
+        self.assertTrue(all(not ln['body'] for ln in out if ln.get('header')))
+        self.assertNotIn('Alex', str(st))                     # state holds a hash and a time only
+        out2, _ = rp.add_headers([line(5, 'Alex', T0 + 240)], 30, st)
+        self.assertFalse([ln for ln in out2 if ln.get('header')])
+        out3, _ = rp.add_headers([line(6, 'Alex', T0 + 180 + 1800)], 30, st)
+        self.assertEqual(len([ln for ln in out3 if ln.get('header')]), 1)
+
+    def test_off_reaction_and_group(self):
+        self.assertEqual(len(rp.add_headers([line(1, 'Alex', T0)], 0, {})[0]), 1)
+        self.assertEqual(len(rp.add_headers([line(1, 'Alex', T0, reaction=True)], 30, {})[0]), 1)
+        out, _ = rp.add_headers([line(1, 'Sam', T0, group='Family')], 30, {})
+        self.assertEqual(out[0]['text'], '\U0001f4ac Family \u00b7 7:20 PM')
+
+
+class HeaderGuards(Base):
+    def test_quoted_header_asks_first_and_header_text_is_refused(self):
+        import relay_common as rc
+        r = rc.route_reply('see you soon', '\U0001f4ac Test Contact \u00b7 7:20 PM', self.cfg(), [], self.clock.now())
+        self.assertEqual(r.get('by'), 'quote')
+        self.assertTrue(r.get('confirm'), r)                  # mapped to that person, but never sent without yes
+        r2 = self.send('\U0001f4ac Test Contact \u00b7 7:20 PM')
+        self.assertFalse(r2.get('ok'), r2)
+        self.assertEqual(self.osa(), [])
+
+
+if __name__ == '__main__':
+    unittest.main()
+@@@@ END
 @@@@ FILE tests/py/test_v141_yes.py mode=644 sha256=c445fb291fdea4cdc89b2bd5f7ab91094df5a633c64ffa6e67098166e2e4446c nl=1
 """v1.4.1: a plain "yes" / "no" answers a pending confirmation (never texted while one is pending),
 and an exact full-name match to one Contacts card with one number sends without asking."""
@@ -22435,7 +22608,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=865585b0395eb70013c70a2fa7b2b91dc2cc5b6ea6be5a7be96baec8cd2dcddf nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=4bc7d2908c8ee05d77f70018919d5b66b678a2b3a2897cd10c2dc8c619a6af81 nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -22628,7 +22801,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.16')
+        self.assertEqual(m.rc.VERSION, '1.4.17')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)
