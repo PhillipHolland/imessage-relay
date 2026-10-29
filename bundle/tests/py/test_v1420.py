@@ -126,7 +126,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.29 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.30 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -156,18 +156,21 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.29 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.30 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
     def test_help_and_pause_wording(self):
         self.assertEqual(self.h.HELP_TEXT, (
             '/status \u00b7 /who\n'
-            '/pause \u00b7 /resume \u00b7 /snooze\n'
-            '/block name \u00b7 /unblock name\n'
-            '/add name\n'
+            '/pause \u00b7 /resume\n'
+            '/snooze \u00b7 /snooze 8h \u00b7 /snooze until 7:00\n'
+            '/yes \u00b7 /block name \u00b7 /block yes \u00b7 /unblock name\n'
+            '/add name \u00b7 /add name number\n'
+            '/test \u00b7 /test send \u00b7 /help\n'
             'name: your message\n'
-            '/test \u00b7 /help'))
+            'Quote-reply a text to answer that person.\n'
+            '\U0001f5d1\ufe0f within 5s undoes a send. \U0001f5d1\ufe0f on an older text asks to block.'))
         n = len(self.osa())
         self.send('/help')
         self.assertEqual(self.posts[-1]['detail'], self.h.HELP_TEXT)
@@ -240,7 +243,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.29 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.30 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()

@@ -20,6 +20,7 @@ Every command prints one JSON object. Message bodies are never printed or stored
                                           confirmNewContacts exact-skip|always (v1.4.1)
                                           spamMode follow-messages|tag|off (v1.4.6 default follow-messages: mirror Messages' filtering)
                                           batchWebhooks on|off (v1.4.5: texts waiting together share one webhook)
+                                          webhookStuckMinutes N (v1.4.30: retry or failures for N minutes is a problem; default 10)
   relayctl set-drop --url URL --key-stdin       v1.4.7 encrypted photo drop (key on stdin only); --off clears it
   relayctl set-drop --wrap-key-stdin            v1.4.8 photo-key wrap key (stdin only; keeps keys out of the webhook)
   relayctl set-webhook --url URL --token-stdin   set webhookUrl + webhookToken together; the key is
@@ -70,6 +71,7 @@ SETTABLE = {
     'confirmNewContacts': ('exact-skip', 'always'),   # v1.4.1
     'spamMode': ('follow-messages', 'tag', 'off'),    # v1.4.5; v1.4.6 follow-messages (default)
     'batchWebhooks': 'bool',                          # v1.4.5
+    'webhookStuckMinutes': int,                       # v1.4.30
     'uiReactions': 'bool', 'uiPrompts': 'bool', 'readReceipts': 'bool', 'mirrorTapbacks': 'bool',   # v1.4.6
     'stripOptOut': 'bool', 'relayAttachments': 'bool', 'quietNamesSeconds': int, 'undoSeconds': int, 'headerGapMinutes': int,                            # v1.4.6
 }
@@ -740,6 +742,39 @@ def watcher_app():
             'binary': candidates[0] if candidates else '', 'source': 'recorded' if recorded else 'default'}
 
 
+def _webhook_stuck_problem(st, cfg):
+    """A retry queue or a run of failed POSTs that has lasted webhookStuckMinutes. A 2xx is only
+    acceptance; this is how an operator sees an outage that never reached status.problems before."""
+    try:
+        since = float(st.get('webhookFailSince') or 0)
+    except (TypeError, ValueError):
+        since = 0
+    try:
+        retry = int(st.get('retry') or 0)
+    except (TypeError, ValueError):
+        retry = 0
+    try:
+        streak = int(st.get('webhookFailStreak') or 0)
+    except (TypeError, ValueError):
+        streak = 0
+    if since <= 0 or (retry <= 0 and streak <= 0):
+        return ''
+    age = time.time() - since
+    limit = int(cfg.get('webhookStuckMinutes') or 10) * 60
+    if age < limit:
+        return ''
+    mins = max(1, int(age // 60))
+    kind = st.get('lastWebhookResult') or 'failed'
+    if kind == 'relayed':
+        proof = 'The last POST included a relayed ack'
+    elif kind == 'accepted':
+        proof = 'The last HTTP 2xx only means the webhook accepted the POST, not that X Chat posted it'
+    else:
+        proof = 'The webhook POST is failing'
+    return ('webhook has been failing for %dm (%d waiting, %d failed in a row). %s.'
+            % (mins, retry, streak, proof))
+
+
 def cmd_status(runner=subprocess.run):
     cfg = rc.load_config()
     st = rc.read_json(STATUS_PATH, {}) or {}
@@ -774,6 +809,9 @@ def cmd_status(runner=subprocess.run):
         problems.append('Messages is not running; it must stay open (relayctl auto-reopen on, or open it)')
     if not host_manifests():
         problems.append('native host manifest missing: run install.sh again')
+    stuck = _webhook_stuck_problem(st, cfg)
+    if stuck:
+        problems.append(stuck)
     ext = extension_seen()
     if ext['version'] and ext['version'] != rc.EXTENSION_VERSION:
         problems.append('the Chrome extension is still v%s: click reload on "iMessage Relay" in chrome://extensions, '

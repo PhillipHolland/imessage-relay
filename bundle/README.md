@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.29
+# iMessage Relay v1.4.30
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -22,6 +22,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.30 (Chrome extension 1.4.30 + Mac helper; `relay_post.py` does not change): a webhook that keeps failing, or a retry queue that stays non-empty, for 10 minutes (`webhookStuckMinutes`) shows up in `relayctl status` → `problems` until the next healthy tick. HTTP 2xx means the webhook accepted the POST. It is proof X Chat posted the line only when the response body says `{"relayed": true}`. A native Reply to a Mail card still is not texted, and that reply gets a ⚠️. A relay line `⚠️ Name · not a contact:` (or ` · spam`, or the older `⚠️ Unknown ·`) is not a Mail card, so a quote-reply to it still sends. `/who` and `/status` use the same people a bare reply would. A roster label updates when Contacts later has a name. `/add Name` finds that person in Contacts or the roster. A familiar roster person is not asked on every bare reply. `karin`/`karen` asks "Did you mean?". `/help` lists `/test send`, `/add name number`, snooze forms, `/yes`, `/block yes`, quote-reply, and both meanings of 🗑️. The ✅ poll stops once that reaction lands. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). `batchWebhooks` stays on unless you turn it off. Direct post stays off.
 - v1.4.29 (Chrome extension 1.4.29 + Mac helper; `relay_post.py` does not change): a native Reply to a Mail in X Chat card is not sent as an iMessage. Those cards are in the relay chat and start with ✉️ or ⚠️. Nothing is texted, and the chat gets no check mark and no warning. A reply to a normal relay card still sends, including one from that same sender that does not start with those marks. A relay warning that starts with ⚠️ is skipped only when it is the message you reply to. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.28 (Chrome extension 1.4.28 + Mac helper; `relay_post.py` does not change): a photo X Chat draws as its own bubble still goes with the text from that same send. A name prefix on its own ("Alex:") sends the photo with no caption. If the photo never goes out, the chat says so, and says "⚠️ photo didn’t send" when it does not know who it was for. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.27 (Chrome extension 1.4.27 + Mac helper; `relay_post.py` does not change): a photo you attach in the relay chat is sent to the same person as the text. A caption in the same bubble goes with it. A photo alone pairs with the next text within about 20 seconds, or follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -111,7 +112,7 @@ v1.4.6 makes the relay feel native in X Chat:
 - **Quiet names**: "Name:" appears only when the sender changes (`quietNamesSeconds`, 600). Replying to an
   unprefixed bubble with X's native Reply still routes to its sender (keyed hashes of the text, no text).
 - **Spam follows Messages** (`spamMode follow-messages`, the default): texts Messages files under Junk
-  are held (counts only, an hourly "🚫 N spam texts held" line); Unknown Senders show "⚠️ Unknown · ",
+  are held (counts only, an hourly "🚫 N spam texts held" line); someone who is not a contact shows "⚠️ Name · not a contact:",
   Promotions "🏷️ Promo · ", Transactions "🧾 ". If you turned screening or the spam filter off in Messages,
   the relay does the same; if this Mac can't tell, it falls back to `tag` (v1.4.5). "Reply STOP to opt out"
   footers are dropped from tagged texts. Read-only: Messages settings are never changed.
@@ -174,8 +175,9 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.29)
-- A native Reply to a Mail in X Chat card (the card starts with ✉️ or ⚠️) is not sent. A reply to a normal relay card still sends. A relay warning that starts with ⚠️ is skipped only when you reply to that warning.
+## Limits (v1.4.30)
+- A webhook retry queue or a run of failed POSTs that lasts `webhookStuckMinutes` (10) is a `relayctl status` problem until it clears. A 2xx is acceptance, not proof the line was posted.
+- A native Reply to a Mail in X Chat card (✉️, or a ⚠️ that is not a relay warning) is not sent, and that reply gets a ⚠️. `⚠️ Name · not a contact:` and `🚫 Name · spam:` still route.
 - A photo X Chat splits into its own bubble is sent with the text from that same send. "Alex:" on its own sends the photo with no caption. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages, or "⚠️ photo didn’t send" when there is no name.
 - A photo you attach is sent with its caption, or with the next text within about 20 seconds. A photo alone follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages.
 - A native Reply that quotes only the message body goes to that sender when one person sent it, or when the 💬 header above that bubble names one person. Two matches ask who it is for.
@@ -193,8 +195,8 @@ v1.4.6 makes the relay feel native in X Chat:
   group message, and only after you answer yes to "Reply to the … group?" (relay-all only). A bare
   reply never goes to a group.
 - 🗑️ on a relayed text asks "Block …?"; yes (or 👍, or `/block yes`) mutes that sender here only
-  (Messages is not changed). Texts from numbers not in Contacts, or flagged by Messages, show
-  "⚠️ Unknown · " first (`relayctl set spamMode tag|off`; default `follow-messages`, see above).
+  (Messages is not changed). Texts from numbers not in Contacts show
+  "⚠️ Name · not a contact:" (`relayctl set spamMode tag|off`; default `follow-messages`, see above).
 - Photos: 1:1 chats only for incoming (group photos stay "📷 Photo"), and only with the photo drop set up
   (`relayctl set-drop`); a photo the drop no longer has (over 10 minutes) gets a "couldn't be relayed" notice; videos, voice notes and files that
   arrive show a type/size notice ("open Messages to see it"). Typing indicators are not relayed (they are

@@ -215,7 +215,10 @@ class Outbound(HostBase):
         r = self.req({'type': 'signal', 'status': 'skip_mail_card', 'fingerprint': fp,
                       'text': secret, 'quotedText': secret, 'body': secret})
         self.assertTrue(r.get('ok'), r)
-        self.assertEqual(self.posts, [])
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(self.posts[0]['type'], 'status')
+        self.assertIn('Mail', self.posts[0]['detail'])
+        self.assertNotIn(secret, self.posts[0]['detail'])
         log = read_log()
         evs = [json.loads(line) for line in log.splitlines() if '"skip_mail_card"' in line]
         self.assertEqual(len(evs), 1)

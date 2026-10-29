@@ -420,11 +420,14 @@ def handle_command(cmd, quoted, cfg, now, poster):
 # reaching here already means the owner typed them. They are parsed BEFORE the paused check so the owner
 # can /resume. None of them ever sends an iMessage, so they are safe while paused.
 HELP_TEXT = ('/status \u00b7 /who\n'
-             '/pause \u00b7 /resume \u00b7 /snooze\n'
-             '/block name \u00b7 /unblock name\n'
-             '/add name\n'
+             '/pause \u00b7 /resume\n'
+             '/snooze \u00b7 /snooze 8h \u00b7 /snooze until 7:00\n'
+             '/yes \u00b7 /block name \u00b7 /block yes \u00b7 /unblock name\n'
+             '/add name \u00b7 /add name number\n'
+             '/test \u00b7 /test send \u00b7 /help\n'
              'name: your message\n'
-             '/test \u00b7 /help')
+             'Quote-reply a text to answer that person.\n'
+             '\U0001f5d1\ufe0f within 5s undoes a send. \U0001f5d1\ufe0f on an older text asks to block.')
 PAUSE_DETAIL = ('Paused. Texts that arrive while paused are not kept. '
                 '/resume, or /snooze to hold them.')
 _OWNER_CMD_RE = re.compile(r'^/(who|pause|resume|help|add|test|status|snooze)\b\s*(.*)$', re.I | re.S)
@@ -474,24 +477,44 @@ def set_run_state(paused, snooze_until):
     _with_host_lock(fn)
 
 
+def _promote_hint(cfg, directory):
+    """One gentle /who hint for the roster person who has written the most, once they are familiar.
+    Never adds them. No message text."""
+    if not cfg.get('relayAll'):
+        return ''
+    best = None
+    for e in directory:
+        if e.get('kind') != 'roster' or not rc.roster_familiar(e):
+            continue
+        try:
+            n = int(e.get('inboundCount') or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if best is None or n > best[0]:
+            best = (n, e)
+    if not best:
+        return ''
+    label = best[1]['label']
+    return ' %s has written often. /add %s' % (label, label)
+
+
 def who_summary(cfg, now_t):
     """A body-free summary for /who: who a bare (unprefixed) reply would go to right now, plus the most
-    recent senders by label and relative time. Never includes any message text."""
+    recent senders by label and relative time. Same directory routing uses. Never includes any message text."""
     d = rc.build_directory(cfg, rc.load_roster())
-    muted = set(cfg.get('mute') or ())
-    window = cfg['replyWindowMinutes'] * 60
-    live = sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] == 'contact'
-                   and e['handle'] not in muted and 0 <= now_t - e['lastInboundAt'] <= window],
-                  key=lambda e: -e['lastInboundAt'])
+    kind, val = rc.classify_bare_reply(cfg, d, now_t)
     recents = sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] in ('contact', 'roster')],
                      key=lambda e: -e['lastInboundAt'])[:5]
     recent = ', '.join('%s %s' % (e['label'], rc.ago(now_t - e['lastInboundAt'])) for e in recents)
     recent_bit = (' Recent: %s.' % recent) if recent else ''
-    if not live:
-        return 'No one to reply to yet. Start with name: your message' + recent_bit
-    if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
-        return 'Replies are unclear. Two people wrote close together. Start with a name.' + recent_bit
-    return 'Replies go to %s, %s.%s' % (live[0]['label'], rc.ago(now_t - live[0]['lastInboundAt']), recent_bit)
+    hint = _promote_hint(cfg, d)
+    if kind == 'ask' and val == 'ambiguous':
+        return 'Replies are unclear. Two people wrote close together. Start with a name.' + recent_bit + hint
+    if kind == 'ask' and val == 'group':
+        return 'A group wrote last. Start with a name.' + recent_bit + hint
+    if kind != 'send':
+        return 'No one to reply to yet. Start with name: your message' + recent_bit + hint
+    return 'Replies go to %s, %s.%s%s' % (val['label'], rc.ago(now_t - val['lastInboundAt']), recent_bit, hint)
 
 
 def _parse_iso(s):
@@ -513,19 +536,15 @@ def _age_unit(seconds):
 
 
 def bare_reply_name(cfg, now_t):
-    """Who a bare reply would go to right now: a label, 'unclear', or 'name someone'. No message text."""
+    """Who a bare reply would go to right now: a label, 'unclear', or 'name someone'. Same directory
+    routing uses. No message text."""
     d = rc.build_directory(cfg, rc.load_roster())
-    muted = set(cfg.get('mute') or ())
-    window = cfg['replyWindowMinutes'] * 60
-    live = sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] == 'contact'
-                   and e['handle'] not in muted and 0 <= now_t - e['lastInboundAt'] <= window],
-                  key=lambda e: -e['lastInboundAt'])
-    if not live:
-        return 'name someone'
-    if (len(live) > 1 and cfg['ambiguousSeconds']
-            and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']):
+    kind, val = rc.classify_bare_reply(cfg, d, now_t)
+    if kind == 'ask' and val == 'ambiguous':
         return 'unclear'
-    return live[0]['label']
+    if kind != 'send':
+        return 'name someone'
+    return val['label']
 
 
 def status_line(cfg, now_t):
@@ -613,7 +632,52 @@ def add_contact(handle, name):
     _with_host_lock(fn)
 
 
-def handle_add(oc, cfg, now, poster):
+def _save_label(match, fallback):
+    return rc.clean_label((match or {}).get('saveAs') or (match or {}).get('name') or fallback) or fallback
+
+
+def _add_target_for_name(name, cfg, now, sleeper):
+    """Who `/add Name` means: one directory hit, else one Contacts card. None leaves the last-unknown path.
+    Returns {'handle','label','already'} or {'error': detail} or None."""
+    hits = [e for e in rc.directory_name_hits(cfg, name) if e.get('kind') in ('contact', 'roster')]
+    if len(hits) > 1:
+        labels = ', '.join(e['label'] for e in hits[:3])
+        return {'error': 'More than one %s (%s). /add %s and the number.' % (name, labels, name)}
+    if len(hits) == 1:
+        e = hits[0]
+        if e.get('kind') == 'contact':
+            return {'error': '%s is already a contact.' % e['label']}
+        return {'handle': e['handle'], 'label': rc.clean_label(name) or e['label']}
+    if sleeper is None:
+        return None
+    res = contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_QUICK_S)
+    matches = []
+    if isinstance(res, dict):
+        matches = list(res.get('matches') or [])
+    if len(matches) > 1:
+        return {'error': 'More than one %s in Contacts. /add %s and the number.' % (name, name)}
+    if len(matches) == 1:
+        m = matches[0]
+        return {'handle': m.get('handle'), 'label': _save_label(m, name)}
+    return None
+
+
+def _stage_named_add(found, name, cfg, now, poster, base):
+    if found.get('error'):
+        notify(cfg, poster, {'type': 'status', 'detail': found['error'], 'at': rc.iso_utc(now())})
+        return dict(base, ok=False, command='add', needsTarget=True, error=found['error'])
+    handle = found.get('handle')
+    if not handle:
+        return None
+    label = found.get('label') or name
+    _store_pending_add(handle, label, now())
+    _note_prompt(now())
+    detail = 'Add %s (%s)? Reply yes within 2 min.' % (label, rc.mask_handle(handle))
+    notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
+    return dict(base, ok=False, command='add', needsConfirm=True, label=label)
+
+
+def handle_add(oc, cfg, now, poster, sleeper=None):
     base = {'dryRun': cfg['dryRun']}
     if oc.get('handle'):
         name = rc.clean_label(oc.get('name')) or ''
@@ -666,6 +730,11 @@ def handle_add(oc, cfg, now, poster):
         detail = 'Who do you want to add? /add name'
         notify(cfg, poster, {'type': 'status', 'detail': detail, 'at': rc.iso_utc(now())})
         return dict(base, ok=False, command='add', needsTarget=True, error=detail)
+    found = _add_target_for_name(name, cfg, now, sleeper)
+    if found:
+        staged = _stage_named_add(found, name, cfg, now, poster, base)
+        if staged:
+            return staged
     who = last_unknown_texter(cfg)
     if not who:
         detail = 'No recent unknown number to add.'
@@ -678,7 +747,7 @@ def handle_add(oc, cfg, now, poster):
     return dict(base, ok=False, command='add', needsConfirm=True, label=name)
 
 
-def handle_owner_command(oc, quoted, cfg, now, poster):
+def handle_owner_command(oc, quoted, cfg, now, poster, sleeper=None):
     base = {'dryRun': cfg['dryRun']}
     c = oc['cmd']
     if c == 'pause':
@@ -717,7 +786,7 @@ def handle_owner_command(oc, quoted, cfg, now, poster):
                              'at': rc.iso_utc(now())})
         return dict(base, ok=True, command='status')
     if c == 'add':
-        return handle_add(oc, cfg, now, poster)
+        return handle_add(oc, cfg, now, poster, sleeper=sleeper)
     return dict(base, ok=False, error='unknown command')
 
 
@@ -733,7 +802,7 @@ def guess_is_risky(contact, cfg, now_t):
         if (e['handle'] != contact['handle'] and e['kind'] == 'contact'
                 and e['lastInboundAt'] is not None and 0 <= now_t - e['lastInboundAt'] <= 900):
             return True
-    if cfg['relayAll'] and contact.get('kind') == 'roster':
+    if cfg['relayAll'] and contact.get('kind') == 'roster' and not rc.roster_familiar(contact):
         return True
     return False
 
@@ -752,6 +821,8 @@ def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S, fuzzy=None):
         job['name'] = str(name)[:80]
     rc.write_json_atomic(job_p, job)
     deadline = now() + wait_s
+    stalled = 0
+    last = now()
     while True:
         res = rc.read_json(res_p)
         if isinstance(res, dict):
@@ -763,6 +834,14 @@ def contacts_lookup(name, sleeper, now, wait_s=CONTACTS_WAIT_S, fuzzy=None):
         if now() >= deadline:
             break
         sleeper(0.1)                           # v1.4.13: was 0.5 s (the watcher now answers in ~0.25 s)
+        cur = now()
+        if cur <= last:                        # a clock that does not move must not spin
+            stalled += 1
+            if stalled >= 3:
+                break
+        else:
+            stalled = 0
+            last = cur
     for p in (job_p, res_p):
         try:
             os.unlink(p)
@@ -1039,13 +1118,14 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
                     contact=df['label'], routedBy='contacts')
     if not matches and len(fuzzy) == 1:
         m = fuzzy[0]
-        _store_pending_new(m['handle'], m['name'], now(), prefix=name)
+        shown = _save_label(m, m['name'])
+        _store_pending_new(m['handle'], shown, now(), prefix=name)
         _note_prompt(now())
-        detail = 'Text %s (%s)? Reply yes within 2 min.' % (m['name'], rc.mask_handle(m['handle']))
-        notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
+        detail = 'Text %s (%s)? Reply yes within 2 min.' % (shown, rc.mask_handle(m['handle']))
+        notify(cfg, poster, {'type': 'needs_confirm', 'label': shown, 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
-        return dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
-                    contact=m['name'], routedBy='contacts')
+        return dict(base, ok=False, needsConfirm=True, label=shown, handle=m['handle'], reason='new_contact',
+                    contact=shown, routedBy='contacts')
     matches, fuzzy = _merge_same_name(matches), _merge_same_name(fuzzy)   # v1.4.11: duplicate cards = one person
     if not matches and fuzzy:
         matches = fuzzy                          # several close names: list them (names only), send nothing
@@ -1055,13 +1135,14 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
         m = dict(matches[0])
         hs = _rank_options(m.get('handles') or [{'handle': m['handle'], 'label': ''}], m['handle'])
         m['handle'] = hs[0]['handle']
+        shown = _save_label(m, m['name'])
         if cfg['confirmNewContacts'] == 'exact-skip' and m.get('exact') and len(hs) == 1:
             # v1.4.1: "Jordan Rivera: hey" names exactly one Contacts card, by its full name, with one
             # number/email: no question to ask. The caller sends it and adds them as a contact.
             rc.log_event('new_contact_direct')
-            return dict(base, _direct={'handle': m['handle'], 'name': m['name'], 'body': chosen['body']})
+            return dict(base, _direct={'handle': m['handle'], 'name': shown, 'body': chosen['body']})
         hs = hs[:9]
-        _store_pending_new(m['handle'], m['name'], now(), prefix=name,
+        _store_pending_new(m['handle'], shown, now(), prefix=name,
                            options=[x['handle'] for x in hs] if len(hs) > 1 else None)
         _note_prompt(now())
         if len(hs) > 1:
@@ -1070,13 +1151,13 @@ def handle_unknown_name(route, cfg, sleeper, now, poster, base):
             def opt(i, x):
                 return '%d \u00b7 %s%s' % (i + 1, _short_mask(x['handle']), (' ' + x['label']) if x.get('label') else '')
             detail = 'Text %s at which?\n%s\nReply 1\u2013%d, or no.' % (
-                m['name'], '\n'.join(opt(i, x) for i, x in enumerate(hs)), len(hs))
+                shown, '\n'.join(opt(i, x) for i, x in enumerate(hs)), len(hs))
         else:
-            detail = 'Text %s (%s)? Reply yes within 2 min.' % (m['name'], rc.mask_handle(m['handle']))
-        notify(cfg, poster, {'type': 'needs_confirm', 'label': m['name'], 'reason': 'new_contact', 'detail': detail,
+            detail = 'Text %s (%s)? Reply yes within 2 min.' % (shown, rc.mask_handle(m['handle']))
+        notify(cfg, poster, {'type': 'needs_confirm', 'label': shown, 'reason': 'new_contact', 'detail': detail,
                              'at': rc.iso_utc(now())})
-        r = dict(base, ok=False, needsConfirm=True, label=m['name'], handle=m['handle'], reason='new_contact',
-                 contact=m['name'], routedBy='contacts')
+        r = dict(base, ok=False, needsConfirm=True, label=shown, handle=m['handle'], reason='new_contact',
+                 contact=shown, routedBy='contacts')
         if len(hs) > 1:
             r['options'] = [x['handle'] for x in hs]
         return r
@@ -1278,7 +1359,7 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if oc and oc['cmd'] == 'test':            # a pre-1.3.8 extension forwards "/test" as a reply: never route it
         return relay_test.run_test({'send': oc['send']}, cfg, runner, sleeper, now, poster, via='send-path')
     if oc:
-        return handle_owner_command(oc, quoted, cfg, now, poster)
+        return handle_owner_command(oc, quoted, cfg, now, poster, sleeper=sleeper)
     if cfg['paused']:
         return refuse('paused')
     bw = bare_confirm_word(text)
@@ -1444,8 +1525,11 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
         # per the confirmGuessed policy. The host never holds the text; the extension keeps it in session
         # storage and re-sends it with confirmed:true (and the handle) on "/yes".
         # v1.4.2: an unresolved quote, or a roster-only last texter, is always asked first
-        must_ask = by == 'recent' and (route.get('quoteUnresolved') or contact.get('kind') == 'roster'
-                                       or _prompt_recent(now()))   # v1.4.15: never a last-texter send right after a prompt
+        # v1.4.2: an unresolved quote, or a roster person the owner does not know yet, is always asked.
+        # v1.4.30: a familiar roster person (many texts, or a send already confirmed) is not asked
+        # on every bare reply. v1.4.15: never a last-texter send right after a prompt.
+        unfamiliar = contact.get('kind') == 'roster' and not rc.roster_familiar(contact)
+        must_ask = by == 'recent' and (route.get('quoteUnresolved') or unfamiliar or _prompt_recent(now()))
         if must_ask or (by == 'recent' and cfg['confirmGuessed'] != 'off'
                         and (cfg['confirmGuessed'] == 'always' or guess_is_risky(contact, cfg, now()))):
             shown = rc.guess_label(contact)          # v1.4.3: Contacts name, else masked handle + warning
@@ -1537,6 +1621,11 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
     if new_contact and ok and not dry:
         try:
             _finish_new_contact(handle, new_contact['name'], cfg)
+        except Exception:
+            pass
+    if ok and not dry and contact.get('kind') == 'roster':
+        try:
+            rc.note_roster_trusted(handle)
         except Exception:
             pass
     note = ('new contact, ' + _short_mask(handle)) if new_contact else ''
@@ -1781,8 +1870,11 @@ def handle_signal(msg, cfg, now, poster):
     """A browser-side condition (item 6) the host turns into one body-free webhook. No message text."""
     status = str(msg.get('status') or '')
     if status == 'skip_mail_card':
-        # v1.4.29: native Reply to a mail card. One fingerprint. No webhook, no warning, no text.
+        # v1.4.30: a real Mail card. One fingerprint in the log. A fixed line so the skip is not silent.
         rc.log_event('skip_mail_card', fingerprint=rc.clean_probe(msg.get('fingerprint')))
+        notify(cfg, poster, {'type': 'status',
+                             'detail': 'Left that for Mail in X Chat. Nothing was texted.',
+                             'at': rc.iso_utc(now())})
         return {'ok': True}
     if status == 'unacked':
         rc.log_event('signal', status='unacked')

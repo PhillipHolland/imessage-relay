@@ -23,8 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.29'
-EXTENSION_VERSION = '1.4.29'   # v1.4.29 changes the extension
+VERSION = '1.4.30'
+EXTENSION_VERSION = '1.4.30'   # v1.4.30 changes the extension
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -76,7 +76,8 @@ DEFAULT_CONFIG = {
     'rosterDays': 30,
     'mute': [],
     'skipShortCodes': True,
-    'batchWebhooks': True,         # v1.4.5: texts waiting together share one webhook (one routine run)
+    'batchWebhooks': True,         # v1.4.5: texts waiting together share one webhook (one routine run). Recommended on.
+    'webhookStuckMinutes': 10,     # v1.4.30: retry queue or a high queue for this long is a status problem
     'uiReactions': True,           # v1.4.6: \u2705 / \U0001f440 / \u2753 / tapback mirrors done by the extension in the owner's X tab
     'uiPrompts': True,             # v1.4.6: prompts shown by the extension first; the routine copy only if that fails
     'readReceipts': True,          # v1.4.6: \u2705 -> \U0001f440 when a 1:1 reply shows read (only if they share receipts)
@@ -302,6 +303,7 @@ def sanitize_config(user):
     cfg['relayAll'] = truthy(cfg.get('relayAll'), False)
     cfg['skipShortCodes'] = truthy(cfg.get('skipShortCodes'), True)
     cfg['batchWebhooks'] = truthy(cfg.get('batchWebhooks'), True)
+    cfg['webhookStuckMinutes'] = _clamp_int(cfg.get('webhookStuckMinutes'), 10, 1, 180)
     for k in ('uiReactions', 'uiPrompts', 'readReceipts', 'mirrorTapbacks', 'stripOptOut', 'relayAttachments'):
         cfg[k] = truthy(cfg.get(k), True)
     cfg['quietNamesSeconds'] = _clamp_int(cfg.get('quietNamesSeconds'), 600, 0, 3600)
@@ -507,6 +509,12 @@ def build_directory(cfg, roster=()):
         if h in by:
             if by[h]['lastInboundAt'] is None or (r['lastInboundAt'] or 0) > by[h]['lastInboundAt']:
                 by[h]['lastInboundAt'] = r['lastInboundAt']
+            try:
+                by[h]['inboundCount'] = int(r.get('inboundCount') or 0)
+            except (TypeError, ValueError):
+                pass
+            if r.get('trusted') is True:
+                by[h]['trusted'] = True
             continue
         group = h.startswith('group:')
         lab = r.get('label') or ''
@@ -517,6 +525,12 @@ def build_directory(cfg, roster=()):
             firsts.add(first_name(lab).lower())
         e = {'kind': 'group' if group else 'roster', 'name': lab, 'label': lab, 'handle': h,
              'lastInboundAt': r['lastInboundAt']}
+        try:
+            e['inboundCount'] = int(r.get('inboundCount') or 0)
+        except (TypeError, ValueError):
+            e['inboundCount'] = 0
+        if r.get('trusted') is True:
+            e['trusted'] = True
         out.append(e)
         by[h] = e
     return out
@@ -717,7 +731,8 @@ def name_candidates(text):
 
 
 def close_name_score(a, b):
-    """0..1 similarity of two names (case/space-insensitive); a typo-level match is >= 0.85."""
+    """0..1 similarity of two names (case/space-insensitive). A typo offer is >= FUZZY_MIN (0.80):
+    karin/karen and brain/brian land at 0.80 and ask "Did you mean?". Nothing is sent on a typo."""
     import difflib
     a, b = ' '.join(str(a).lower().split()), ' '.join(str(b).lower().split())
     if not a or not b or a == b:
@@ -727,7 +742,8 @@ def close_name_score(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
-FUZZY_MIN = 0.85
+FUZZY_MIN = 0.80          # v1.4.30: was 0.85. 0.80 still only offers a confirm; it never sends
+ROSTER_FAMILIAR_COUNT = 20   # v1.4.30: a roster person with this many inbound texts is well known
 EMAIL_WORD_RE = re.compile(r'^\S+@\S+$')
 
 
@@ -866,7 +882,19 @@ def load_roster(path=None):
             at = float(r['lastInboundAt']) if r.get('lastInboundAt') is not None else None
         except (TypeError, ValueError):
             at = None
-        out.append({'handle': h, 'label': clean_label(r.get('label')), 'lastInboundAt': at})
+        row = {'handle': h, 'label': clean_label(r.get('label')), 'lastInboundAt': at}
+        src = clean_label(r.get('contactName'))
+        if src:
+            row['contactName'] = src
+        try:
+            n = int(r.get('inboundCount') or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n > 0:
+            row['inboundCount'] = n
+        if r.get('trusted') is True:
+            row['trusted'] = True
+        out.append(row)
     return out
 
 
@@ -875,34 +903,72 @@ def save_roster(entries, path=None):
     if len(entries) > MAX_ROSTER:                       # drop the longest-silent entries
         keep = set(id(r) for r in sorted(entries, key=lambda r: -(r['lastInboundAt'] or 0))[:MAX_ROSTER])
         entries = [r for r in entries if id(r) in keep]
-    write_json_atomic(path or ROSTER_PATH, {'version': 1, 'entries': [
-        {'handle': r['handle'], 'label': r.get('label') or '', 'lastInboundAt': r.get('lastInboundAt')} for r in entries]})
+    def _row(r):
+        row = {'handle': r['handle'], 'label': r.get('label') or '', 'lastInboundAt': r.get('lastInboundAt')}
+        src = clean_label(r.get('contactName'))
+        if src:
+            row['contactName'] = src
+        try:
+            n = int(r.get('inboundCount') or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n > 0:
+            row['inboundCount'] = n
+        if r.get('trusted') is True:
+            row['trusted'] = True
+        return row
+    write_json_atomic(path or ROSTER_PATH, {'version': 1, 'entries': [_row(r) for r in entries]})
+
+
+def _roster_label_from(cfg, roster, entry, handle, source, group):
+    """A unique label for `source` against everyone except `entry`."""
+    d = build_directory(cfg, [r for r in roster if r is not entry])
+    used = {e['label'].lower() for e in d}
+    firsts = {first_name(x).lower() for e in d if e['kind'] != 'group' for x in (e['name'], e['label']) if _namelike(x)}
+    return unique_label(source or ('Group' if group else format_handle(handle)), '' if group else handle, used, firsts, group)
 
 
 def roster_label(cfg, roster, handle, name, group=False):
-    """Watcher, when a sender is seen: the label to show. Contacts keep their configured label;
-    anyone else gets (and keeps) a unique roster label from `name` (macOS Contacts), else a
-    formatted number or the email. Mutates `roster`; returns (label, changed)."""
+    """Watcher, when a sender is seen: the label to show. Contacts keep their configured label.
+    A roster label from a number or email is replaced when AddressBook later has a name, and a
+    stored AddressBook name is replaced when that name itself changes. Mutates `roster`;
+    returns (label, changed)."""
     if not group:
         c = contact_by_handle(cfg, handle)
         if c:
             return c['label'], False
+    source = clean_label(name) if name else ''
+    named = bool(source and _namelike(source))
     entry = next((r for r in roster if r['handle'] == handle), None)
     if entry is not None and entry['label']:
         d = build_directory(cfg, roster)
         lab = next(e['label'] for e in d if e['handle'] == handle)
+        changed = False
         if lab != entry['label']:                       # collided with a newer contact label
             entry['label'] = lab
-            return lab, True
-        return lab, False
-    d = build_directory(cfg, [r for r in roster if r is not entry])
-    used = {e['label'].lower() for e in d}
-    firsts = {first_name(x).lower() for e in d if e['kind'] != 'group' for x in (e['name'], e['label']) if _namelike(x)}
-    lab = unique_label(name or ('Group' if group else format_handle(handle)), '' if group else handle, used, firsts, group)
+            changed = True
+        stored = entry.get('contactName') or ''
+        if named and source != stored and (not _namelike(entry['label']) or stored):
+            # A number/email label, or an AddressBook name we already stored, follows the new name.
+            fresh = _roster_label_from(cfg, roster, entry, handle, source, group)
+            entry['contactName'] = source
+            if fresh != entry['label']:
+                entry['label'] = fresh
+            return entry['label'], True
+        if named and not stored and _namelike(entry['label']):
+            entry['contactName'] = source               # remember the source; keep the label they already have
+            return entry['label'], True
+        return entry['label'], changed
+    lab = _roster_label_from(cfg, roster, entry, handle, source if named else (name or ''), group)
+    row = {'handle': handle, 'label': lab, 'lastInboundAt': None}
+    if named:
+        row['contactName'] = source
     if entry is None:
-        roster.append({'handle': handle, 'label': lab, 'lastInboundAt': None})
+        roster.append(row)
     else:
         entry['label'] = lab
+        if named:
+            entry['contactName'] = source
     return lab, True
 
 
@@ -914,12 +980,43 @@ def record_inbound(handle, at, path=None, label=''):
     roster = load_roster(path)
     entry = next((r for r in roster if r['handle'] == h), None)
     if entry is None:
-        roster.append({'handle': h, 'label': clean_label(label), 'lastInboundAt': float(at)})
+        roster.append({'handle': h, 'label': clean_label(label), 'lastInboundAt': float(at), 'inboundCount': 1})
     else:
         entry['lastInboundAt'] = float(at)
         if label and not entry['label']:
             entry['label'] = clean_label(label)
+        try:
+            entry['inboundCount'] = int(entry.get('inboundCount') or 0) + 1
+        except (TypeError, ValueError):
+            entry['inboundCount'] = 1
     save_roster(roster, path)
+
+
+def note_roster_trusted(handle, path=None):
+    """The owner sent to this roster person. Later bare replies need not ask every time."""
+    path = path or ROSTER_PATH
+    h = handle if str(handle).startswith('group:') else normalize_handle(handle)
+    if not h or str(h).startswith('group:'):
+        return False
+    roster = load_roster(path)
+    entry = next((r for r in roster if r['handle'] == h), None)
+    if entry is None or entry.get('trusted'):
+        return False
+    entry['trusted'] = True
+    save_roster(roster, path)
+    return True
+
+
+def roster_familiar(entry):
+    """A roster person the owner already knows: a prior send, or many inbound texts. Not a contact."""
+    if not isinstance(entry, dict):
+        return False
+    if entry.get('trusted') is True:
+        return True
+    try:
+        return int(entry.get('inboundCount') or 0) >= ROSTER_FAMILIAR_COUNT
+    except (TypeError, ValueError):
+        return False
 
 
 
@@ -949,6 +1046,76 @@ def _maybe_confirm_directive(res, target, form, name, live):
         res = dict(res)
         res['confirm'] = {'reason': 'directive', 'altLabel': alt['label'] if cond_a else None}
     return res
+
+
+def recent_people(cfg, directory, now):
+    """Who a bare reply may reach right now. With relay-all, roster people are included. Same set
+    route_reply, /who and /status use."""
+    muted = set((cfg or {}).get('mute') or ())
+    window = cfg['replyWindowMinutes'] * 60
+    kinds = ('contact', 'roster') if cfg.get('relayAll') else ('contact',)
+    return sorted([e for e in directory if e.get('lastInboundAt') is not None and e.get('kind') in kinds
+                   and e.get('handle') not in muted and 0 <= now - e['lastInboundAt'] <= window],
+                  key=lambda e: -e['lastInboundAt'])
+
+
+def classify_bare_reply(cfg, directory, now):
+    """('send', entry) or ('ask', code). code is group | none | ambiguous | business.
+    The same decision a bare reply uses, including a group that wrote last."""
+    live = recent_people(cfg, directory, now)
+    muted = set((cfg or {}).get('mute') or ())
+    window = cfg['replyWindowMinutes'] * 60
+    grp = [e for e in directory if e.get('kind') == 'group' and e.get('lastInboundAt') is not None
+           and e.get('handle') not in muted and 0 <= now - e['lastInboundAt'] <= window]
+    if grp and (not live or max(g['lastInboundAt'] for g in grp) >= live[0]['lastInboundAt']):
+        return ('ask', 'group')
+    if not live:
+        return ('ask', 'none')
+    if (len(live) > 1 and cfg.get('ambiguousSeconds')
+            and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']):
+        return ('ask', 'ambiguous')
+    if not is_person_handle(live[0]['handle']):
+        return ('ask', 'business')
+    return ('send', live[0])
+
+
+def directory_name_hits(cfg, query, roster=None):
+    """People on the relay list whose label or name matches `query` (exact, then a typo offer).
+    Contacts and roster. No message text."""
+    q = ' '.join(str(query or '').lower().split())
+    if not q:
+        return []
+    d = build_directory(cfg, load_roster() if roster is None else roster)
+    people = [e for e in d if e.get('kind') in ('contact', 'roster')]
+
+    def keys(e):
+        out = []
+        for k in (e.get('label'), e.get('name')):
+            if not k:
+                continue
+            out.append(str(k).lower())
+            fn = first_name(k).lower()
+            if fn:
+                out.append(fn)
+        return out
+
+    exact, seen = [], set()
+    for e in people:
+        if q in keys(e) and e['handle'] not in seen:
+            exact.append(e)
+            seen.add(e['handle'])
+    if exact:
+        return exact
+    fuzzy, seen = [], set()
+    for e in people:
+        if e['handle'] in seen:
+            continue
+        ks = keys(e)
+        sc = max([close_name_score(q, k) for k in ks] or [0])
+        if sc >= FUZZY_MIN:
+            fuzzy.append(e)
+            seen.add(e['handle'])
+    return fuzzy
 
 
 def route_reply(text, quoted, cfg, roster, now, allow_empty=False, quote_label=''):
@@ -1000,17 +1167,13 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False, quote_label='
         return {'contact': e, 'body': body, 'by': by}
 
     muted = set(cfg.get('mute') or ())
-    window = cfg['replyWindowMinutes'] * 60
 
-    # v1.4.2: with relay-all, a roster person who just texted is a "last texter" too (a bare reply to them
-    # is always confirmed first by the host); before, only configured contacts were, so a reply to a
-    # roster-only sender who had just written got "Who's this for?".
-    live_kinds = ('contact', 'roster') if cfg['relayAll'] else ('contact',)
+    # v1.4.2: with relay-all, a roster person who just texted is a "last texter" too. v1.4.30: a
+    # well-known roster person (many texts, or a send the owner already confirmed) is not asked
+    # again on every bare reply. A true unknown still is.
 
     def recent_live():
-        return sorted([e for e in d if e['lastInboundAt'] is not None and e['kind'] in live_kinds
-                       and e['handle'] not in muted and 0 <= now - e['lastInboundAt'] <= window],
-                      key=lambda e: -e['lastInboundAt'])
+        return recent_people(cfg, d, now)
 
     q_handle, q_status = parse_quote(quoted, cfg, d)
     if q_status == 'header':
@@ -1083,24 +1246,21 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False, quote_label='
     quote_unresolved = quoted_present
     def recent_route():
         # The "recent" fallback: configured contacts, plus (v1.4.2, relay-all) roster people within the window.
-        live = recent_live()
-        # v1.4.4: if a GROUP wrote most recently, a bare reply is never guessed onto someone older (and
-        # never onto the group): the owner was most likely answering the group. Ask for a name.
-        grp = [e for e in d if e['kind'] == 'group' and e['lastInboundAt'] is not None and e['handle'] not in muted
-               and 0 <= now - e['lastInboundAt'] <= window]
-        if grp and (not live or max(g['lastInboundAt'] for g in grp) >= live[0]['lastInboundAt']):
+        kind, val = classify_bare_reply(cfg, d, now)
+        if kind == 'ask' and val == 'group':
+            # v1.4.4: if a GROUP wrote most recently, a bare reply is never guessed onto someone older.
             return need('a group wrote last (group replies are not supported)',
                         'Who is this for? %s: your message. Group replies aren\u2019t supported yet.'
                         % example_label(cfg, d))
-        if not live:
+        if kind == 'ask' and val == 'none':
             return need('no one has written within %d minutes' % cfg['replyWindowMinutes'])
-        if len(live) > 1 and cfg['ambiguousSeconds'] and live[0]['lastInboundAt'] - live[1]['lastInboundAt'] < cfg['ambiguousSeconds']:
+        if kind == 'ask' and val == 'ambiguous':
             return need('two people wrote within %d seconds of each other' % cfg['ambiguousSeconds'])
-        if not is_person_handle(live[0]['handle']):
+        if kind == 'ask':
             # v1.4.3: the last texter is a business / short code / odd handle: never guessed; ask for a name
             return need('the last texter is a business or short-code handle',
                         ask_for_name_message(cfg, d))
-        return deliver(live[0], text, 'recent')
+        return deliver(val, text, 'recent')
 
     cands = name_candidates(text) if p_status == 'none' and not quote_unresolved else []
     if cands:
@@ -1149,19 +1309,59 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def post_json(url, payload, token='', timeout=15):
-    """POST JSON; True only on 2xx (https or http://localhost). Redirects not followed; any 3xx+ is failure."""
-    if not (url.startswith('https://') or url.startswith('http://127.0.0.1') or url.startswith('http://localhost')):
+class WebhookResult(object):
+    """HTTP outcome of one webhook POST. True only when the server returned 2xx.
+
+    `accepted` means the webhook endpoint took the POST. `relayed` is true only when that body
+    explicitly says the routine posted to X Chat (`{"relayed": true}`). A bare 2xx is acceptance,
+    not proof the chat line was posted. The queue still clears on acceptance: the routine dedupes
+    by event id, and retrying a 2xx would double-post when the routine did run."""
+    __slots__ = ('accepted', 'relayed', 'status')
+
+    def __init__(self, accepted, relayed=False, status=0):
+        self.accepted = bool(accepted)
+        self.relayed = bool(relayed) and self.accepted
+        self.status = int(status or 0)
+
+    def __bool__(self):
+        return self.accepted
+
+    __nonzero__ = __bool__
+
+
+def webhook_kind(raw):
+    """'failed', 'accepted' (2xx, no routine ack), or 'relayed' (body said it posted)."""
+    if isinstance(raw, WebhookResult):
+        if not raw.accepted:
+            return 'failed'
+        return 'relayed' if raw.relayed else 'accepted'
+    return 'accepted' if raw else 'failed'
+
+
+def _body_says_relayed(raw):
+    try:
+        data = json.loads(raw.decode('utf-8', 'replace') or '{}')
+    except Exception:
         return False
+    return isinstance(data, dict) and data.get('relayed') is True
+
+
+def post_json(url, payload, token='', timeout=15):
+    """POST JSON. A WebhookResult is true only on 2xx (https or http://localhost). Redirects are
+    not followed; any 3xx+ is failure. The body is read only to see an explicit relayed flag."""
+    if not (url.startswith('https://') or url.startswith('http://127.0.0.1') or url.startswith('http://localhost')):
+        return WebhookResult(False)
     req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), method='POST',
                                  headers={'Content-Type': 'application/json', 'User-Agent': 'imessage-relay/' + VERSION})
     if token:
         req.add_header('Authorization', 'Bearer ' + token)
     try:
         with _OPENER.open(req, timeout=timeout) as r:
-            return 200 <= r.status < 300
+            ok = 200 <= r.status < 300
+            relayed = _body_says_relayed(r.read(2048)) if ok else False
+            return WebhookResult(ok, relayed, r.status)
     except Exception:
-        return False
+        return WebhookResult(False)
 
 
 # ---------- quiet hours ----------

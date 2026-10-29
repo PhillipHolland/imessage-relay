@@ -339,6 +339,29 @@ class Watcher:
         self._prefs_at = -1e18
         self._spam_held = 0      # v1.4.6: spam Messages filtered (counts only) since the last summary
         self._spam_summary_at = None
+        self.webhook_fail_since = None   # v1.4.30: unix time the current retry/failure streak began
+        self.webhook_fail_streak = 0
+        self.last_webhook_result = ''
+        self._webhook_failed_tick = False
+        self._load_webhook_clock()
+
+    def _load_webhook_clock(self):
+        """Keep an outage clock across restarts. A later healthy tick (empty retry, no failures) clears it."""
+        st = rc.read_json(STATUS_PATH, {}) or {}
+        try:
+            since = float(st.get('webhookFailSince') or 0)
+        except (TypeError, ValueError):
+            since = 0
+        try:
+            streak = int(st.get('webhookFailStreak') or 0)
+        except (TypeError, ValueError):
+            streak = 0
+        if since > 0:
+            self.webhook_fail_since = since
+            self.webhook_fail_streak = max(0, streak)
+        kind = st.get('lastWebhookResult')
+        if kind in ('failed', 'accepted', 'relayed'):
+            self.last_webhook_result = kind
 
     # ----- state -----
     def committed(self):
@@ -349,23 +372,56 @@ class Watcher:
         if self.cursor is not None:
             rc.write_json_atomic(STATE_PATH, {'lastRowid': self.committed(), 'version': rc.VERSION})
 
+    def note_webhook(self, raw):
+        """Remember whether the last POST failed, was merely accepted (2xx), or carried a relayed ack."""
+        kind = rc.webhook_kind(raw)
+        self.last_webhook_result = kind
+        if kind == 'failed':
+            self._webhook_failed_tick = True
+            self.webhook_fail_streak += 1
+            if self.webhook_fail_since is None:
+                self.webhook_fail_since = self.now()
+        else:
+            self.webhook_fail_streak = 0
+        return kind != 'failed'
+
+    def settle_webhook(self):
+        """After a tick that finished scanning: an empty retry and no failed POST means healthy."""
+        if self.retry or self._webhook_failed_tick:
+            if self.webhook_fail_since is None:
+                self.webhook_fail_since = self.now()
+        else:
+            self.webhook_fail_since = None
+            self.webhook_fail_streak = 0
+
+    def webhook_outage(self, cfg):
+        since = self.webhook_fail_since
+        if not since or not (self.retry or self.webhook_fail_streak):
+            return False
+        return (self.now() - since) >= cfg.get('webhookStuckMinutes', 10) * 60
+
     def write_status(self, cfg, **extra):
+        since, outage = self.webhook_fail_since, self.webhook_outage(cfg)
         st = {'version': rc.VERSION, 'lastTickAt': rc.iso_utc(self.now()), 'paused': cfg['paused'],
               'quiet': rc.in_quiet_hours(cfg['quietHours'], self.now()),
               'snooze': rc.snoozing(cfg, self.now()), 'held': len(self.held),
               'retry': len(self.retry), 'messagesRunning': self.messages_running,
               'autoReopenMessages': cfg['autoReopenMessages'], 'lastForwardAt': self.last_forward_at,
               'webhookConfigured': bool(cfg['webhookUrl']), 'contacts': len(cfg['contacts']),
-              'relayAll': cfg['relayAll'], 'muted': len(cfg['mute'])}
+              'relayAll': cfg['relayAll'], 'muted': len(cfg['mute']),
+              'webhookFailStreak': self.webhook_fail_streak,
+              'webhookFailSince': since or 0,
+              'webhookOutage': bool(outage),
+              'lastWebhookResult': self.last_webhook_result or ''}
         st.update(extra)
         rc.write_json_atomic(STATUS_PATH, st)
 
     # ----- webhook -----
     def post(self, cfg, payload):
         if not cfg['webhookUrl']:
-            return False
+            return self.note_webhook(False)
         rc.ensure_event_id(payload)   # unique id on every webhook payload so a retried delivery dedupes (item B)
-        return bool(self.poster(cfg['webhookUrl'], payload, cfg.get('webhookToken', '')))
+        return self.note_webhook(self.poster(cfg['webhookUrl'], payload, cfg.get('webhookToken', '')))
 
     def post_status(self, cfg, status, detail):
         ok = self.post(cfg, {'type': 'status', 'status': status, 'detail': detail, 'at': rc.iso_utc(self.now())})
@@ -770,7 +826,7 @@ class Watcher:
             # v1.4.7/v1.4.8: photo metadata for relay_post (token, kind, mime, ext, size, sha256, and url+key or v:2); no names
             p['media'] = [dict(x) for x in m['media']]
         if m.get('unknown'):
-            p['unknown'] = True             # v1.4.5 spamMode tag: posted as "⚠️ Unknown · <label>: <text>"
+            p['unknown'] = True             # v1.4.22: posted as "⚠️ <label> · not a contact: <text>"
         return p
 
     # Backpressure replaces the old drop-oldest cap: nothing queued is ever discarded. When the queue
@@ -1099,6 +1155,7 @@ class Watcher:
 
     # ----- one cycle -----
     def tick(self):
+        self._webhook_failed_tick = False
         cfg = self.load_config()
         counts = dict.fromkeys(('taggedUnknown', 'batched', 'scanned', 'notAllowlisted', 'group', 'groupMessages', 'own', 'muted', 'shortCode', 'noHandle',
                                 'reactionsOrEvents', 'empty', 'deferredEmpty', 'tooOld', 'rowErrors', 'rosterWriteErrors',
@@ -1184,6 +1241,7 @@ class Watcher:
                 self._backpressure_notified = False
             self.spam_summary(cfg)
         self.save_state()
+        self.settle_webhook()
         self.write_status(cfg, chatDb='ok')
         if any(v for k, v in counts.items() if k not in ('scanned', 'notAllowlisted', 'own', 'noHandle')):
             rc.log_event('tick', queuedHeld=len(self.held), queuedRetry=len(self.retry), **counts)
