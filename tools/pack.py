@@ -12,6 +12,7 @@ SKIP_DIRS = {'__pycache__', 'node_modules', '.git'}
 MARK = '@@@@ '
 
 HEADER = '''#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 build_bundle.py: iMessage Relay v1.4.30, the whole package in one file (no repo needed).
 
