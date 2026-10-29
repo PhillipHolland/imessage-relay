@@ -288,7 +288,8 @@ function xRow(doc, n, opts = {}) {
     assert.strictEqual(s.logs.filter(i => i.direction === 'outbound').length, 0);
     const skips = s.statuses.filter(st => st.status === 'skip_mail_card');
     assert.strictEqual(skips.length, 1);
-    assert.deepStrictEqual(Object.keys(skips[0]).sort(), ['fingerprint', 'status']);
+    assert.deepStrictEqual(Object.keys(skips[0]).sort(), ['fingerprint', 'status', 'uuid']);
+    assert.ok(/^[0-9a-f-]{8,64}$/i.test(skips[0].uuid));
     assert.ok(/^E=/.test(skips[0].fingerprint), skips[0].fingerprint);
     assert.ok(!s.statuses.some(st => st.status === 'unacked' || st.status === 'skipped'));
     const blob = JSON.stringify(s.statuses);
@@ -312,6 +313,27 @@ function xRow(doc, n, opts = {}) {
     await sleep(80);
     assertSkipped(s, 'could not be opened');
     assert.ok(JSON.stringify(s.statuses).indexOf('I will check') < 0);
+    s.det.stop();
+  });
+
+  await test('a native Reply to a relay not-a-contact line still routes', async () => {
+    const parent = '\u26A0\uFE0F Brian \u00b7 not a contact: hey from the road';
+    const s = await replyToCard(parent, 'got it', 70);
+    const out = s.logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(out.length, 1, JSON.stringify(s.logs.map(i => i.direction)));
+    assert.strictEqual(out[0].text, 'got it');
+    assert.ok(!s.statuses.some(st => st.status === 'skip_mail_card'));
+    s.det.noteHostAck(false);
+    s.det.stop();
+  });
+
+  await test('a native Reply to an older Unknown relay line still routes', async () => {
+    const parent = '\u26A0\uFE0F Unknown \u00b7 Brian: hey from the road';
+    const s = await replyToCard(parent, 'got it', 80);
+    const out = s.logs.filter(i => i.direction === 'outbound');
+    assert.strictEqual(out.length, 1);
+    assert.ok(!s.statuses.some(st => st.status === 'skip_mail_card'));
+    s.det.noteHostAck(false);
     s.det.stop();
   });
 

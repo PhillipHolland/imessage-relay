@@ -181,7 +181,9 @@ class Route(Base):
             data = json.load(f)
         self.assertEqual([(r['handle'], r['label'], r['lastInboundAt']) for r in data['entries']],
                          [('+15555550120', 'P0', T0 + 9), ('+15555550121', 'P1', T0 + 1), ('+15555550122', 'P2', T0 + 2)])
-        self.assertEqual(set(data['entries'][0]), {'handle', 'label', 'lastInboundAt'})
+        self.assertTrue({'handle', 'label', 'lastInboundAt', 'inboundCount'} <= set(data['entries'][0]))
+        self.assertFalse({'text', 'body', 'message'} & set(data['entries'][0]))
+        self.assertEqual(data['entries'][0]['inboundCount'], 2)
 
 class Roster(Base):
     """relayAll: roster people (texted in, not contacts) and read-only groups."""

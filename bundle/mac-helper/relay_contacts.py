@@ -119,8 +119,18 @@ def lookup(name, cfg, globs=None, people=None, fuzzy=False):
             n = rc.normalize_handle(v, cc)
             if rc.valid_handle(n) and n not in own and n not in [x['handle'] for x in hs]:
                 hs.append({'handle': n, 'label': re.sub(r'[^A-Za-z ]', '', label).strip().lower()[:12]})
-        out.append({'name': re.sub(r'[\x00-\x1f\x7f]', ' ', p['name'])[:60], 'handle': h, 'exact': is_exact,
-                    'handles': hs, 'fuzzy': is_fuzzy})
+        shown = re.sub(r'[\x00-\x1f\x7f]', ' ', p['name'])[:60]
+        nick = str(p.get('nick') or '').strip()
+        save = shown
+        if nick and not is_exact and ' ' not in q:
+            nick_score = 1.0 if nick.lower() == q else (rc.close_name_score(q, nick) if is_fuzzy else 0.0)
+            other = max(rc.close_name_score(q, p.get('first') or ''), rc.close_name_score(q, p.get('name') or ''))
+            if nick.lower() == q or (is_fuzzy and nick_score >= rc.FUZZY_MIN and nick_score >= other):
+                save = re.sub(r'[\x00-\x1f\x7f]', ' ', nick)[:60]
+        row = {'name': shown, 'handle': h, 'exact': is_exact, 'handles': hs, 'fuzzy': is_fuzzy}
+        if save and save != shown:
+            row['saveAs'] = save
+        out.append(row)
         if len(out) >= MAX_RESULTS:
             break
     return {'ok': True, 'matches': out}

@@ -1,4 +1,4 @@
-# iMessage Relay: operator reference (v1.4.29)
+# iMessage Relay: operator reference (v1.4.30)
 
 > The full operator guide for the iMessage Relay bot. The bot's packed skill keeps the core flows
 > (setup, install, routine, /test, everyday use, safety, updating) and fetches this file, pinned to a
@@ -512,7 +512,7 @@ screen-reader labels, icons and times are skipped) as the quote; the Mac routes 
 If the quote still can't be placed, the fallback to whoever wrote last applies only when that person is
 in Contacts (else "Who's this for?"). If a **group** wrote most recently, a bare reply asks "Who's this
 for?" instead of guessing an older 1:1 sender.
-**Mail cards (v1.4.29).** Mail in X Chat posts into this same relay chat. A native Reply to a card whose text starts with ✉️ or ⚠️, from that sender, is not sent as an iMessage. There is no ✅ and no ⚠️ on that reply. Mail in X Chat handles it. The Mac logs one `skip_mail_card` event with the text-free fingerprint only. A reply to a normal relay card still routes, including a card from that same sender that does not start with those marks. A relay warning that starts with ⚠️ is skipped only when it is the message being replied to. It is not skipped when the relay posts it.
+**Mail cards (v1.4.30).** Mail in X Chat posts into this same relay chat. A native Reply to a card whose text starts with ✉️, or with ⚠️ and is not a relay warning, is not sent as an iMessage. The reply gets a ⚠️, and the chat says it was left for Mail. The Mac logs one `skip_mail_card` event with the text-free fingerprint only. A relay line `⚠️ Name · not a contact:` (also ` · spam`, and the older `⚠️ Unknown · Name:`) still routes. It is not a Mail card.
 
 **Group replies (v1.4.5, relay-all only).** A reply goes to a group only when it starts with the group's
 **exact** name (any case: `family: cute pup`) or natively quotes a relayed group line (`Family · Sam: …`).
@@ -721,7 +721,7 @@ card is never a reply quote and its thumbnail is never sent as a photo.
   "⚠️ Not sent: There was nothing after the name to send. Type the message after "Jordan:"." (fixed,
   body-free wording; not for messages outside the relay chat).
 - Undo: 🗑️ on his own message within `undoSeconds` (5) cancels it. Quiet names (`quietNamesSeconds`).
-- `spamMode follow-messages` (default): Junk held (counts only), Unknown Senders "⚠️ Unknown · ",
+- `spamMode follow-messages` (default): Junk held (counts only), someone not in Contacts "⚠️ Name · not a contact:",
   Promotions "🏷️ Promo · ", Transactions "🧾 "; falls back to `tag` when Messages' filters can't be read.
 - New config keys (all `RC set …`): `uiReactions`, `uiPrompts`, `readReceipts`, `mirrorTapbacks`,
   `stripOptOut`, `relayAttachments` (true), `quietNamesSeconds` (600), `undoSeconds` (5),
@@ -879,6 +879,7 @@ runs the Mac-side checks (it is never sent as a reply) but can't confirm the rou
 replace relay_post.py on your side with the v1.3.8 (or later) copy, or `/test` reports post as `⚠️ relay helper
 error` (v1.4.0's copy also renders the new Contacts confirmation; v1.4.1's copy renders every confirmation
 prompt from its `detail`, so it says "Reply yes", and the "(new contact, •••0188)" note on `sent`). The guided path for all of this is onboarding **Step U**. Then run `RC status`.
+**v1.4.30**: webhook retries or failed POSTs that last 10 minutes (`relayctl set webhookStuckMinutes N`, default 10) show in `RC status` problems until the queue is healthy. A 2xx means the webhook accepted the POST. X Chat posted the line only when that response is `{"relayed": true}` (the routine's HTTP response does not say that today, so a long failure is the alarm). A native Reply to a Mail card is still not texted, and it gets a ⚠️ plus "Left that for Mail in X Chat." A quote-reply to `⚠️ Name · not a contact:` still sends. `/who` and `/status` list the same people a bare reply uses. Roster labels follow a new Contacts name. `/add Name` looks up that name. A familiar roster person is not asked on every bare reply. `/help` covers `/test send`, `/add name number`, `/snooze 8h`, `/snooze until 7:00`, `/yes`, `/block yes`, quote-reply, and both 🗑️ meanings. The ✅ poll stops once the reaction lands. Recommended: leave `batchWebhooks` on (one routine run for texts waiting together) and leave direct post off unless you opted in with `relayctl xpost on`. **Reload the extension** (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). `relay_post.py` does not change. Direct post stays off. The routine prompt in this document is unchanged.
 **v1.4.29**: a native Reply to a Mail in X Chat card is not sent as an iMessage (Chrome extension 1.4.29 + Mac helper; `relay_post.py` does not change). Those cards are in the relay chat and their text starts with ✉️ or ⚠️. Nothing is texted, and that reply gets no ✅ and no ⚠️. A reply to a normal relay card still sends, including one from that same sender that does not start with those marks. A relay warning that starts with ⚠️ is skipped only when it is the message you reply to. **Reload the extension** (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off. The routine prompt in this document is unchanged.
 **v1.4.28**: a photo X Chat draws as its own bubble is sent with the text from that same send (Chrome extension 1.4.28 + Mac helper; `relay_post.py` does not change). A name prefix with nothing after it ("Alex:") sends the photo and no caption. If the photo never goes out, the chat says "⚠️ photo didn’t send to Alex, send it from Messages", or "⚠️ photo didn’t send" when there is no name. **Reload the extension** (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off. The routine prompt in this document is unchanged.
 **v1.4.27**: a photo attached in the relay chat is sent to the same person as the text (Chrome extension 1.4.27 + Mac helper; `relay_post.py` does not change). A caption in the same bubble goes with the photo. A photo alone pairs with the next text within about 20 seconds, or follows a Reply the way a lone emoji does. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says "⚠️ photo didn’t send to Alex, send it from Messages". **Reload the extension** (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off. The routine prompt in this document is unchanged.
@@ -960,7 +961,8 @@ webhook routine.
   confirmSends (true), confirmGuessed ("risky"; "always"/"off"), redactCodes (true), rosterDays (30), mute [handles], skipShortCodes (true), footer, deliveryCheck,
   maxSendsPerMinute, webhookUrl, webhookToken, ownerHandle, ownerXHandle, senderXHandle,
   autoReopenMessages, pollSeconds, defaultCountryCode, ownerXUserId, ownerHandles[],
-  headerGapMinutes (30), directPost (false; `relayctl xpost on|off` only, not `relayctl set`),
+  headerGapMinutes (30), batchWebhooks (true; recommended on — texts waiting together share one webhook),
+  webhookStuckMinutes (10), directPost (false; recommended off; `relayctl xpost on|off` only, not `relayctl set`),
   xpostClientId, xpostUserId, xpostKeyVersion, xpostRedirectPort (53682), and
   relayAllPending (set by `RC setup --relay-all on` before the owner's handles are known; the watcher
   turns relay-all on and clears it once it detects them).
@@ -970,7 +972,7 @@ webhook routine.
   `~/.imessage-relay/ext_seen.json` (when the extension last connected and its version), and
   `~/.imessage-relay/jobs/` (watcher probe jobs, removed after each answer).
 - Roster / reply routing state: `~/.imessage-relay/roster.json` holds
-  `{handle, label, lastInboundAt}` per relayed sender or group (`group:<id>`), never text, at most
+  `{handle, label, lastInboundAt, contactName?, inboundCount?, trusted?}` per relayed sender or group (`group:<id>`), never text, at most
   2000 entries. `lastInboundAt` is set only after a successful webhook post.
 - Delivery proof: `~/.imessage-relay/pending/<id>.json` (one mode-600 file per send; the host and
   watcher never overwrite each other) holds body-free records of sends awaiting confirmation

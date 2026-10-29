@@ -293,7 +293,7 @@ async function handleYes(item, nameArg, src) {
   await updateEvent(item.key, patch);
   if (res) await ackTab(useSrc);
   if (res && res.ui) await applyUi(res, useSrc, seenAt);
-  if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
+  if (res && res.ok && res.sent) { lastSendAt = Date.now(); armDeliveryPoll(res); }
 }
 
 // ─── v1.4.6: fast feedback in the owner's own tab ───
@@ -325,6 +325,7 @@ async function applyUi(res, src, seenAt) {
   if (!ui) return;
   for (const r of (ui.react || []).slice(0, 4)) {
     const out = await tabUi(src, { action: 'react', uuid: String(r.uuid || ''), emoji: String(r.emoji || ''), prompt: r.emoji === '\u2753' });
+    if (out && out.ok) r.landed = true;
     const ack = { ok: !!(out && out.ok), step: (out && out.step) || 'no-tab', latencyMs: Math.max(0, Date.now() - (seenAt || Date.now())) };
     if (r.pendingId) ack.pendingId = String(r.pendingId);
     if (r.noteId) ack.noteId = String(r.noteId);
@@ -341,6 +342,22 @@ function armUiPoll(ms) {
   uiArmedUntil = Math.max(uiArmedUntil, Date.now() + ms);
   uiFastUntil = Date.now() + 60 * 1000;
   if (!uiPollTimer) uiPollTimer = setTimeout(uiPollLoop, 1000);
+}
+function disarmUiPoll() {
+  uiArmedUntil = 0;
+  uiFastUntil = 0;
+  if (uiPollTimer) { clearTimeout(uiPollTimer); uiPollTimer = null; }
+}
+// v1.4.30: the sent ✅ is already in the send response. Once it lands, stop the 10-minute poll
+// (~240 host starts). Delivery is still proven by the watcher. A 👀 or tapback is picked up by the
+// 15s relay-ui-tick. If the ✅ did not land, poll one minute so a queued reaction is not missed.
+function sentMarkLanded(res) {
+  const reacts = (res && res.ui && res.ui.react) || [];
+  return reacts.some(r => r && r.emoji === '\u2705' && r.landed);
+}
+function armDeliveryPoll(res) {
+  if (sentMarkLanded(res)) { disarmUiPoll(); return; }
+  armUiPoll(60 * 1000);
 }
 async function uiPollOnce() {
   if (uiPolling || !uiSrc) return;
@@ -714,7 +731,7 @@ async function handleItem(item, src) {
   await updateEvent(item.key, patch);
   if (res) await ackTab(src);
   if (res && res.ui) await applyUi(res, src, seenAt);
-  if (res && res.ok && res.sent) { lastSendAt = Date.now(); armUiPoll(10 * 60 * 1000); }
+  if (res && res.ok && res.sent) { lastSendAt = Date.now(); armDeliveryPoll(res); }
 }
 
 // v1.4.24: a relay-chat bubble we still cannot call outbound, but that quotes a message or carries
@@ -836,8 +853,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     else if (msg.signal.status === 'photo_miss') {
       try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'photo_miss' }); } catch (e) { /* host down */ }
     } else if (msg.signal.status === 'skip_mail_card') {
-      // v1.4.29: a reply to a mail card. Fingerprint only. No check mark, no refusal, no message text.
+      // v1.4.30: a reply to a Mail card. Fingerprint only on the wire. ⚠️ on that message, no text.
       const fp = String(msg.signal.fingerprint || '').replace(/[^A-Za-z0-9#@\[\]{},.:;<>|_\-!+=/ ()]/g, '').slice(0, 4000);
+      const uuid = String(msg.signal.uuid || '').toLowerCase();
+      if (/^[0-9a-f-]{8,64}$/.test(uuid)) {
+        tabUi({ tabId: sender.tab.id, frameId: sender.frameId }, { action: 'react', uuid, emoji: '\u26A0\uFE0F' }).catch(() => {});
+      }
       try { chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'skip_mail_card', fingerprint: fp }); } catch (e) { /* host down */ }
     } else if (msg.signal.status === 'photo_held') {
       // v1.4.28: counts only. Kinds stay on the allow-list. No message text, no image bytes.

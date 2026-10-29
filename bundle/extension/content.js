@@ -1042,11 +1042,18 @@
     }
 
     // v1.4.29: Mail in X Chat posts into this same 1:1 chat as the relay bot. A native Reply whose
-    // quoted parent is from that sender and whose text starts with an envelope or a warning is left
-    // for Mail in X Chat. A relay warning is skipped only when it is that parent, not when it is posted.
+    // quoted parent is from that sender and is a Mail card is left for Mail. v1.4.30: a relay line
+    // (`⚠️ Name · not a contact: …`, spam, or the older `⚠️ Unknown ·`) is not a Mail card.
     const MAIL_BOT_ID = '2111240665258438656';
+    function isRelayWarningLine(text) {
+      const t = String(text || '').replace(/[\uFE0E\uFE0F]/g, '').replace(/\s+/g, ' ').trim();
+      if (t.indexOf('\u00B7 not a contact') >= 0) return true;
+      if (t.indexOf('\u00B7 spam') >= 0) return true;
+      return /^\u26A0 Unknown \u00B7/.test(t);
+    }
     function opensMailCard(text) {
-      const t = String(text || '').trim();
+      const t = String(text || '').replace(/[\uFE0E\uFE0F]/g, '').trim();
+      if (isRelayWarningLine(t)) return false;
       return t.startsWith('\u2709') || t.startsWith('\u26A0');
     }
     function mailNorm(s) {
@@ -1472,8 +1479,8 @@
         lastEls[a.direction] = e;
         lastEls.any = e;
 
-        // v1.4.29: native Reply to a mail card (or a relay warning that starts with ⚠️) from
-        // the relay bot. No send, no check, no refusal. The fingerprint has no message text.
+        // v1.4.30: native Reply to a Mail card from the relay bot. Not a relay warning line.
+        // No send. The fingerprint has no message text. uuid lets the background put ⚠️ on it.
         if (a.direction === 'outbound' && a.quotedText) {
           let mail = false;
           try { mail = isMailCardReply(quoteEntry, a.quotedText); } catch (err) { mail = false; }
@@ -1482,7 +1489,7 @@
             noteHostAck(false);
             let fp = '';
             try { fp = structureOf(e); } catch (err) { fp = ''; }
-            try { onStatus({ status: 'skip_mail_card', fingerprint: fp }); } catch (err) { /* ignore */ }
+            try { onStatus({ status: 'skip_mail_card', fingerprint: fp, uuid: a.uuid || '' }); } catch (err) { /* ignore */ }
             continue;
           }
         }
