@@ -107,7 +107,7 @@ FDA_REPEAT_S = 3600
 # open succeed. Probe a few times before posting fda_missing. Sleeps between the 4 tries.
 FDA_PROBE_TRIES = 4
 FDA_PROBE_BACKOFF_S = (0.5, 1.0, 2.0)
-CHROME_STALE_S = 15 * 60     # ext_seen older than this (the host only rewrites it every 5 min)
+CHROME_STALE_S = 15 * 60     # ext_seen older than this (rewritten at least every 5 min, sooner if the tab stamp moves)
 CHROME_ARM_S = 10 * 60       # watcher must see that stale stamp for this long first (sleep wakes don't nag)
 EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
 JOB_MAX_AGE_S = 600
@@ -1290,18 +1290,19 @@ class Watcher:
         changed = False
 
         def confirm(e, delivered):
-            # v1.4.6: the extension put \u2705 on HIS message -> no text line on success. While its ack is
-            # still due (UI_ACK_GRACE_S), wait; a failed / missing reaction falls back to the text line.
-            if e.get('uiConfirmed'):
-                rc.log_event('confirm_suppressed', reason='ui')
-                return 'done'
-            if e.get('ui') and not e.get('uiFailed') and t - float(e.get('at') or 0) < UI_ACK_GRACE_S:
+            # v1.4.6: while the ✅ ack is still due (UI_ACK_GRACE_S), wait. A failed or missing
+            # reaction falls through to the same text line. v1.4.31: a placed ✅ is easy to miss
+            # (a reaction on his own bubble, especially from the phone), so the short
+            # "→ label ✓ / ✓✓" line is posted as well. Failures still use send_failed.
+            if e.get('ui') and not e.get('uiFailed') and not e.get('uiConfirmed') and t - float(e.get('at') or 0) < UI_ACK_GRACE_S:
                 return 'wait'
             if cfg.get('confirmSends', True) and not cfg['paused'] and cfg['webhookUrl']:
                 p = {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered, 'dryRun': False, 'at': rc.iso_utc(t)}
                 if e.get('note'):
                     p['note'] = e['note']             # v1.4.1: "(new contact, •••0188)"
                 self.post(cfg, p)
+            if e.get('uiConfirmed'):
+                rc.log_event('confirm_posted', reason='ui', delivered=bool(delivered))
             return 'done'
 
         def fail(e, error=None, reason=None, superseded=False):

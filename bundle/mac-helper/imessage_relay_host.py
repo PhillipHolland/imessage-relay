@@ -129,17 +129,61 @@ def pending_selftest(now=time.time):
 EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
 
 
+def _content_stamp(msg, now):
+    """Body-free liveness of the X Chat tab, as the extension reports it. None when this message
+    does not carry a stamp (older extensions). contentAt is unix seconds; milliseconds are accepted."""
+    if not isinstance(msg, dict) or ('contentAt' not in msg and 'contentState' not in msg):
+        return None
+    state = str(msg.get('contentState') or '')
+    if state not in ('ok', 'stale', 'no-tab'):
+        state = ''
+    try:
+        raw = float(msg.get('contentAt') or 0)
+    except (TypeError, ValueError):
+        raw = 0.0
+    if raw > 1e12:
+        raw = raw / 1000.0
+    if raw < 0 or raw > now() + 120:
+        raw = 0.0
+    if not state:
+        if raw <= 0:
+            state = 'no-tab'
+        elif now() - raw > 180:
+            state = 'stale'
+        else:
+            state = 'ok'
+    return {'contentAt': raw, 'contentState': state}
+
+
 def note_extension(msg, now=time.time):
     """v1.3.8: remember when the extension last connected and its version (relayctl status/setup show
-    a stale, not-reloaded extension). Throttled to one small write per 5 minutes or version change."""
+    a stale, not-reloaded extension). Throttled to one small write per 5 minutes or version change.
+    v1.4.31: a change in the chat-tab stamp (or a minute of movement in it) is written at once, so
+    `relayctl status` can see a live service worker whose X Chat tab has gone quiet."""
     v = re.sub(r'[^0-9A-Za-z.\-]', '', str(msg.get('extVersion') or ''))[:20]
     if not v:
         return
     cur = rc.read_json(EXT_SEEN_PATH, {}) or {}
-    if cur.get('extVersion') == v and now() - float(cur.get('at') or 0) < 300:
+    content = _content_stamp(msg, now)
+    content_moved = False
+    if content is not None:
+        try:
+            prev_at = float(cur.get('contentAt') or 0)
+        except (TypeError, ValueError):
+            prev_at = 0.0
+        content_moved = (cur.get('contentState') != content['contentState'] or
+                         abs(content['contentAt'] - prev_at) >= 60)
+    if cur.get('extVersion') == v and now() - float(cur.get('at') or 0) < 300 and not content_moved:
         return
+    out = {'extVersion': v, 'at': now()}
+    if content is not None:
+        out.update(content)
+    else:
+        for k in ('contentAt', 'contentState'):
+            if k in cur:
+                out[k] = cur[k]
     try:
-        rc.write_json_atomic(EXT_SEEN_PATH, {'extVersion': v, 'at': now()})
+        rc.write_json_atomic(EXT_SEEN_PATH, out)
     except OSError:
         pass
 

@@ -230,11 +230,16 @@ class WatchBase(test_watch.Base):
 
 
 class WatchConfirm(WatchBase):
-    def test_ui_confirmed_send_posts_no_text_line(self):
+    def test_ui_confirmed_send_still_posts_the_check_line(self):
+        # v1.4.31: the ✅ on his bubble is easy to miss. The short → line is posted too.
         self.sent(uiConfirmed=True)
         self.w.tick()
-        self.assertNotIn('sent', self.types())
+        self.assertEqual(self.types().count('sent'), 1)
         self.assertEqual(self.m.rc.load_pending(), [])
+        sent = [p for _, p, _ in self.poster.calls if p.get('type') == 'sent']
+        self.assertEqual(sent[0]['label'], 'Jordan')
+        self.assertTrue(sent[0]['delivered'])
+        self.assertNotIn('hello back', str(self.poster.calls))
 
     def test_waits_for_the_ack_then_falls_back(self):
         self.sent(ago=2)
@@ -245,8 +250,9 @@ class WatchConfirm(WatchBase):
         self.w.tick()
         self.assertEqual(self.types().count('sent'), 1, 'no ack -> the old text confirmation')
 
-    def test_an_ack_at_twelve_seconds_still_suppresses_the_line(self):
-        # The ✅ attempt can take ~12s, past the old 10s grace. Wait, then a placed reaction posts nothing.
+    def test_an_ack_at_twelve_seconds_posts_the_line_once(self):
+        # The ✅ attempt can take ~12s, past the old 10s grace. Wait, then a placed reaction
+        # still gets the short → line (v1.4.31) and nothing more.
         pid = self.sent(ago=12)
         self.w.tick()
         self.assertNotIn('sent', self.types())
@@ -254,7 +260,7 @@ class WatchConfirm(WatchBase):
         self.m.rc.update_pending(pid, uiConfirmed=True)
         self.now += 10
         self.w.tick()
-        self.assertNotIn('sent', self.types())
+        self.assertEqual(self.types().count('sent'), 1)
         self.assertEqual(self.m.rc.load_pending(), [])
 
     def test_failed_reaction_posts_at_once(self):

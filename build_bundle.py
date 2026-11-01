@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-build_bundle.py: iMessage Relay v1.4.30, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.31, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -17,8 +17,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=931d2bdce282d641558efce61836b2f7b5ea0d95f805b346d774234e30c114f3 nl=1
-# iMessage Relay v1.4.30
+@@@@ FILE README.md mode=644 sha256=0de5042fc1c13cbe2ae64cdfda596dbd875c7608e50edf364b0d8b9616280ef5 nl=1
+# iMessage Relay v1.4.31
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -31,7 +31,7 @@ iMessage from an opted-in contact
   -> bot posts "Alex: running late" into ONE relay chat (sender <-> you)
 Your reply in the relay chat (x.com in Chrome)
   -> extension sees your own bubble -> native host picks the contact -> Messages.app -> iMessage
-  -> ✅ appears on your own X message (v1.4.6; the → line is posted only if that reaction does not land)
+  -> ✅ on your own X message, and a "→ Alex ✓✓" line (v1.4.31 posts both; the line used to be skipped when the ✅ landed)
 ```
 v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bot access to the Mac:
 - The Mac encrypts each incoming 1:1 photo with a fresh random AES-256-GCM key and uploads only the
@@ -42,6 +42,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.31 (Chrome extension 1.4.31 + Mac helper; `relay_post.py` does not change): phone replies keep working after the Mac sleeps or Chrome freezes the X Chat tab. The extension pins that tab against Memory Saver, wakes it about every 30 seconds, and reloads it when it has been quiet for 10 minutes or no longer answers. A service worker that is alive while the tab is not shows up in `relayctl status` problems. The native host stays connected instead of starting once per message. A ✅ on your own bubble still lands, and the chat also gets `→ name ✓` or `→ name ✓✓` (that line used to be skipped when the reaction landed). After this version is loaded, a newer helper reloads the extension on its own. Upgrading from v1.4.30 still needs one reload in chrome://extensions (no new permission) and `./install.sh` (the watcher app is not rebuilt). Leave the relay chat tab open. Memory Saver exclusions are optional. Direct post stays off.
 - v1.4.30 (Chrome extension 1.4.30 + Mac helper; `relay_post.py` does not change): a webhook that keeps failing, or a retry queue that stays non-empty, for 10 minutes (`webhookStuckMinutes`) shows up in `relayctl status` → `problems` until the next healthy tick. HTTP 2xx means the webhook accepted the POST. It is proof X Chat posted the line only when the response body says `{"relayed": true}`. A native Reply to a Mail card still is not texted, and that reply gets a ⚠️. A relay line `⚠️ Name · not a contact:` (or ` · spam`, or the older `⚠️ Unknown ·`) is not a Mail card, so a quote-reply to it still sends. `/who` and `/status` use the same people a bare reply would. A roster label updates when Contacts later has a name. `/add Name` finds that person in Contacts or the roster. A familiar roster person is not asked on every bare reply. `karin`/`karen` asks "Did you mean?". `/help` lists `/test send`, `/add name number`, snooze forms, `/yes`, `/block yes`, quote-reply, and both meanings of 🗑️. The ✅ poll stops once that reaction lands. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). `batchWebhooks` stays on unless you turn it off. Direct post stays off.
 - v1.4.29 (Chrome extension 1.4.29 + Mac helper; `relay_post.py` does not change): a native Reply to a Mail in X Chat card is not sent as an iMessage. Those cards are in the relay chat and start with ✉️ or ⚠️. Nothing is texted, and the chat gets no check mark and no warning. A reply to a normal relay card still sends, including one from that same sender that does not start with those marks. A relay warning that starts with ⚠️ is skipped only when it is the message you reply to. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.28 (Chrome extension 1.4.28 + Mac helper; `relay_post.py` does not change): a photo X Chat draws as its own bubble still goes with the text from that same send. A name prefix on its own ("Alex:") sends the photo with no caption. If the photo never goes out, the chat says so, and says "⚠️ photo didn’t send" when it does not know who it was for. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -195,7 +196,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.30)
+## Limits (v1.4.31)
 - A webhook retry queue or a run of failed POSTs that lasts `webhookStuckMinutes` (10) is a `relayctl status` problem until it clears. A 2xx is acceptance, not proof the line was posted.
 - A native Reply to a Mail in X Chat card (✉️, or a ⚠️ that is not a relay warning) is not sent, and that reply gets a ⚠️. `⚠️ Name · not a contact:` and `🚫 Name · spam:` still route.
 - A photo X Chat splits into its own bubble is sent with the text from that same send. "Alex:" on its own sends the photo with no caption. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages, or "⚠️ photo didn’t send" when there is no name.
@@ -1348,7 +1349,7 @@ workers_dev = true
 binding = "DROP_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 @@@@ END
-@@@@ FILE extension/background.js mode=644 sha256=53c8280869fc66e0339bf10a2239c35b62a386a44f4a78d75ff8f1fb7acc5faf nl=1
+@@@@ FILE extension/background.js mode=644 sha256=20c786a2c64366845c11bea9f645a520af032f06fc0c44ae9ed5db4001012a65 nl=1
 /*
  * iMessage Relay v1.4.6: service worker (/test end-to-end check added in v1.3.8).
  *
@@ -1432,11 +1433,39 @@ function enqueue(fn) {
 // ─── host config ───
 let cfgCache = null;
 let cfgInflight = null;
+function versionLess(a, b) {
+  const pa = String(a || '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) < (pb[i] || 0)) return true;
+    if ((pa[i] || 0) > (pb[i] || 0)) return false;
+  }
+  return false;
+}
+// v1.4.31: after install.sh the helper is newer than the still-loaded extension. Reload once so
+// the owner does not have to open chrome://extensions. The session flag stops a reload loop.
+async function maybeReloadExtension(hostVer) {
+  const mine = extVersion();
+  const host = String(hostVer || '');
+  if (!mine || !host || !versionLess(mine, host)) return;
+  if (!chrome.runtime || typeof chrome.runtime.reload !== 'function') return;
+  if (!chrome.storage || !chrome.storage.session) return;
+  let prev = '';
+  try { prev = String((await chrome.storage.session.get('extReloadFor')).extReloadFor || ''); } catch (e) { return; }
+  if (prev === host) return;
+  try { await chrome.storage.session.set({ extReloadFor: host }); } catch (e) { return; }
+  try { chrome.runtime.reload(); } catch (e) { /* tests */ }
+}
 async function fetchConfig() {
   let res, err = '';
   try {
     if (!chrome.runtime.sendNativeMessage) throw new Error('nativeMessaging permission missing');
-    res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'get_config', extVersion: extVersion() });
+    const stamp = {};
+    if (relayContentReport && relayContentReport.state) {
+      stamp.contentState = relayContentReport.state;
+      stamp.contentAt = Number(relayContentReport.at) || 0;
+    }
+    res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({ type: 'get_config', extVersion: extVersion() }, stamp));
     if (!res || res.ok !== true) err = (res && res.error) || 'bad response from host';
   } catch (e) {
     err = String((e && e.message) || e);
@@ -1471,6 +1500,7 @@ async function fetchConfig() {
     ownerNames: cfgCache.ownerNames || [], senderNames: cfgCache.senderNames || [], ownerXUserId: cfgCache.ownerXUserId || '',
   }));
   await refreshBadge();
+  if (!err && res && res.version) await maybeReloadExtension(res.version);
   if (cfgCache.pendingSelfTest) runSelfTest(cfgCache.pendingSelfTest).catch(() => {});
   return cfgCache;
 }
@@ -2248,21 +2278,65 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
-// Re-check the host every minute.
+// Re-check the host and the relay tab. 30s is Chrome's alarm floor (120+); older Chrome clamps it.
+// The chat-tab pass runs first so get_config can carry that tab's heartbeat.
 function boot() {
-  try { chrome.alarms.create('relay-refresh', { periodInMinutes: 1 }); } catch (e) { /* tests */ }
-  getConfig(true).catch(() => {});
-  ensureContentScripts().catch(() => {});
+  try { chrome.alarms.create('relay-refresh', { periodInMinutes: 0.5 }); }
+  catch (e) { try { chrome.alarms.create('relay-refresh', { periodInMinutes: 1 }); } catch (e2) { /* tests */ } }
+  ensureContentScripts().then(() => getConfig(true)).catch(() => {});
 }
 // v1.4.24: a service-worker restart does not reattach a content script that died when the extension
 // reloaded. Inject content.js into open x.com tabs (the page guard makes a second copy a no-op).
 // v1.4.26: allFrames can throw on one subframe and take the whole tab with it, so the main frame
-// is tried next. A chat tab that still does not answer relay-ping is reloaded once and the owner
-// hears the unacked line. Do not reload a tab that answered. A blanket reload on update used to
-// race this inject and leave a background tab with no script.
-const reinjectedTabs = new Set();
-const warnedTabs = new Set();
+// is tried next. A chat tab that still does not answer is reloaded and the owner hears the unacked
+// line. Do not reload a tab that answered. A blanket reload on update used to race this inject.
+// v1.4.31: the relay chat tab is pinned against Memory Saver discard, woken on each alarm (a frozen
+// tab does not deliver phone replies), and reloaded again after a cooldown when it is still dead
+// or has been asleep long enough that X's socket is not trustworthy. The old one-shot reload gave
+// up for the life of the service worker, which is why a morning reply needed a manual reload.
+var warnedTabs = new Set();
+var warnSerial = 0;
+// v1.4.31: a discarded or dead chat tab is reloaded again after this, not once per service-worker life.
+var relayTabReloadedAt = Object.create(null);
+var RELAY_RELOAD_COOLDOWN_MS = 2 * 60 * 1000;
+var RELAY_SLEEP_RELOAD_MS = 10 * 60 * 1000;
+// Published for get_config. at is unix ms; state is ok | stale | no-tab | ''.
+var relayContentReport = { at: 0, state: '' };
 function isChatUrl(url) { return /^https:\/\/x\.com\/(?:i\/chat|messages)\//.test(String(url || '')); }
+function reloadDue(tabId, now) {
+  const at = relayTabReloadedAt[tabId] || 0;
+  return !at || (now - at) >= RELAY_RELOAD_COOLDOWN_MS;
+}
+async function readPulse(tabId) {
+  if (!chrome.storage || !chrome.storage.session) return 0;
+  try {
+    const bag = (await chrome.storage.session.get('relayPulse')).relayPulse || {};
+    return Number(bag[String(tabId)]) || 0;
+  } catch (e) { return 0; }
+}
+async function markPulse(tabId, now) {
+  if (!chrome.storage || !chrome.storage.session) return;
+  try {
+    const bag = (await chrome.storage.session.get('relayPulse')).relayPulse || {};
+    bag[String(tabId)] = now;
+    await chrome.storage.session.set({ relayPulse: bag });
+  } catch (e) { /* session storage unavailable */ }
+}
+async function pinTab(tabId) {
+  if (!chrome.tabs || !chrome.tabs.update) return;
+  try { await chrome.tabs.update(tabId, { autoDiscardable: false }); } catch (e) { /* discarded or closing */ }
+}
+async function wakeChat(tabId, slept) {
+  if (!chrome.tabs || !chrome.tabs.sendMessage) return null;
+  try {
+    const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: 'relay-wake', slept: !!slept }), 1500);
+    return res && res.pong ? res : null;
+  } catch (e) { return null; }
+}
+async function reloadChatTab(tabId, now) {
+  relayTabReloadedAt[tabId] = now;
+  try { if (chrome.tabs && chrome.tabs.reload) await chrome.tabs.reload(tabId); } catch (e) { /* ignore */ }
+}
 async function pingChat(tabId) {
   if (!chrome.tabs || !chrome.tabs.sendMessage) return true;
   try {
@@ -2286,32 +2360,62 @@ async function warnUnwatched(tabId) {
   if (warnedTabs.has(tabId)) return;
   warnedTabs.add(tabId);
   // A later death of this same tab is a new miss. The bubble dedupe key must not swallow it.
-  await handleUnacked({ id: 'tab' + tabId + 'x' + Date.now().toString(36) });
+  // A counter, not the clock: two misses in the same millisecond must not share a dedupe key.
+  await handleUnacked({ id: 'tab' + tabId + 'x' + (++warnSerial).toString(36) });
 }
 async function ensureContentScripts() {
   if (!chrome.tabs || !chrome.tabs.query) return;
   let tabs = [];
   try { tabs = await chrome.tabs.query({ url: ['https://x.com/*'] }); } catch (e) { return; }
+  const now = Date.now();
+  let sawChat = false;
+  let newest = 0;
+  let anyStale = false;
   for (const t of tabs || []) {
     if (!t || typeof t.id !== 'number') continue;
     const url = String(t.url || t.pendingUrl || '');
     const chat = isChatUrl(url);
-    if (t.discarded && chat) {
-      if (!reinjectedTabs.has(t.id)) {
-        reinjectedTabs.add(t.id);
-        try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
-      }
+    if (!chat) { await injectFile(t.id); continue; }
+    sawChat = true;
+    await pinTab(t.id);
+    if (t.discarded || t.frozen) {
+      anyStale = true;
+      if (reloadDue(t.id, now)) await reloadChatTab(t.id, now);
       await warnUnwatched(t.id);
       continue;
     }
     const injected = await injectFile(t.id);
-    if (!chat) continue;
-    if (injected && await pingChat(t.id)) { warnedTabs.delete(t.id); continue; }
-    if (reinjectedTabs.has(t.id)) { await warnUnwatched(t.id); continue; }
-    reinjectedTabs.add(t.id);
-    try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
+    const last = await readPulse(t.id);
+    const gap = last ? now - last : 0;
+    const woke = await wakeChat(t.id, gap >= RELAY_SLEEP_RELOAD_MS);
+    if (woke && woke.detector) {
+      const longGap = gap >= RELAY_SLEEP_RELOAD_MS;
+      if (longGap && !woke.composing && reloadDue(t.id, now)) {
+        anyStale = true;
+        await reloadChatTab(t.id, now);
+      } else {
+        await markPulse(t.id, now);
+        if (now > newest) newest = now;
+        warnedTabs.delete(t.id);
+      }
+      continue;
+    }
+    if (woke && !woke.detector) {
+      // The listener is up and the detector never started. A reload is the clean start.
+      anyStale = true;
+      if (reloadDue(t.id, now)) await reloadChatTab(t.id, now);
+      await warnUnwatched(t.id);
+      continue;
+    }
+    if (injected && await pingChat(t.id)) { warnedTabs.delete(t.id); if (now > newest) newest = now; continue; }
+    anyStale = true;
+    if (!reloadDue(t.id, now)) { await warnUnwatched(t.id); continue; }
+    await reloadChatTab(t.id, now);
     await warnUnwatched(t.id);
   }
+  if (!sawChat) relayContentReport = { at: 0, state: 'no-tab' };
+  else if (anyStale && !newest) relayContentReport = { at: 0, state: 'stale' };
+  else relayContentReport = { at: newest || now, state: anyStale ? 'stale' : 'ok' };
 }
 // Kept for a manual call. v1.4.26 does not run this on install/update: reloading a background
 // X Chat tab raced the inject and the new script never attached.
@@ -2395,19 +2499,70 @@ async function onGuessExpiry() {
   await clearPendingGuess();
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_expired', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }
+// v1.4.31: one native-messaging port keeps the service worker awake (Chrome does that for
+// connectNative) and avoids spawning a Python host on every reply. A dropped port reconnects
+// on the next call. Tests have no connectNative and stay on sendNativeMessage.
+var nativePort = null;
+var nativeWaiters = [];
+function dropNativePort(err) {
+  const waiters = nativeWaiters.splice(0, nativeWaiters.length);
+  const p = nativePort;
+  nativePort = null;
+  waiters.forEach(w => { try { clearTimeout(w.timer); } catch (e) {} w.reject(err || new Error('native port closed')); });
+  try { if (p && p.disconnect) p.disconnect(); } catch (e) { /* already closed */ }
+}
+function nativeSendPort(msg) {
+  return new Promise((resolve, reject) => {
+    let p = nativePort;
+    if (!p) {
+      try { p = chrome.runtime.connectNative(NATIVE_HOST); }
+      catch (e) { reject(e); return; }
+      nativePort = p;
+      try {
+        p.onMessage.addListener(resp => {
+          const w = nativeWaiters.shift();
+          if (!w) return;
+          try { clearTimeout(w.timer); } catch (e) {}
+          w.resolve(resp);
+        });
+        p.onDisconnect.addListener(() => {
+          if (nativePort !== p) return;
+          const message = (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'native port closed';
+          dropNativePort(new Error(message));
+        });
+      } catch (e) { nativePort = null; reject(e); return; }
+    }
+    const waiter = { resolve, reject, timer: null };
+    waiter.timer = setTimeout(() => {
+      if (nativeWaiters.indexOf(waiter) < 0) return;
+      dropNativePort(new Error('native host timed out'));
+    }, 40000);
+    nativeWaiters.push(waiter);
+    try { p.postMessage(msg); }
+    catch (e) { dropNativePort(e); }
+  });
+}
+(function preferNativePort() {
+  if (!chrome.runtime || typeof chrome.runtime.connectNative !== 'function' || typeof chrome.runtime.sendNativeMessage !== 'function') return;
+  const oneShot = chrome.runtime.sendNativeMessage.bind(chrome.runtime);
+  chrome.runtime.sendNativeMessage = function (host, msg) {
+    if (host !== NATIVE_HOST) return oneShot(host, msg);
+    return nativeSendPort(msg);
+  };
+})();
 if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a => {
-  if (a.name === 'relay-refresh') { getConfig(true).catch(() => {}); ensureContentScripts().catch(() => {}); }
+  if (a.name === 'relay-refresh') { ensureContentScripts().then(() => getConfig(true)).catch(() => {}); }
   else if (a.name === 'relay-guess-expiry') onGuessExpiry().catch(() => {});
   else if (a.name === 'relay-test-expiry') onTestExpiry().catch(() => {});
 });
-if (chrome.tabs && chrome.tabs.onRemoved) chrome.tabs.onRemoved.addListener(id => { reinjectedTabs.delete(id); warnedTabs.delete(id); });
+if (chrome.tabs && chrome.tabs.onRemoved) chrome.tabs.onRemoved.addListener(id => { delete relayTabReloadedAt[id]; warnedTabs.delete(id); });
 chrome.runtime.onInstalled.addListener(() => { boot(); });
 chrome.runtime.onStartup.addListener(boot);
 // v1.4.26: reloading the extension starts this worker. onInstalled is not reliable then, and
 // onStartup does not fire. Tests omit getURL, so they do not inject on load.
 try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot(); } catch (e) { /* tests */ }
 @@@@ END
-@@@@ FILE extension/content.js mode=644 sha256=fcf923f5e3067cbda1fbd2c737179fb14396fe64bc30f117e9842f46d596bf21 nl=1
+@@@@ FILE extension/content.js mode=644 sha256=e16295411d020565d72452baa21ce2d3c86cef937bd4ec855b996215bf2df71c nl=1
 /*
  * iMessage Relay v1.3.2: content script (READ ONLY).
  *
@@ -4767,16 +4922,57 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
   // on its OWN document and takes the conversation id from the top URL. There is no cross-document
   // fallback. A second injection into the same frame is a no-op.
   if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
-  if (window.__imessageRelayLoaded) return;
+  // A healthy second inject is a no-op (the worker injects every alarm). A reload of the
+  // extension can leave this isolated world with a dead runtime; that generation is stopped
+  // and this one starts. Otherwise phone replies stay invisible until a manual reload.
+  let previousAlive = false;
+  try { previousAlive = !!(window.__imessageRelayAlive && window.__imessageRelayAlive()); } catch (e) { previousAlive = false; }
+  if (previousAlive) return;
+  try { if (typeof window.__imessageRelayStop === 'function') window.__imessageRelayStop(); } catch (e) { /* dead generation */ }
   window.__imessageRelayLoaded = true;
+  window.__imessageRelayAlive = function () {
+    try { return !!(chrome.runtime && chrome.runtime.id); } catch (e) { return false; }
+  };
+  function pageComposing() {
+    let el = null;
+    try { el = document.activeElement; } catch (e) { return false; }
+    if (!el || el === document.body || el === document.documentElement) return false;
+    const tag = String(el.tagName || '').toLowerCase();
+    if (tag === 'textarea' || tag === 'input') return true;
+    try { if (el.isContentEditable) return true; } catch (e) { /* ignore */ }
+    return false;
+  }
+  const nudgeTimers = [];
+  const bootTimers = [];
+  function burstNudge() {
+    if (!mainDetector) return;
+    try { mainDetector.nudge(); } catch (e) { /* doc gone */ }
+    while (nudgeTimers.length) { try { clearTimeout(nudgeTimers.pop()); } catch (e) { /* ignore */ } }
+    [400, 1200, 4000, 9000].forEach(ms => {
+      nudgeTimers.push(setTimeout(() => { try { if (mainDetector) mainDetector.nudge(); } catch (e) { /* doc gone */ } }, ms));
+    });
+  }
   // v1.4.26: a background tab must answer before storage resolves. A ping that waited on
   // storage looked like a dead script, and the worker then reloaded the tab it had just injected.
+  // v1.4.31: relay-wake rescans now and again after X paints. slept means the tab was quiet long
+  // enough that the socket may be dead; an online event is the page's own reconnect signal.
+  let pingListener = null;
   try {
-    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      if (!msg || msg.type !== 'relay-ping') return false;
+    pingListener = (msg, _sender, sendResponse) => {
+      if (!msg || (msg.type !== 'relay-ping' && msg.type !== 'relay-wake')) return false;
+      if (msg.type === 'relay-wake') {
+        const detector = !!mainDetector;
+        if (detector) burstNudge();
+        if (msg.slept) { try { window.dispatchEvent(new Event('online')); } catch (e) { /* ignore */ } }
+        let composing = false;
+        try { composing = pageComposing(); } catch (e) { composing = false; }
+        try { sendResponse({ ok: true, pong: true, detector, composing, hidden: !!document.hidden }); } catch (e) { /* port closed */ }
+        return false;
+      }
       try { sendResponse({ ok: true, pong: true }); } catch (e) { /* port closed */ }
       return false;
-    });
+    };
+    chrome.runtime.onMessage.addListener(pingListener);
   } catch (e) { /* runtime gone */ }
   try {
     const arm = chrome.runtime.sendMessage({ type: 'relay-arm-act' });
@@ -4915,30 +5111,39 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
     const here = () => (role === 'frame' ? contextUrl() : location.href);
     const tick = () => { if (isChatPath(here())) startMain(); };   // frame polls the top URL like the top frame (item 7)
     tick();
-    setInterval(tick, 1000);
+    bootTimers.push(setInterval(tick, 1000));
     // v1.4.6: while the relay chat is open, nudge the background every 15 s so queued UI actions (a
     // mirrored tapback, a read receipt's 👀) are picked up. Ids only travel this way, never text.
-    setInterval(() => {
+    bootTimers.push(setInterval(() => {
       if (mainDetector && !state.paused && mainDetector.hasEntries()) send({ type: 'relay-ui-tick' });
-    }, 15000);
+    }, 15000));
     // v1.4.26: a background tab can delay mutation delivery. Rescan even while hidden.
-    setInterval(() => { if (mainDetector) mainDetector.nudge(); }, 2000);
-    try { document.addEventListener('visibilitychange', () => { if (mainDetector) mainDetector.nudge(); }); } catch (e) { /* tests */ }
+    bootTimers.push(setInterval(() => { if (mainDetector) mainDetector.nudge(); }, 2000));
+    function onVis() { if (mainDetector) mainDetector.nudge(); }
+    try { document.addEventListener('visibilitychange', onVis); } catch (e) { /* tests */ }
+    // v1.4.31: a frozen tab thaws into these. Rescan after X paints the messages it missed.
+    try {
+      document.addEventListener('resume', burstNudge);
+      document.addEventListener('freeze', () => { /* timers are paused; the worker's alarm thaws us */ });
+      window.addEventListener('pageshow', burstNudge);
+      window.addEventListener('online', burstNudge);
+    } catch (e) { /* tests */ }
     send({ type: 'relay-arm-act' });   // MAIN-world click helper for the reaction tray
   });
 
-  chrome.storage.onChanged.addListener((changes, area) => {
+  const onStorage = (changes, area) => {
     if (area !== 'local') return;
     if (changes.paused) state.paused = !!changes.paused.newValue;
     if (changes.relayConversationId) state.conversationFilter = String(changes.relayConversationId.newValue || '');
     if (changes.ownerNames || changes.senderNames || changes.ownerXUserId) {
       chrome.storage.local.get(['ownerNames', 'senderNames', 'ownerXUserId']).then(setNames);
     }
-  });
+  };
+  try { chrome.storage.onChanged.addListener(onStorage); } catch (e) { /* runtime gone */ }
 
   // Troubleshooting: a "relay-debug" message answered by the detector in this frame (if it has
   // messages). No cross-frame fallback any more; each frame answers for itself.
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  const uiListener = (msg, _sender, sendResponse) => {
     if (msg && msg.type === 'relay-structure') {          // v1.4.3 popup button; text-free
       if (!mainDetector || !mainDetector.hasEntries()) return false;
       try { sendResponse({ ok: true, from: role, structure: mainDetector.pageStructure() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
@@ -4967,14 +5172,30 @@ try { if (chrome.runtime && typeof chrome.runtime.getURL === 'function') boot();
     if (!mainDetector || !mainDetector.hasEntries()) return false;
     try { sendResponse({ ok: true, from: role, snapshot: mainDetector.debugSnapshot() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
     return false;
-  });
+  };
+  try { chrome.runtime.onMessage.addListener(uiListener); } catch (e) { /* runtime gone */ }
+  window.__imessageRelayStop = function () {
+    window.__imessageRelayAlive = function () { return false; };
+    try { if (pingListener) chrome.runtime.onMessage.removeListener(pingListener); } catch (e) { /* gone */ }
+    try { chrome.runtime.onMessage.removeListener(uiListener); } catch (e) { /* gone */ }
+    try { chrome.storage.onChanged.removeListener(onStorage); } catch (e) { /* gone */ }
+    while (bootTimers.length) { try { clearInterval(bootTimers.pop()); } catch (e) { /* gone */ } }
+    while (nudgeTimers.length) { try { clearTimeout(nudgeTimers.pop()); } catch (e) { /* gone */ } }
+    try { if (mainDetector) mainDetector.stop(); } catch (e) { /* doc gone */ }
+    mainDetector = null;
+    try {
+      document.removeEventListener('resume', burstNudge);
+      window.removeEventListener('pageshow', burstNudge);
+      window.removeEventListener('online', burstNudge);
+    } catch (e) { /* doc gone */ }
+  };
 })();
 @@@@ END
-@@@@ FILE extension/manifest.json mode=644 sha256=e1f84d2fb1103849ee94782b200bcb1c63e14ef29d862b0b2d5fb65e118df2b5 nl=1
+@@@@ FILE extension/manifest.json mode=644 sha256=b2f467c6a4e26e62afb534fe5be5faa4c51ae5a82029c76c9a5743a92b55a14d nl=1
 {
   "manifest_version": 3,
   "name": "iMessage Relay",
-  "version": "1.4.30",
+  "version": "1.4.31",
   "description": "Sends your own X Chat replies to opted-in iMessage contacts through a local Mac helper. Reads the open relay chat; types only its own tagged prompts and places reactions on your own messages there; never calls any X API.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwhPfosCSOmxKEwlr79CzF9RrRX99lsjiMSFqqbcb6VwYhOVBicPjjMCStCGcihd7zJ4z/GC4p9HL6Hl+MkpUmrTpOGfIa7wLmvzzMoFSVaVWTaKF9YEK+RS2Sazwpl2YbIPU0VmLE6MeZrae8Zgju1UT2MRX9bSeTznlWIZPp7sv0i714Ekb1TMZuSi0EriQcxCAqaE/8UHqo1ELaOWRKiELi8mrcPm4zPRv8LnWNjA/XYU3XGylfxrc5iHo3WrbMfkG5BmtWVNDJlwv39+OIa8gmXmNs4HimBOS9Kei99McOoknlkD/Zod8/PaJ0Q21CH4rAEoqywWuZWkudObrGwIDAQAB",
   "permissions": [
@@ -5188,7 +5409,7 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=754e4e60b856f580e798d753726d24c6a7083bc54c8c0421d490f6f548eb0332 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=c6e34756ab6f07ef3cfa6f309515d0935f0d2863f169978961d35ab908a50902 nl=1
 #!/usr/bin/python3
 """
 com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.24.
@@ -5320,17 +5541,61 @@ def pending_selftest(now=time.time):
 EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
 
 
+def _content_stamp(msg, now):
+    """Body-free liveness of the X Chat tab, as the extension reports it. None when this message
+    does not carry a stamp (older extensions). contentAt is unix seconds; milliseconds are accepted."""
+    if not isinstance(msg, dict) or ('contentAt' not in msg and 'contentState' not in msg):
+        return None
+    state = str(msg.get('contentState') or '')
+    if state not in ('ok', 'stale', 'no-tab'):
+        state = ''
+    try:
+        raw = float(msg.get('contentAt') or 0)
+    except (TypeError, ValueError):
+        raw = 0.0
+    if raw > 1e12:
+        raw = raw / 1000.0
+    if raw < 0 or raw > now() + 120:
+        raw = 0.0
+    if not state:
+        if raw <= 0:
+            state = 'no-tab'
+        elif now() - raw > 180:
+            state = 'stale'
+        else:
+            state = 'ok'
+    return {'contentAt': raw, 'contentState': state}
+
+
 def note_extension(msg, now=time.time):
     """v1.3.8: remember when the extension last connected and its version (relayctl status/setup show
-    a stale, not-reloaded extension). Throttled to one small write per 5 minutes or version change."""
+    a stale, not-reloaded extension). Throttled to one small write per 5 minutes or version change.
+    v1.4.31: a change in the chat-tab stamp (or a minute of movement in it) is written at once, so
+    `relayctl status` can see a live service worker whose X Chat tab has gone quiet."""
     v = re.sub(r'[^0-9A-Za-z.\-]', '', str(msg.get('extVersion') or ''))[:20]
     if not v:
         return
     cur = rc.read_json(EXT_SEEN_PATH, {}) or {}
-    if cur.get('extVersion') == v and now() - float(cur.get('at') or 0) < 300:
+    content = _content_stamp(msg, now)
+    content_moved = False
+    if content is not None:
+        try:
+            prev_at = float(cur.get('contentAt') or 0)
+        except (TypeError, ValueError):
+            prev_at = 0.0
+        content_moved = (cur.get('contentState') != content['contentState'] or
+                         abs(content['contentAt'] - prev_at) >= 60)
+    if cur.get('extVersion') == v and now() - float(cur.get('at') or 0) < 300 and not content_moved:
         return
+    out = {'extVersion': v, 'at': now()}
+    if content is not None:
+        out.update(content)
+    else:
+        for k in ('contentAt', 'contentState'):
+            if k in cur:
+                out[k] = cur[k]
     try:
-        rc.write_json_atomic(EXT_SEEN_PATH, {'extVersion': v, 'at': now()})
+        rc.write_json_atomic(EXT_SEEN_PATH, out)
     except OSError:
         pass
 
@@ -7239,7 +7504,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=1e0e52ee94fbde1362391f6f78b7c2cda460a2ca66818a7538f5ec7678dd9dd0 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=f842e6fac6d8443081c28ccb6a32ec12f0a709c911ffad99f45caad8aa3d8065 nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -7349,7 +7614,7 @@ FDA_REPEAT_S = 3600
 # open succeed. Probe a few times before posting fda_missing. Sleeps between the 4 tries.
 FDA_PROBE_TRIES = 4
 FDA_PROBE_BACKOFF_S = (0.5, 1.0, 2.0)
-CHROME_STALE_S = 15 * 60     # ext_seen older than this (the host only rewrites it every 5 min)
+CHROME_STALE_S = 15 * 60     # ext_seen older than this (rewritten at least every 5 min, sooner if the tab stamp moves)
 CHROME_ARM_S = 10 * 60       # watcher must see that stale stamp for this long first (sleep wakes don't nag)
 EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
 JOB_MAX_AGE_S = 600
@@ -8532,18 +8797,19 @@ class Watcher:
         changed = False
 
         def confirm(e, delivered):
-            # v1.4.6: the extension put \u2705 on HIS message -> no text line on success. While its ack is
-            # still due (UI_ACK_GRACE_S), wait; a failed / missing reaction falls back to the text line.
-            if e.get('uiConfirmed'):
-                rc.log_event('confirm_suppressed', reason='ui')
-                return 'done'
-            if e.get('ui') and not e.get('uiFailed') and t - float(e.get('at') or 0) < UI_ACK_GRACE_S:
+            # v1.4.6: while the ✅ ack is still due (UI_ACK_GRACE_S), wait. A failed or missing
+            # reaction falls through to the same text line. v1.4.31: a placed ✅ is easy to miss
+            # (a reaction on his own bubble, especially from the phone), so the short
+            # "→ label ✓ / ✓✓" line is posted as well. Failures still use send_failed.
+            if e.get('ui') and not e.get('uiFailed') and not e.get('uiConfirmed') and t - float(e.get('at') or 0) < UI_ACK_GRACE_S:
                 return 'wait'
             if cfg.get('confirmSends', True) and not cfg['paused'] and cfg['webhookUrl']:
                 p = {'type': 'sent', 'label': e.get('label', ''), 'delivered': delivered, 'dryRun': False, 'at': rc.iso_utc(t)}
                 if e.get('note'):
                     p['note'] = e['note']             # v1.4.1: "(new contact, •••0188)"
                 self.post(cfg, p)
+            if e.get('uiConfirmed'):
+                rc.log_event('confirm_posted', reason='ui', delivered=bool(delivered))
             return 'done'
 
         def fail(e, error=None, reason=None, superseded=False):
@@ -8906,7 +9172,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=09dc8152f6a5c8e0cdd54a3b16cff33ebec669bff213281ba1e080446b75e55e nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=27c375bf051d256b6a574216b28a407ef469b5ec66f8e04dd0d131f8c69d7fea nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -8932,8 +9198,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.30'
-EXTENSION_VERSION = '1.4.30'   # v1.4.30 changes the extension
+VERSION = '1.4.31'
+EXTENSION_VERSION = '1.4.31'   # v1.4.31 changes the extension
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -13863,7 +14129,7 @@ def main(argv=None, stdin=None):
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/relayctl.py mode=755 sha256=bc1f5a27923c0da8a1885336964032649d3f3c04679753df5082d2e704ed1ee1 nl=1
+@@@@ FILE mac-helper/relayctl.py mode=755 sha256=5f1740f7257d39f7ec51fe8c0bd2649b4ea4377066a419e70f1272fb116d6d6c nl=1
 #!/usr/bin/python3
 """
 relayctl: the one command the bot (or you) uses to operate iMessage Relay on the Mac.
@@ -14194,10 +14460,23 @@ FDA_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllF
 
 
 def extension_seen(now=time.time):
-    """When the extension last asked the host for its config, and its version (host writes this)."""
+    """When the extension last asked the host for its config, and its version (host writes this).
+    v1.4.31 also reports the X Chat tab: contentState ok / stale / no-tab, and how long since the
+    tab's own heartbeat. Older extensions leave those fields empty."""
     e = rc.read_json(EXT_SEEN_PATH, {}) or {}
-    at = float(e.get('at') or 0)
-    return {'seen': bool(at), 'agoSeconds': int(now() - at) if at else None, 'version': str(e.get('extVersion') or '')}
+    try:
+        at = float(e.get('at') or 0)
+    except (TypeError, ValueError):
+        at = 0.0
+    try:
+        cat = float(e.get('contentAt') or 0)
+    except (TypeError, ValueError):
+        cat = 0.0
+    state = str(e.get('contentState') or '')
+    if state not in ('ok', 'stale', 'no-tab'):
+        state = ''
+    return {'seen': bool(at), 'agoSeconds': int(now() - at) if at else None, 'version': str(e.get('extVersion') or ''),
+            'contentAgoSeconds': int(now() - cat) if cat else None, 'contentState': state}
 
 
 def setup_checklist(cfg, now=time.time):
@@ -14682,6 +14961,16 @@ def cmd_status(runner=subprocess.run):
     if ext['version'] and ext['version'] != rc.EXTENSION_VERSION:
         problems.append('the Chrome extension is still v%s: click reload on "iMessage Relay" in chrome://extensions, '
                         'then Cmd+R on x.com/i/chat' % ext['version'])
+    elif ext.get('contentState') == 'stale':
+        ago = ext.get('contentAgoSeconds')
+        problems.append(
+            'X Chat tab has not checked in%s. Phone replies will not send until it does. The extension '
+            'reloads that tab on its own. If this stays, exclude x.com from Chrome Memory Saver '
+            '(Settings > Performance) and leave the relay chat open.'
+            % ((' for %ds' % ago) if isinstance(ago, int) else ''))
+    elif ext.get('contentState') == 'no-tab' and ext['seen'] and (ext['agoSeconds'] or 0) < 600:
+        problems.append('no x.com/i/chat tab is open in Chrome. Replies from the phone need that tab '
+                        '(the relay chat, unlocked).')
     return {'ok': True, 'version': rc.VERSION, 'config': public_config(cfg), 'watcher': st,
             'watcherCanReadChatDb': {'ok': True, 'denied': False}.get(reads['state']), 'watcherChatDbEvent': reads,
             'watcherApp': app,
@@ -18083,7 +18372,7 @@ const tabOk = m => m.action === 'media-info' ? { ok: true, size: 700000, mime: '
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/native.test.js mode=644 sha256=626a89e40c855d184b55d008c515fcfbef45c129d98f3668a01f83fcdaae6357 nl=1
+@@@@ FILE tests/js/native.test.js mode=644 sha256=a9c973af5a2ded997db87c38a41c0f1bdf662c3b71c80f6d67f4aa037fc47ce8 nl=1
 /* Background (service worker) tests: config from the host (get_config), reply gating,
  * handle normalization, popup status, self-test relay, and "no bodies in storage". Run:
  *   NODE_PATH=/path/to/node_modules node tests/js/native.test.js
@@ -18095,7 +18384,7 @@ const BG = fs.readFileSync(path.join(__dirname, '../../extension/background.js')
 const CONV = '1111-2222';
 
 function env(opts = {}) {
-  const store = {}, listeners = [], nativeCalls = [], badge = {}, scripts = [], reloads = [];
+  const store = {}, session = {}, listeners = [], nativeCalls = [], badge = {}, scripts = [], reloads = [], updates = [];
   let onRemoved = () => {};
   let hostConfig = Object.assign({ ok: true, version: '1.3.2', paused: false, dryRun: true,
     relayConversationId: CONV, contacts: [{ name: 'Test Contact', label: 'Test', handle: '15555550123' }] }, opts.config || {});
@@ -18114,15 +18403,41 @@ function env(opts = {}) {
         if (msg.type === 'selftest') return { ok: true, detail: 'sent' };
         return opts.sendReply || { ok: true, dryRun: true, contact: 'Test', routedBy: 'recent' };
       },
+      connectNative: opts.port ? (host) => {
+        const ls = { m: [], d: [] };
+        const port = {
+          host,
+          sent: [],
+          postMessage(msg) { port.sent.push(msg); },
+          onMessage: { addListener(fn) { ls.m.push(fn); } },
+          onDisconnect: { addListener(fn) { ls.d.push(fn); } },
+          disconnect() { const fns = ls.d.splice(0); fns.forEach(fn => fn()); },
+          emit(resp) { ls.m.forEach(fn => fn(resp)); },
+        };
+        (chrome._ports = chrome._ports || []).push(port);
+        return port;
+      } : undefined,
     },
-    storage: { local, session: { async get() { return {}; }, async set() {} }, onChanged: { addListener() {} } },
+    storage: {
+      local,
+      session: {
+        async get(keys) { const ks = typeof keys === 'string' ? [keys] : keys; const o = {}; ks.forEach(k => { if (k in session) o[k] = JSON.parse(JSON.stringify(session[k])); }); return o; },
+        async set(v) { Object.assign(session, JSON.parse(JSON.stringify(v))); },
+      },
+      onChanged: { addListener() {} },
+    },
     action: { async setBadgeText(o) { badge.text = o.text; }, async setBadgeBackgroundColor() {} },
     alarms: { create() {}, onAlarm: { addListener() {} } },
     tabs: {
       onUpdated: { addListener() {} }, onRemoved: { addListener(fn) { onRemoved = fn; } },
       query: async () => (opts.tabList || []),
       reload: async id => { reloads.push(id); },
+      update: async (id, info) => { updates.push({ id, info }); },
       sendMessage: async (_tabId, msg) => {
+        if (msg && msg.type === 'relay-wake') {
+          if (opts.wake) return opts.wake;
+          return null;
+        }
         if (msg && msg.type === 'relay-ping') {
           if (opts.pingFail) return null;
           return { ok: true, pong: true };
@@ -18152,7 +18467,7 @@ function env(opts = {}) {
   const poke = (msg, sender) => new Promise(res => listeners.forEach(f => f(msg, sender || { id: 'ext' }, res)));
   const sends = () => nativeCalls.filter(c => c.msg.type === 'send').map(c => c.msg);
   const signal = sig => listeners.forEach(f => f({ type: 'relay-signal', signal: sig }, { id: 'ext', tab: { id: 1 } }, () => {}));
-  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, poke, scripts, reloads, dropTab: id => onRemoved(id), setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
+  return { ctx, store, session, badge, nativeCalls, sends, send, signal, ask, poke, scripts, reloads, updates, dropTab: id => onRemoved(id), setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
 }
 let passed = 0, failed = 0;
 async function test(name, fn) { try { await fn(); passed++; console.log('PASS', name); } catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); } }
@@ -18449,6 +18764,94 @@ async function test(name, fn) { try { await fn(); passed++; console.log('PASS', 
     assert.strictEqual(Array.from(e.scripts[0].target.frameIds).join(','), '0');
     assert.strictEqual(typeof e.scripts[0].func, 'function');
     assert.ok(!e.scripts[0].files);
+  });
+
+  await test('a discarded chat tab is reloaded again after the cooldown', async () => {
+    const e = env({ tabList: [{ id: 4, url: 'https://x.com/i/chat/abc', discarded: true }] });
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4]);
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4], 'still inside the cooldown');
+    e.ctx.relayTabReloadedAt[4] = Date.now() - 3 * 60 * 1000;
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4, 4], 'a later pass retries a tab that is still discarded');
+    assert.ok(e.updates.some(u => u.id === 4 && u.info.autoDiscardable === false));
+  });
+
+  await test('a chat tab quiet for 10 minutes is reloaded unless the owner is typing', async () => {
+    const old = Date.now() - 11 * 60 * 1000;
+    const asleep = env({
+      wake: { ok: true, pong: true, detector: true, composing: false },
+      tabList: [{ id: 7, url: 'https://x.com/i/chat/111-222' }],
+    });
+    asleep.session.relayPulse = { '7': old };
+    await asleep.ctx.ensureContentScripts();
+    assert.deepStrictEqual(asleep.reloads, [7], 'a long gap reloads so X reconnects');
+    assert.strictEqual(asleep.session.relayPulse['7'], old, 'pulse stays old until the new page answers');
+
+    const typing = env({
+      wake: { ok: true, pong: true, detector: true, composing: true },
+      tabList: [{ id: 7, url: 'https://x.com/i/chat/111-222' }],
+    });
+    typing.session.relayPulse = { '7': old };
+    await typing.ctx.ensureContentScripts();
+    assert.deepStrictEqual(typing.reloads, [], 'a composer in focus is not reloaded');
+    assert.ok(typing.session.relayPulse['7'] > old);
+
+    const fresh = env({
+      wake: { ok: true, pong: true, detector: true, composing: false },
+      tabList: [{ id: 7, url: 'https://x.com/i/chat/111-222' }],
+    });
+    fresh.session.relayPulse = { '7': Date.now() - 1000 };
+    await fresh.ctx.ensureContentScripts();
+    assert.deepStrictEqual(fresh.reloads, []);
+  });
+
+  await test('a chat tab whose detector never started is reloaded', async () => {
+    const e = env({
+      wake: { ok: true, pong: true, detector: false, composing: false },
+      tabList: [{ id: 7, url: 'https://x.com/i/chat/111-222' }],
+    });
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [7]);
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [7], 'cooldown holds');
+  });
+
+  await test('a newer helper reloads the extension once', async () => {
+    const e = env();
+    e.ctx.chrome.runtime.getManifest = () => ({ version: '1.4.31' });
+    const reloaded = [];
+    e.ctx.chrome.runtime.reload = () => { reloaded.push(1); };
+    e.setHost({ version: '1.4.32' });
+    await e.ctx.getConfig(true);
+    await sleep(30);
+    assert.deepStrictEqual(reloaded, [1]);
+    assert.strictEqual(e.session.extReloadFor, '1.4.32');
+    await e.ctx.getConfig(true);
+    await sleep(20);
+    assert.deepStrictEqual(reloaded, [1], 'the same host version does not reload again');
+  });
+
+  await test('the native host port is reused until it drops, then the next call opens another', async () => {
+    const e = env({ port: true });
+    const cfg = e.ctx.getConfig(true);
+    await sleep(20);
+    assert.strictEqual(e.ctx.chrome._ports.length, 1);
+    e.ctx.chrome._ports[0].emit({ ok: true, version: '1.4.31', paused: false, dryRun: true, relayConversationId: CONV, contacts: [] });
+    await cfg;
+    assert.deepStrictEqual(e.ctx.chrome._ports[0].sent.map(m => m.type), ['get_config']);
+    const ping = e.ctx.chrome.runtime.sendNativeMessage('com.imessage_relay.host', { type: 'ping' });
+    await sleep(10);
+    assert.strictEqual(e.ctx.chrome._ports.length, 1, 'the second call reuses the open port');
+    e.ctx.chrome._ports[0].emit({ ok: true, version: '1.4.31' });
+    assert.deepStrictEqual(await ping, { ok: true, version: '1.4.31' });
+    e.ctx.chrome._ports[0].disconnect();
+    const again = e.ctx.chrome.runtime.sendNativeMessage('com.imessage_relay.host', { type: 'ping' });
+    await sleep(10);
+    assert.strictEqual(e.ctx.chrome._ports.length, 2, 'a dropped port is reopened');
+    e.ctx.chrome._ports[1].emit({ ok: true });
+    assert.deepStrictEqual(await again, { ok: true });
   });
 
   await test('reloading the extension injects open chat tabs without a blanket reload', async () => {
@@ -19000,7 +19403,7 @@ const nowIso = (ago) => new Date(Date.now() - (ago || 0)).toISOString();
   process.exit(failed ? 1 : 0);
 })();
 @@@@ END
-@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=ea329f8b7cce891dfc999a30c26c11183d36b6d3ba968d248156fe00ee8b330f nl=1
+@@@@ FILE tests/js/smoke-chrome.test.js mode=644 sha256=9bb47b1068015de090ef6c62684f2545711afed7332aa187203e4b776f0bacef nl=1
 /* Smoke test: runs content.js + background.js with a fake `chrome` object to check the
  * extension wiring end to end: content -> background -> get_config -> send to host, and
  * pause coming from the host config. Run:
@@ -19055,7 +19458,7 @@ w.eval(fs.readFileSync(path.join(EXT, 'content.js'), 'utf8'));
 (async () => {
   // manifest sanity: v1.3.2, no options page, fixed key, expected permissions
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  assert.strictEqual(m.version, '1.4.30');
+  assert.strictEqual(m.version, '1.4.31');
   assert.ok(!m.options_page && !m.options_ui, 'no options page');
   assert.ok(m.key && m.key.length > 300, 'fixed public key -> stable extension id');
   assert.deepStrictEqual(m.permissions.sort(), ['alarms', 'nativeMessaging', 'scripting', 'storage']);
@@ -26491,7 +26894,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=66cf1ec2c4a14b0ab873633a3520fe487ea014646516779ac1e3734f2e006649 nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=d51f822a2b6471a11fdb00aadba704a55225e0c5a799e1ebc8cff39d087febbc nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -26620,7 +27023,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.30 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.31 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -26650,7 +27053,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.30 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.31 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -26737,7 +27140,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.30 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.31 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -27501,6 +27904,74 @@ class WebhookAlarm(Common):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
+@@@@ FILE tests/py/test_v1431.py mode=644 sha256=21a40f8e56be027f6c4d6f88c342132d6535374dab49a8ec0bbd37891727be5c nl=1
+"""v1.4.31: the host records the X Chat tab heartbeat, and relayctl status says when that tab is quiet."""
+import time
+import unittest
+
+from helpers import fresh, tmpdir, FakeClock
+
+
+class Stamp(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tmpdir()
+        self.m = fresh(self.tmp)
+        self.clock = FakeClock()
+
+    def cfg(self):
+        return self.m.rc.sanitize_config({'relayConversationId': '1111-2222', 'dryRun': True})
+
+    def test_content_stamp_is_stored_and_a_move_is_not_fully_throttled(self):
+        h = self.m.host
+        now = self.clock.now
+        base_ms = 1_700_000_000_000
+        h.handle_request({'type': 'get_config', 'extVersion': '1.4.31', 'contentState': 'ok', 'contentAt': base_ms},
+                         cfg=self.cfg(), now=now)
+        e = self.m.rc.read_json(h.EXT_SEEN_PATH)
+        self.assertEqual(e['extVersion'], '1.4.31')
+        self.assertEqual(e['contentState'], 'ok')
+        self.assertEqual(e['contentAt'], 1_700_000_000.0)
+        at = e['at']
+        self.clock.t += 10
+        h.handle_request({'type': 'get_config', 'extVersion': '1.4.31', 'contentState': 'ok',
+                          'contentAt': base_ms + 10_000}, cfg=self.cfg(), now=now)
+        e2 = self.m.rc.read_json(h.EXT_SEEN_PATH)
+        self.assertEqual(e2['at'], at, 'a few seconds of the same stamp does not rewrite')
+        self.clock.t += 10
+        h.handle_request({'type': 'get_config', 'extVersion': '1.4.31', 'contentState': 'stale', 'contentAt': base_ms},
+                         cfg=self.cfg(), now=now)
+        e3 = self.m.rc.read_json(h.EXT_SEEN_PATH)
+        self.assertEqual(e3['contentState'], 'stale')
+        self.assertGreater(e3['at'], at)
+        self.assertNotIn('text', e3)
+
+    def test_status_names_a_stale_tab_and_a_missing_tab(self):
+        ctl = self.m.ctl
+        rc = self.m.rc
+        now = time.time()
+        rc.write_json_atomic(ctl.EXT_SEEN_PATH, {
+            'extVersion': rc.EXTENSION_VERSION, 'at': now, 'contentAt': now - 400, 'contentState': 'stale'})
+        st = ctl.cmd_status()
+        self.assertTrue(any('X Chat tab' in p for p in st['problems']))
+        self.assertEqual(st['extension']['contentState'], 'stale')
+        self.assertGreater(st['extension']['contentAgoSeconds'], 300)
+        rc.write_json_atomic(ctl.EXT_SEEN_PATH, {
+            'extVersion': rc.EXTENSION_VERSION, 'at': now, 'contentAt': 0, 'contentState': 'no-tab'})
+        st2 = ctl.cmd_status()
+        self.assertTrue(any('no x.com/i/chat tab' in p for p in st2['problems']))
+        rc.write_json_atomic(ctl.EXT_SEEN_PATH, {
+            'extVersion': rc.EXTENSION_VERSION, 'at': now, 'contentAt': now, 'contentState': 'ok'})
+        st3 = ctl.cmd_status()
+        self.assertFalse(any('X Chat tab' in p or 'no x.com/i/chat' in p for p in st3['problems']))
+
+    def test_an_older_stamp_without_content_adds_no_tab_problem(self):
+        ctl = self.m.ctl
+        rc = self.m.rc
+        rc.write_json_atomic(ctl.EXT_SEEN_PATH, {'extVersion': rc.EXTENSION_VERSION, 'at': time.time()})
+        st = ctl.cmd_status()
+        self.assertEqual(st['extension']['contentState'], '')
+        self.assertFalse(any('X Chat tab' in p or 'no x.com/i/chat' in p for p in st['problems']))
+@@@@ END
 @@@@ FILE tests/py/test_v143_handles.py mode=644 sha256=5c8836a5e4456e0a1534432241f0ed86403f88be26aadbbcabf259c2dacf313a nl=1
 """v1.4.3: business / short-code / odd handles are never a last-texter guess; guessed prompts show the
 Contacts name or a masked handle + "not in Contacts"; text-free quote diagnostics are logged."""
@@ -28084,7 +28555,7 @@ class Batching(test_watch.Base):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v146.py mode=644 sha256=fc8a472b69c91af5a9e092b7fea98092a13947faf041f5ed220e2f270239f00f nl=1
+@@@@ FILE tests/py/test_v146.py mode=644 sha256=a34d8a57db2da3343e6c3292bd2cafa82bb94e00c7ee0680ee5f962e520ad18a nl=1
 """v1.4.6: fast feedback in the owner's X tab (✅ / ❓ / 🤖 prompts / 👀 / mirrored tapbacks), the relay
 ignoring its own output, undo, quiet names (+ quote routing), follow-messages spam mode, STOP-footer
 cleanup, the one-post overnight recap. Fictional names only."""
@@ -28317,11 +28788,16 @@ class WatchBase(test_watch.Base):
 
 
 class WatchConfirm(WatchBase):
-    def test_ui_confirmed_send_posts_no_text_line(self):
+    def test_ui_confirmed_send_still_posts_the_check_line(self):
+        # v1.4.31: the ✅ on his bubble is easy to miss. The short → line is posted too.
         self.sent(uiConfirmed=True)
         self.w.tick()
-        self.assertNotIn('sent', self.types())
+        self.assertEqual(self.types().count('sent'), 1)
         self.assertEqual(self.m.rc.load_pending(), [])
+        sent = [p for _, p, _ in self.poster.calls if p.get('type') == 'sent']
+        self.assertEqual(sent[0]['label'], 'Jordan')
+        self.assertTrue(sent[0]['delivered'])
+        self.assertNotIn('hello back', str(self.poster.calls))
 
     def test_waits_for_the_ack_then_falls_back(self):
         self.sent(ago=2)
@@ -28332,8 +28808,9 @@ class WatchConfirm(WatchBase):
         self.w.tick()
         self.assertEqual(self.types().count('sent'), 1, 'no ack -> the old text confirmation')
 
-    def test_an_ack_at_twelve_seconds_still_suppresses_the_line(self):
-        # The ✅ attempt can take ~12s, past the old 10s grace. Wait, then a placed reaction posts nothing.
+    def test_an_ack_at_twelve_seconds_posts_the_line_once(self):
+        # The ✅ attempt can take ~12s, past the old 10s grace. Wait, then a placed reaction
+        # still gets the short → line (v1.4.31) and nothing more.
         pid = self.sent(ago=12)
         self.w.tick()
         self.assertNotIn('sent', self.types())
@@ -28341,7 +28818,7 @@ class WatchConfirm(WatchBase):
         self.m.rc.update_pending(pid, uiConfirmed=True)
         self.now += 10
         self.w.tick()
-        self.assertNotIn('sent', self.types())
+        self.assertEqual(self.types().count('sent'), 1)
         self.assertEqual(self.m.rc.load_pending(), [])
 
     def test_failed_reaction_posts_at_once(self):
@@ -29339,7 +29816,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=e8706cce821bcd42e08fc0e63794fec2b491bc6ca1befd9e010b8cfd609630f1 nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=5333a7eb3cd8c0bc57b4634b3b9f9cbc45a481640069595a82428d114e479afe nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -29532,7 +30009,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.30')
+        self.assertEqual(m.rc.VERSION, '1.4.31')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)
