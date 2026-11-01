@@ -328,10 +328,23 @@ FDA_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllF
 
 
 def extension_seen(now=time.time):
-    """When the extension last asked the host for its config, and its version (host writes this)."""
+    """When the extension last asked the host for its config, and its version (host writes this).
+    v1.4.31 also reports the X Chat tab: contentState ok / stale / no-tab, and how long since the
+    tab's own heartbeat. Older extensions leave those fields empty."""
     e = rc.read_json(EXT_SEEN_PATH, {}) or {}
-    at = float(e.get('at') or 0)
-    return {'seen': bool(at), 'agoSeconds': int(now() - at) if at else None, 'version': str(e.get('extVersion') or '')}
+    try:
+        at = float(e.get('at') or 0)
+    except (TypeError, ValueError):
+        at = 0.0
+    try:
+        cat = float(e.get('contentAt') or 0)
+    except (TypeError, ValueError):
+        cat = 0.0
+    state = str(e.get('contentState') or '')
+    if state not in ('ok', 'stale', 'no-tab'):
+        state = ''
+    return {'seen': bool(at), 'agoSeconds': int(now() - at) if at else None, 'version': str(e.get('extVersion') or ''),
+            'contentAgoSeconds': int(now() - cat) if cat else None, 'contentState': state}
 
 
 def setup_checklist(cfg, now=time.time):
@@ -816,6 +829,16 @@ def cmd_status(runner=subprocess.run):
     if ext['version'] and ext['version'] != rc.EXTENSION_VERSION:
         problems.append('the Chrome extension is still v%s: click reload on "iMessage Relay" in chrome://extensions, '
                         'then Cmd+R on x.com/i/chat' % ext['version'])
+    elif ext.get('contentState') == 'stale':
+        ago = ext.get('contentAgoSeconds')
+        problems.append(
+            'X Chat tab has not checked in%s. Phone replies will not send until it does. The extension '
+            'reloads that tab on its own. If this stays, exclude x.com from Chrome Memory Saver '
+            '(Settings > Performance) and leave the relay chat open.'
+            % ((' for %ds' % ago) if isinstance(ago, int) else ''))
+    elif ext.get('contentState') == 'no-tab' and ext['seen'] and (ext['agoSeconds'] or 0) < 600:
+        problems.append('no x.com/i/chat tab is open in Chrome. Replies from the phone need that tab '
+                        '(the relay chat, unlocked).')
     return {'ok': True, 'version': rc.VERSION, 'config': public_config(cfg), 'watcher': st,
             'watcherCanReadChatDb': {'ok': True, 'denied': False}.get(reads['state']), 'watcherChatDbEvent': reads,
             'watcherApp': app,

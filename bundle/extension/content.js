@@ -2357,16 +2357,57 @@
   // on its OWN document and takes the conversation id from the top URL. There is no cross-document
   // fallback. A second injection into the same frame is a no-op.
   if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
-  if (window.__imessageRelayLoaded) return;
+  // A healthy second inject is a no-op (the worker injects every alarm). A reload of the
+  // extension can leave this isolated world with a dead runtime; that generation is stopped
+  // and this one starts. Otherwise phone replies stay invisible until a manual reload.
+  let previousAlive = false;
+  try { previousAlive = !!(window.__imessageRelayAlive && window.__imessageRelayAlive()); } catch (e) { previousAlive = false; }
+  if (previousAlive) return;
+  try { if (typeof window.__imessageRelayStop === 'function') window.__imessageRelayStop(); } catch (e) { /* dead generation */ }
   window.__imessageRelayLoaded = true;
+  window.__imessageRelayAlive = function () {
+    try { return !!(chrome.runtime && chrome.runtime.id); } catch (e) { return false; }
+  };
+  function pageComposing() {
+    let el = null;
+    try { el = document.activeElement; } catch (e) { return false; }
+    if (!el || el === document.body || el === document.documentElement) return false;
+    const tag = String(el.tagName || '').toLowerCase();
+    if (tag === 'textarea' || tag === 'input') return true;
+    try { if (el.isContentEditable) return true; } catch (e) { /* ignore */ }
+    return false;
+  }
+  const nudgeTimers = [];
+  const bootTimers = [];
+  function burstNudge() {
+    if (!mainDetector) return;
+    try { mainDetector.nudge(); } catch (e) { /* doc gone */ }
+    while (nudgeTimers.length) { try { clearTimeout(nudgeTimers.pop()); } catch (e) { /* ignore */ } }
+    [400, 1200, 4000, 9000].forEach(ms => {
+      nudgeTimers.push(setTimeout(() => { try { if (mainDetector) mainDetector.nudge(); } catch (e) { /* doc gone */ } }, ms));
+    });
+  }
   // v1.4.26: a background tab must answer before storage resolves. A ping that waited on
   // storage looked like a dead script, and the worker then reloaded the tab it had just injected.
+  // v1.4.31: relay-wake rescans now and again after X paints. slept means the tab was quiet long
+  // enough that the socket may be dead; an online event is the page's own reconnect signal.
+  let pingListener = null;
   try {
-    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      if (!msg || msg.type !== 'relay-ping') return false;
+    pingListener = (msg, _sender, sendResponse) => {
+      if (!msg || (msg.type !== 'relay-ping' && msg.type !== 'relay-wake')) return false;
+      if (msg.type === 'relay-wake') {
+        const detector = !!mainDetector;
+        if (detector) burstNudge();
+        if (msg.slept) { try { window.dispatchEvent(new Event('online')); } catch (e) { /* ignore */ } }
+        let composing = false;
+        try { composing = pageComposing(); } catch (e) { composing = false; }
+        try { sendResponse({ ok: true, pong: true, detector, composing, hidden: !!document.hidden }); } catch (e) { /* port closed */ }
+        return false;
+      }
       try { sendResponse({ ok: true, pong: true }); } catch (e) { /* port closed */ }
       return false;
-    });
+    };
+    chrome.runtime.onMessage.addListener(pingListener);
   } catch (e) { /* runtime gone */ }
   try {
     const arm = chrome.runtime.sendMessage({ type: 'relay-arm-act' });
@@ -2505,30 +2546,39 @@
     const here = () => (role === 'frame' ? contextUrl() : location.href);
     const tick = () => { if (isChatPath(here())) startMain(); };   // frame polls the top URL like the top frame (item 7)
     tick();
-    setInterval(tick, 1000);
+    bootTimers.push(setInterval(tick, 1000));
     // v1.4.6: while the relay chat is open, nudge the background every 15 s so queued UI actions (a
     // mirrored tapback, a read receipt's 👀) are picked up. Ids only travel this way, never text.
-    setInterval(() => {
+    bootTimers.push(setInterval(() => {
       if (mainDetector && !state.paused && mainDetector.hasEntries()) send({ type: 'relay-ui-tick' });
-    }, 15000);
+    }, 15000));
     // v1.4.26: a background tab can delay mutation delivery. Rescan even while hidden.
-    setInterval(() => { if (mainDetector) mainDetector.nudge(); }, 2000);
-    try { document.addEventListener('visibilitychange', () => { if (mainDetector) mainDetector.nudge(); }); } catch (e) { /* tests */ }
+    bootTimers.push(setInterval(() => { if (mainDetector) mainDetector.nudge(); }, 2000));
+    function onVis() { if (mainDetector) mainDetector.nudge(); }
+    try { document.addEventListener('visibilitychange', onVis); } catch (e) { /* tests */ }
+    // v1.4.31: a frozen tab thaws into these. Rescan after X paints the messages it missed.
+    try {
+      document.addEventListener('resume', burstNudge);
+      document.addEventListener('freeze', () => { /* timers are paused; the worker's alarm thaws us */ });
+      window.addEventListener('pageshow', burstNudge);
+      window.addEventListener('online', burstNudge);
+    } catch (e) { /* tests */ }
     send({ type: 'relay-arm-act' });   // MAIN-world click helper for the reaction tray
   });
 
-  chrome.storage.onChanged.addListener((changes, area) => {
+  const onStorage = (changes, area) => {
     if (area !== 'local') return;
     if (changes.paused) state.paused = !!changes.paused.newValue;
     if (changes.relayConversationId) state.conversationFilter = String(changes.relayConversationId.newValue || '');
     if (changes.ownerNames || changes.senderNames || changes.ownerXUserId) {
       chrome.storage.local.get(['ownerNames', 'senderNames', 'ownerXUserId']).then(setNames);
     }
-  });
+  };
+  try { chrome.storage.onChanged.addListener(onStorage); } catch (e) { /* runtime gone */ }
 
   // Troubleshooting: a "relay-debug" message answered by the detector in this frame (if it has
   // messages). No cross-frame fallback any more; each frame answers for itself.
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  const uiListener = (msg, _sender, sendResponse) => {
     if (msg && msg.type === 'relay-structure') {          // v1.4.3 popup button; text-free
       if (!mainDetector || !mainDetector.hasEntries()) return false;
       try { sendResponse({ ok: true, from: role, structure: mainDetector.pageStructure() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
@@ -2557,5 +2607,21 @@
     if (!mainDetector || !mainDetector.hasEntries()) return false;
     try { sendResponse({ ok: true, from: role, snapshot: mainDetector.debugSnapshot() }); } catch (e) { sendResponse({ ok: false, error: String(e) }); }
     return false;
-  });
+  };
+  try { chrome.runtime.onMessage.addListener(uiListener); } catch (e) { /* runtime gone */ }
+  window.__imessageRelayStop = function () {
+    window.__imessageRelayAlive = function () { return false; };
+    try { if (pingListener) chrome.runtime.onMessage.removeListener(pingListener); } catch (e) { /* gone */ }
+    try { chrome.runtime.onMessage.removeListener(uiListener); } catch (e) { /* gone */ }
+    try { chrome.storage.onChanged.removeListener(onStorage); } catch (e) { /* gone */ }
+    while (bootTimers.length) { try { clearInterval(bootTimers.pop()); } catch (e) { /* gone */ } }
+    while (nudgeTimers.length) { try { clearTimeout(nudgeTimers.pop()); } catch (e) { /* gone */ } }
+    try { if (mainDetector) mainDetector.stop(); } catch (e) { /* doc gone */ }
+    mainDetector = null;
+    try {
+      document.removeEventListener('resume', burstNudge);
+      window.removeEventListener('pageshow', burstNudge);
+      window.removeEventListener('online', burstNudge);
+    } catch (e) { /* doc gone */ }
+  };
 })();

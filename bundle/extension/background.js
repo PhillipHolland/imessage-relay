@@ -81,11 +81,39 @@ function enqueue(fn) {
 // ─── host config ───
 let cfgCache = null;
 let cfgInflight = null;
+function versionLess(a, b) {
+  const pa = String(a || '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) < (pb[i] || 0)) return true;
+    if ((pa[i] || 0) > (pb[i] || 0)) return false;
+  }
+  return false;
+}
+// v1.4.31: after install.sh the helper is newer than the still-loaded extension. Reload once so
+// the owner does not have to open chrome://extensions. The session flag stops a reload loop.
+async function maybeReloadExtension(hostVer) {
+  const mine = extVersion();
+  const host = String(hostVer || '');
+  if (!mine || !host || !versionLess(mine, host)) return;
+  if (!chrome.runtime || typeof chrome.runtime.reload !== 'function') return;
+  if (!chrome.storage || !chrome.storage.session) return;
+  let prev = '';
+  try { prev = String((await chrome.storage.session.get('extReloadFor')).extReloadFor || ''); } catch (e) { return; }
+  if (prev === host) return;
+  try { await chrome.storage.session.set({ extReloadFor: host }); } catch (e) { return; }
+  try { chrome.runtime.reload(); } catch (e) { /* tests */ }
+}
 async function fetchConfig() {
   let res, err = '';
   try {
     if (!chrome.runtime.sendNativeMessage) throw new Error('nativeMessaging permission missing');
-    res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'get_config', extVersion: extVersion() });
+    const stamp = {};
+    if (relayContentReport && relayContentReport.state) {
+      stamp.contentState = relayContentReport.state;
+      stamp.contentAt = Number(relayContentReport.at) || 0;
+    }
+    res = await chrome.runtime.sendNativeMessage(NATIVE_HOST, Object.assign({ type: 'get_config', extVersion: extVersion() }, stamp));
     if (!res || res.ok !== true) err = (res && res.error) || 'bad response from host';
   } catch (e) {
     err = String((e && e.message) || e);
@@ -120,6 +148,7 @@ async function fetchConfig() {
     ownerNames: cfgCache.ownerNames || [], senderNames: cfgCache.senderNames || [], ownerXUserId: cfgCache.ownerXUserId || '',
   }));
   await refreshBadge();
+  if (!err && res && res.version) await maybeReloadExtension(res.version);
   if (cfgCache.pendingSelfTest) runSelfTest(cfgCache.pendingSelfTest).catch(() => {});
   return cfgCache;
 }
@@ -897,21 +926,65 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
-// Re-check the host every minute.
+// Re-check the host and the relay tab. 30s is Chrome's alarm floor (120+); older Chrome clamps it.
+// The chat-tab pass runs first so get_config can carry that tab's heartbeat.
 function boot() {
-  try { chrome.alarms.create('relay-refresh', { periodInMinutes: 1 }); } catch (e) { /* tests */ }
-  getConfig(true).catch(() => {});
-  ensureContentScripts().catch(() => {});
+  try { chrome.alarms.create('relay-refresh', { periodInMinutes: 0.5 }); }
+  catch (e) { try { chrome.alarms.create('relay-refresh', { periodInMinutes: 1 }); } catch (e2) { /* tests */ } }
+  ensureContentScripts().then(() => getConfig(true)).catch(() => {});
 }
 // v1.4.24: a service-worker restart does not reattach a content script that died when the extension
 // reloaded. Inject content.js into open x.com tabs (the page guard makes a second copy a no-op).
 // v1.4.26: allFrames can throw on one subframe and take the whole tab with it, so the main frame
-// is tried next. A chat tab that still does not answer relay-ping is reloaded once and the owner
-// hears the unacked line. Do not reload a tab that answered. A blanket reload on update used to
-// race this inject and leave a background tab with no script.
-const reinjectedTabs = new Set();
-const warnedTabs = new Set();
+// is tried next. A chat tab that still does not answer is reloaded and the owner hears the unacked
+// line. Do not reload a tab that answered. A blanket reload on update used to race this inject.
+// v1.4.31: the relay chat tab is pinned against Memory Saver discard, woken on each alarm (a frozen
+// tab does not deliver phone replies), and reloaded again after a cooldown when it is still dead
+// or has been asleep long enough that X's socket is not trustworthy. The old one-shot reload gave
+// up for the life of the service worker, which is why a morning reply needed a manual reload.
+var warnedTabs = new Set();
+var warnSerial = 0;
+// v1.4.31: a discarded or dead chat tab is reloaded again after this, not once per service-worker life.
+var relayTabReloadedAt = Object.create(null);
+var RELAY_RELOAD_COOLDOWN_MS = 2 * 60 * 1000;
+var RELAY_SLEEP_RELOAD_MS = 10 * 60 * 1000;
+// Published for get_config. at is unix ms; state is ok | stale | no-tab | ''.
+var relayContentReport = { at: 0, state: '' };
 function isChatUrl(url) { return /^https:\/\/x\.com\/(?:i\/chat|messages)\//.test(String(url || '')); }
+function reloadDue(tabId, now) {
+  const at = relayTabReloadedAt[tabId] || 0;
+  return !at || (now - at) >= RELAY_RELOAD_COOLDOWN_MS;
+}
+async function readPulse(tabId) {
+  if (!chrome.storage || !chrome.storage.session) return 0;
+  try {
+    const bag = (await chrome.storage.session.get('relayPulse')).relayPulse || {};
+    return Number(bag[String(tabId)]) || 0;
+  } catch (e) { return 0; }
+}
+async function markPulse(tabId, now) {
+  if (!chrome.storage || !chrome.storage.session) return;
+  try {
+    const bag = (await chrome.storage.session.get('relayPulse')).relayPulse || {};
+    bag[String(tabId)] = now;
+    await chrome.storage.session.set({ relayPulse: bag });
+  } catch (e) { /* session storage unavailable */ }
+}
+async function pinTab(tabId) {
+  if (!chrome.tabs || !chrome.tabs.update) return;
+  try { await chrome.tabs.update(tabId, { autoDiscardable: false }); } catch (e) { /* discarded or closing */ }
+}
+async function wakeChat(tabId, slept) {
+  if (!chrome.tabs || !chrome.tabs.sendMessage) return null;
+  try {
+    const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: 'relay-wake', slept: !!slept }), 1500);
+    return res && res.pong ? res : null;
+  } catch (e) { return null; }
+}
+async function reloadChatTab(tabId, now) {
+  relayTabReloadedAt[tabId] = now;
+  try { if (chrome.tabs && chrome.tabs.reload) await chrome.tabs.reload(tabId); } catch (e) { /* ignore */ }
+}
 async function pingChat(tabId) {
   if (!chrome.tabs || !chrome.tabs.sendMessage) return true;
   try {
@@ -935,32 +1008,62 @@ async function warnUnwatched(tabId) {
   if (warnedTabs.has(tabId)) return;
   warnedTabs.add(tabId);
   // A later death of this same tab is a new miss. The bubble dedupe key must not swallow it.
-  await handleUnacked({ id: 'tab' + tabId + 'x' + Date.now().toString(36) });
+  // A counter, not the clock: two misses in the same millisecond must not share a dedupe key.
+  await handleUnacked({ id: 'tab' + tabId + 'x' + (++warnSerial).toString(36) });
 }
 async function ensureContentScripts() {
   if (!chrome.tabs || !chrome.tabs.query) return;
   let tabs = [];
   try { tabs = await chrome.tabs.query({ url: ['https://x.com/*'] }); } catch (e) { return; }
+  const now = Date.now();
+  let sawChat = false;
+  let newest = 0;
+  let anyStale = false;
   for (const t of tabs || []) {
     if (!t || typeof t.id !== 'number') continue;
     const url = String(t.url || t.pendingUrl || '');
     const chat = isChatUrl(url);
-    if (t.discarded && chat) {
-      if (!reinjectedTabs.has(t.id)) {
-        reinjectedTabs.add(t.id);
-        try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
-      }
+    if (!chat) { await injectFile(t.id); continue; }
+    sawChat = true;
+    await pinTab(t.id);
+    if (t.discarded || t.frozen) {
+      anyStale = true;
+      if (reloadDue(t.id, now)) await reloadChatTab(t.id, now);
       await warnUnwatched(t.id);
       continue;
     }
     const injected = await injectFile(t.id);
-    if (!chat) continue;
-    if (injected && await pingChat(t.id)) { warnedTabs.delete(t.id); continue; }
-    if (reinjectedTabs.has(t.id)) { await warnUnwatched(t.id); continue; }
-    reinjectedTabs.add(t.id);
-    try { if (chrome.tabs.reload) await chrome.tabs.reload(t.id); } catch (e) { /* ignore */ }
+    const last = await readPulse(t.id);
+    const gap = last ? now - last : 0;
+    const woke = await wakeChat(t.id, gap >= RELAY_SLEEP_RELOAD_MS);
+    if (woke && woke.detector) {
+      const longGap = gap >= RELAY_SLEEP_RELOAD_MS;
+      if (longGap && !woke.composing && reloadDue(t.id, now)) {
+        anyStale = true;
+        await reloadChatTab(t.id, now);
+      } else {
+        await markPulse(t.id, now);
+        if (now > newest) newest = now;
+        warnedTabs.delete(t.id);
+      }
+      continue;
+    }
+    if (woke && !woke.detector) {
+      // The listener is up and the detector never started. A reload is the clean start.
+      anyStale = true;
+      if (reloadDue(t.id, now)) await reloadChatTab(t.id, now);
+      await warnUnwatched(t.id);
+      continue;
+    }
+    if (injected && await pingChat(t.id)) { warnedTabs.delete(t.id); if (now > newest) newest = now; continue; }
+    anyStale = true;
+    if (!reloadDue(t.id, now)) { await warnUnwatched(t.id); continue; }
+    await reloadChatTab(t.id, now);
     await warnUnwatched(t.id);
   }
+  if (!sawChat) relayContentReport = { at: 0, state: 'no-tab' };
+  else if (anyStale && !newest) relayContentReport = { at: 0, state: 'stale' };
+  else relayContentReport = { at: newest || now, state: anyStale ? 'stale' : 'ok' };
 }
 // Kept for a manual call. v1.4.26 does not run this on install/update: reloading a background
 // X Chat tab raced the inject and the new script never attached.
@@ -1044,12 +1147,63 @@ async function onGuessExpiry() {
   await clearPendingGuess();
   try { await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'signal', status: 'guess_expired', label: g.label || '' }); } catch (e) { /* host may be down */ }
 }
+// v1.4.31: one native-messaging port keeps the service worker awake (Chrome does that for
+// connectNative) and avoids spawning a Python host on every reply. A dropped port reconnects
+// on the next call. Tests have no connectNative and stay on sendNativeMessage.
+var nativePort = null;
+var nativeWaiters = [];
+function dropNativePort(err) {
+  const waiters = nativeWaiters.splice(0, nativeWaiters.length);
+  const p = nativePort;
+  nativePort = null;
+  waiters.forEach(w => { try { clearTimeout(w.timer); } catch (e) {} w.reject(err || new Error('native port closed')); });
+  try { if (p && p.disconnect) p.disconnect(); } catch (e) { /* already closed */ }
+}
+function nativeSendPort(msg) {
+  return new Promise((resolve, reject) => {
+    let p = nativePort;
+    if (!p) {
+      try { p = chrome.runtime.connectNative(NATIVE_HOST); }
+      catch (e) { reject(e); return; }
+      nativePort = p;
+      try {
+        p.onMessage.addListener(resp => {
+          const w = nativeWaiters.shift();
+          if (!w) return;
+          try { clearTimeout(w.timer); } catch (e) {}
+          w.resolve(resp);
+        });
+        p.onDisconnect.addListener(() => {
+          if (nativePort !== p) return;
+          const message = (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'native port closed';
+          dropNativePort(new Error(message));
+        });
+      } catch (e) { nativePort = null; reject(e); return; }
+    }
+    const waiter = { resolve, reject, timer: null };
+    waiter.timer = setTimeout(() => {
+      if (nativeWaiters.indexOf(waiter) < 0) return;
+      dropNativePort(new Error('native host timed out'));
+    }, 40000);
+    nativeWaiters.push(waiter);
+    try { p.postMessage(msg); }
+    catch (e) { dropNativePort(e); }
+  });
+}
+(function preferNativePort() {
+  if (!chrome.runtime || typeof chrome.runtime.connectNative !== 'function' || typeof chrome.runtime.sendNativeMessage !== 'function') return;
+  const oneShot = chrome.runtime.sendNativeMessage.bind(chrome.runtime);
+  chrome.runtime.sendNativeMessage = function (host, msg) {
+    if (host !== NATIVE_HOST) return oneShot(host, msg);
+    return nativeSendPort(msg);
+  };
+})();
 if (chrome.alarms && chrome.alarms.onAlarm) chrome.alarms.onAlarm.addListener(a => {
-  if (a.name === 'relay-refresh') { getConfig(true).catch(() => {}); ensureContentScripts().catch(() => {}); }
+  if (a.name === 'relay-refresh') { ensureContentScripts().then(() => getConfig(true)).catch(() => {}); }
   else if (a.name === 'relay-guess-expiry') onGuessExpiry().catch(() => {});
   else if (a.name === 'relay-test-expiry') onTestExpiry().catch(() => {});
 });
-if (chrome.tabs && chrome.tabs.onRemoved) chrome.tabs.onRemoved.addListener(id => { reinjectedTabs.delete(id); warnedTabs.delete(id); });
+if (chrome.tabs && chrome.tabs.onRemoved) chrome.tabs.onRemoved.addListener(id => { delete relayTabReloadedAt[id]; warnedTabs.delete(id); });
 chrome.runtime.onInstalled.addListener(() => { boot(); });
 chrome.runtime.onStartup.addListener(boot);
 // v1.4.26: reloading the extension starts this worker. onInstalled is not reliable then, and

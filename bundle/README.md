@@ -1,4 +1,4 @@
-# iMessage Relay v1.4.30
+# iMessage Relay v1.4.31
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -11,7 +11,7 @@ iMessage from an opted-in contact
   -> bot posts "Alex: running late" into ONE relay chat (sender <-> you)
 Your reply in the relay chat (x.com in Chrome)
   -> extension sees your own bubble -> native host picks the contact -> Messages.app -> iMessage
-  -> ✅ appears on your own X message (v1.4.6; the → line is posted only if that reaction does not land)
+  -> ✅ on your own X message, and a "→ Alex ✓✓" line (v1.4.31 posts both; the line used to be skipped when the ✅ landed)
 ```
 v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bot access to the Mac:
 - The Mac encrypts each incoming 1:1 photo with a fresh random AES-256-GCM key and uploads only the
@@ -22,6 +22,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.31 (Chrome extension 1.4.31 + Mac helper; `relay_post.py` does not change): phone replies keep working after the Mac sleeps or Chrome freezes the X Chat tab. The extension pins that tab against Memory Saver, wakes it about every 30 seconds, and reloads it when it has been quiet for 10 minutes or no longer answers. A service worker that is alive while the tab is not shows up in `relayctl status` problems. The native host stays connected instead of starting once per message. A ✅ on your own bubble still lands, and the chat also gets `→ name ✓` or `→ name ✓✓` (that line used to be skipped when the reaction landed). After this version is loaded, a newer helper reloads the extension on its own. Upgrading from v1.4.30 still needs one reload in chrome://extensions (no new permission) and `./install.sh` (the watcher app is not rebuilt). Leave the relay chat tab open. Memory Saver exclusions are optional. Direct post stays off.
 - v1.4.30 (Chrome extension 1.4.30 + Mac helper; `relay_post.py` does not change): a webhook that keeps failing, or a retry queue that stays non-empty, for 10 minutes (`webhookStuckMinutes`) shows up in `relayctl status` → `problems` until the next healthy tick. HTTP 2xx means the webhook accepted the POST. It is proof X Chat posted the line only when the response body says `{"relayed": true}`. A native Reply to a Mail card still is not texted, and that reply gets a ⚠️. A relay line `⚠️ Name · not a contact:` (or ` · spam`, or the older `⚠️ Unknown ·`) is not a Mail card, so a quote-reply to it still sends. `/who` and `/status` use the same people a bare reply would. A roster label updates when Contacts later has a name. `/add Name` finds that person in Contacts or the roster. A familiar roster person is not asked on every bare reply. `karin`/`karen` asks "Did you mean?". `/help` lists `/test send`, `/add name number`, snooze forms, `/yes`, `/block yes`, quote-reply, and both meanings of 🗑️. The ✅ poll stops once that reaction lands. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). `batchWebhooks` stays on unless you turn it off. Direct post stays off.
 - v1.4.29 (Chrome extension 1.4.29 + Mac helper; `relay_post.py` does not change): a native Reply to a Mail in X Chat card is not sent as an iMessage. Those cards are in the relay chat and start with ✉️ or ⚠️. Nothing is texted, and the chat gets no check mark and no warning. A reply to a normal relay card still sends, including one from that same sender that does not start with those marks. A relay warning that starts with ⚠️ is skipped only when it is the message you reply to. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.28 (Chrome extension 1.4.28 + Mac helper; `relay_post.py` does not change): a photo X Chat draws as its own bubble still goes with the text from that same send. A name prefix on its own ("Alex:") sends the photo with no caption. If the photo never goes out, the chat says so, and says "⚠️ photo didn’t send" when it does not know who it was for. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -175,7 +176,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.30)
+## Limits (v1.4.31)
 - A webhook retry queue or a run of failed POSTs that lasts `webhookStuckMinutes` (10) is a `relayctl status` problem until it clears. A 2xx is acceptance, not proof the line was posted.
 - A native Reply to a Mail in X Chat card (✉️, or a ⚠️ that is not a relay warning) is not sent, and that reply gets a ⚠️. `⚠️ Name · not a contact:` and `🚫 Name · spam:` still route.
 - A photo X Chat splits into its own bubble is sent with the text from that same send. "Alex:" on its own sends the photo with no caption. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages, or "⚠️ photo didn’t send" when there is no name.

@@ -9,7 +9,7 @@ const BG = fs.readFileSync(path.join(__dirname, '../../extension/background.js')
 const CONV = '1111-2222';
 
 function env(opts = {}) {
-  const store = {}, listeners = [], nativeCalls = [], badge = {}, scripts = [], reloads = [];
+  const store = {}, session = {}, listeners = [], nativeCalls = [], badge = {}, scripts = [], reloads = [], updates = [];
   let onRemoved = () => {};
   let hostConfig = Object.assign({ ok: true, version: '1.3.2', paused: false, dryRun: true,
     relayConversationId: CONV, contacts: [{ name: 'Test Contact', label: 'Test', handle: '15555550123' }] }, opts.config || {});
@@ -28,15 +28,41 @@ function env(opts = {}) {
         if (msg.type === 'selftest') return { ok: true, detail: 'sent' };
         return opts.sendReply || { ok: true, dryRun: true, contact: 'Test', routedBy: 'recent' };
       },
+      connectNative: opts.port ? (host) => {
+        const ls = { m: [], d: [] };
+        const port = {
+          host,
+          sent: [],
+          postMessage(msg) { port.sent.push(msg); },
+          onMessage: { addListener(fn) { ls.m.push(fn); } },
+          onDisconnect: { addListener(fn) { ls.d.push(fn); } },
+          disconnect() { const fns = ls.d.splice(0); fns.forEach(fn => fn()); },
+          emit(resp) { ls.m.forEach(fn => fn(resp)); },
+        };
+        (chrome._ports = chrome._ports || []).push(port);
+        return port;
+      } : undefined,
     },
-    storage: { local, session: { async get() { return {}; }, async set() {} }, onChanged: { addListener() {} } },
+    storage: {
+      local,
+      session: {
+        async get(keys) { const ks = typeof keys === 'string' ? [keys] : keys; const o = {}; ks.forEach(k => { if (k in session) o[k] = JSON.parse(JSON.stringify(session[k])); }); return o; },
+        async set(v) { Object.assign(session, JSON.parse(JSON.stringify(v))); },
+      },
+      onChanged: { addListener() {} },
+    },
     action: { async setBadgeText(o) { badge.text = o.text; }, async setBadgeBackgroundColor() {} },
     alarms: { create() {}, onAlarm: { addListener() {} } },
     tabs: {
       onUpdated: { addListener() {} }, onRemoved: { addListener(fn) { onRemoved = fn; } },
       query: async () => (opts.tabList || []),
       reload: async id => { reloads.push(id); },
+      update: async (id, info) => { updates.push({ id, info }); },
       sendMessage: async (_tabId, msg) => {
+        if (msg && msg.type === 'relay-wake') {
+          if (opts.wake) return opts.wake;
+          return null;
+        }
         if (msg && msg.type === 'relay-ping') {
           if (opts.pingFail) return null;
           return { ok: true, pong: true };
@@ -66,7 +92,7 @@ function env(opts = {}) {
   const poke = (msg, sender) => new Promise(res => listeners.forEach(f => f(msg, sender || { id: 'ext' }, res)));
   const sends = () => nativeCalls.filter(c => c.msg.type === 'send').map(c => c.msg);
   const signal = sig => listeners.forEach(f => f({ type: 'relay-signal', signal: sig }, { id: 'ext', tab: { id: 1 } }, () => {}));
-  return { ctx, store, badge, nativeCalls, sends, send, signal, ask, poke, scripts, reloads, dropTab: id => onRemoved(id), setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
+  return { ctx, store, session, badge, nativeCalls, sends, send, signal, ask, poke, scripts, reloads, updates, dropTab: id => onRemoved(id), setHost: v => { hostConfig = Object.assign({}, hostConfig, v); } };
 }
 let passed = 0, failed = 0;
 async function test(name, fn) { try { await fn(); passed++; console.log('PASS', name); } catch (e) { failed++; console.log('FAIL', name, '\n   ', e.message); } }
@@ -363,6 +389,94 @@ async function test(name, fn) { try { await fn(); passed++; console.log('PASS', 
     assert.strictEqual(Array.from(e.scripts[0].target.frameIds).join(','), '0');
     assert.strictEqual(typeof e.scripts[0].func, 'function');
     assert.ok(!e.scripts[0].files);
+  });
+
+  await test('a discarded chat tab is reloaded again after the cooldown', async () => {
+    const e = env({ tabList: [{ id: 4, url: 'https://x.com/i/chat/abc', discarded: true }] });
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4]);
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4], 'still inside the cooldown');
+    e.ctx.relayTabReloadedAt[4] = Date.now() - 3 * 60 * 1000;
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [4, 4], 'a later pass retries a tab that is still discarded');
+    assert.ok(e.updates.some(u => u.id === 4 && u.info.autoDiscardable === false));
+  });
+
+  await test('a chat tab quiet for 10 minutes is reloaded unless the owner is typing', async () => {
+    const old = Date.now() - 11 * 60 * 1000;
+    const asleep = env({
+      wake: { ok: true, pong: true, detector: true, composing: false },
+      tabList: [{ id: 7, url: 'https://x.com/i/chat/111-222' }],
+    });
+    asleep.session.relayPulse = { '7': old };
+    await asleep.ctx.ensureContentScripts();
+    assert.deepStrictEqual(asleep.reloads, [7], 'a long gap reloads so X reconnects');
+    assert.strictEqual(asleep.session.relayPulse['7'], old, 'pulse stays old until the new page answers');
+
+    const typing = env({
+      wake: { ok: true, pong: true, detector: true, composing: true },
+      tabList: [{ id: 7, url: 'https://x.com/i/chat/111-222' }],
+    });
+    typing.session.relayPulse = { '7': old };
+    await typing.ctx.ensureContentScripts();
+    assert.deepStrictEqual(typing.reloads, [], 'a composer in focus is not reloaded');
+    assert.ok(typing.session.relayPulse['7'] > old);
+
+    const fresh = env({
+      wake: { ok: true, pong: true, detector: true, composing: false },
+      tabList: [{ id: 7, url: 'https://x.com/i/chat/111-222' }],
+    });
+    fresh.session.relayPulse = { '7': Date.now() - 1000 };
+    await fresh.ctx.ensureContentScripts();
+    assert.deepStrictEqual(fresh.reloads, []);
+  });
+
+  await test('a chat tab whose detector never started is reloaded', async () => {
+    const e = env({
+      wake: { ok: true, pong: true, detector: false, composing: false },
+      tabList: [{ id: 7, url: 'https://x.com/i/chat/111-222' }],
+    });
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [7]);
+    await e.ctx.ensureContentScripts();
+    assert.deepStrictEqual(e.reloads, [7], 'cooldown holds');
+  });
+
+  await test('a newer helper reloads the extension once', async () => {
+    const e = env();
+    e.ctx.chrome.runtime.getManifest = () => ({ version: '1.4.31' });
+    const reloaded = [];
+    e.ctx.chrome.runtime.reload = () => { reloaded.push(1); };
+    e.setHost({ version: '1.4.32' });
+    await e.ctx.getConfig(true);
+    await sleep(30);
+    assert.deepStrictEqual(reloaded, [1]);
+    assert.strictEqual(e.session.extReloadFor, '1.4.32');
+    await e.ctx.getConfig(true);
+    await sleep(20);
+    assert.deepStrictEqual(reloaded, [1], 'the same host version does not reload again');
+  });
+
+  await test('the native host port is reused until it drops, then the next call opens another', async () => {
+    const e = env({ port: true });
+    const cfg = e.ctx.getConfig(true);
+    await sleep(20);
+    assert.strictEqual(e.ctx.chrome._ports.length, 1);
+    e.ctx.chrome._ports[0].emit({ ok: true, version: '1.4.31', paused: false, dryRun: true, relayConversationId: CONV, contacts: [] });
+    await cfg;
+    assert.deepStrictEqual(e.ctx.chrome._ports[0].sent.map(m => m.type), ['get_config']);
+    const ping = e.ctx.chrome.runtime.sendNativeMessage('com.imessage_relay.host', { type: 'ping' });
+    await sleep(10);
+    assert.strictEqual(e.ctx.chrome._ports.length, 1, 'the second call reuses the open port');
+    e.ctx.chrome._ports[0].emit({ ok: true, version: '1.4.31' });
+    assert.deepStrictEqual(await ping, { ok: true, version: '1.4.31' });
+    e.ctx.chrome._ports[0].disconnect();
+    const again = e.ctx.chrome.runtime.sendNativeMessage('com.imessage_relay.host', { type: 'ping' });
+    await sleep(10);
+    assert.strictEqual(e.ctx.chrome._ports.length, 2, 'a dropped port is reopened');
+    e.ctx.chrome._ports[1].emit({ ok: true });
+    assert.deepStrictEqual(await again, { ok: true });
   });
 
   await test('reloading the extension injects open chat tabs without a blanket reload', async () => {
