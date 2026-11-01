@@ -23,8 +23,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.31'
-EXTENSION_VERSION = '1.4.31'   # v1.4.31 changes the extension
+VERSION = '1.4.32'
+EXTENSION_VERSION = '1.4.31'   # v1.4.32 is the Mac helper only; the extension stays 1.4.31
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -791,19 +791,134 @@ def parse_prefix(text, cfg, directory=None):
 HEADER_LINE_RE = re.compile(r'^\s*\U0001f4ac\s*(.+?)\s*\u00b7\s*\d{1,2}:\d{2}\s*[AaPp]\.?[Mm]\.?\s*$')
 
 
+def _quote_scan_text(quoted, cfg):
+    """The first 120 characters of a quote, with the bot's name and a leading "iMessage" dropped.
+    Same chrome parse_quote ignores, so a group line still starts at the group name."""
+    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()[:120]
+    if not q:
+        return ''
+    sender = ((cfg or {}).get('senderXHandle') or '').lstrip('@')
+    for drop in ('@' + sender, sender):
+        if sender and q.lower().startswith(drop.lower()):
+            q = q[len(drop):].lstrip(' \u00b7\u2022-')
+            break
+    return re.sub(r'^(?:imessage)\s+', '', q, count=1, flags=re.I)
+
+
+# A relayed group line is "<group> · <speaker>: <text>". X's reply preview sometimes keeps a
+# different dot, or only the speaker. These still separate the group name from the speaker.
+_GROUP_LINE_SEP = r'[\u00b7\u2022\u2219\u2027\u30fb|/\\\u2013\u2014-]'
+
+
+def _speaker_is_person(speaker, directory):
+    """True when `speaker` is a person on the relay list (label, full name, or unique first name)."""
+    speaker = ' '.join(str(speaker or '').lower().split())
+    if not speaker or speaker[0].isdigit():
+        return False
+    by = {e['handle']: e for e in directory}
+    hits = set(contact_keys(directory).get(speaker) or ())
+    if not hits:
+        for e in directory:
+            if e.get('kind') == 'group':
+                continue
+            for raw in (e.get('label'), e.get('name')):
+                if raw and ' '.join(str(raw).lower().split()) == speaker:
+                    hits.add(e['handle'])
+    return any(by.get(h, {}).get('kind') != 'group' for h in hits)
+
+
+def group_line_handle(quoted, cfg, directory):
+    """The group a quote names as "<group> <sep> <speaker>: …", or None.
+    The speaker has to be a person on the relay list, so a clock ("Hollands · 7:20 PM") or a
+    sentence that merely mentions the group is not a group line. The longest group label wins.
+    A bare "Sam:" is not this shape."""
+    q = _quote_scan_text(quoted, cfg)
+    if not q or HEADER_LINE_RE.match(q):
+        return None
+    groups = [e for e in directory if e.get('kind') == 'group' and e.get('label')]
+    groups.sort(key=lambda e: len(e['label']), reverse=True)
+    for e in groups:
+        m = re.search(r'(?:^|[\s(\[])%s\s*%s\s*([^:]{1,60}?)\s*:'
+                      % (re.escape(e['label']), _GROUP_LINE_SEP), q, re.I)
+        if m and _speaker_is_person(m.group(1), directory):
+            return e['handle']
+    return None
+
+
+def _speaker_body(quoted, entry):
+    """The text after "<label or name>:" when `entry` is the speaker a quote named. Empty when
+    the quote has no such prefix. Longest name first, so "Brian Holland:" is not cut at "Brian:"."""
+    q = str(quoted or '')
+    keys, seen = [], set()
+    for raw in (entry.get('label'), entry.get('name'), first_name(entry.get('name') or ''),
+                first_name(entry.get('label') or '')):
+        k = str(raw or '').strip()
+        if not k or k.lower() in seen:
+            continue
+        seen.add(k.lower())
+        keys.append(k)
+    keys.sort(key=len, reverse=True)
+    for k in keys:
+        m = re.search(r'(?:^|[\s(\[\u00b7\u2022])%s\s*:\s*(\S.*?)\s*$' % re.escape(k), q, re.I | re.S)
+        if m:
+            return m.group(1).strip()
+    return ''
+
+
+def _quote_route_hits(quoted, cfg, now):
+    """Routes whose relayed body matches `quoted` (full text, or the body after a speaker prefix)."""
+    import relay_echo
+    hits = set(relay_echo.lookup_quote(quoted, cfg, now))
+    return hits
+
+
+def disambiguate_speaker_quote(q_handle, quoted, quote_label, cfg, directory, now):
+    """A quote parse_quote read as one person may be the speaker on a group line.
+    ('handle', 'match') when the group is the conversation. (None, 'ambiguous') when that person
+    and a group are both plausible: the caller asks, and does not text the 1:1.
+    (q_handle, 'match') when nothing points at a group.
+    v1.4.32: X often quotes only "Brian: …" from "Hollands · Brian: …". The recorded body and the
+    💬 header name the group. The same words in the group and in that person's 1:1 stay a question."""
+    by_handle = {e['handle']: e for e in directory}
+    entry = by_handle.get(q_handle) or {}
+    if entry.get('kind') == 'group':
+        return q_handle, 'match'
+    hits = set()
+    for text in (quoted, _speaker_body(quoted, entry)):
+        if text:
+            hits |= _quote_route_hits(text, cfg, now)
+    hits = {h for h in hits if h in by_handle}
+    groups = {h for h in hits if by_handle[h].get('kind') == 'group'}
+    people = hits - groups
+    header_groups = set()
+    if quote_label and '\n' not in str(quote_label) and '\r' not in str(quote_label):
+        lab = re.sub(r'\s+', ' ', str(quote_label)).strip()[:80]
+        if lab:
+            header_groups = {h for h in (contact_keys(directory).get(lab.lower()) or ())
+                             if h in by_handle and by_handle[h].get('kind') == 'group'}
+    if groups and people:
+        return None, 'ambiguous'
+    if len(groups) == 1:
+        return next(iter(groups)), 'match'
+    if len(groups) > 1:
+        return None, 'ambiguous'
+    if len(header_groups) == 1 and not people:
+        return next(iter(header_groups)), 'match'
+    if header_groups and people:
+        return None, 'ambiguous'
+    if len(header_groups) > 1:
+        return None, 'ambiguous'
+    return q_handle, 'match'
+
+
 def parse_quote(quoted, cfg, directory=None):
     """Best effort: which entry a quoted (replied-to) relay message came from. The quote may
     start with the sender account's name, so the earliest "<key>:" (or "<group> ·") in its first
     120 characters counts. Returns (handle|None, status) with status 'match'|'ambiguous'|'none'."""
     d = build_directory(cfg, []) if directory is None else directory
-    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()[:120]
+    q = _quote_scan_text(quoted, cfg)
     if not q:
         return None, 'none'
-    sender = (cfg.get('senderXHandle') or '').lstrip('@')
-    for drop in ('@' + sender, sender):
-        if sender and q.lower().startswith(drop.lower()):
-            q = q[len(drop):].lstrip(' \u00b7-')
-            break
     keys = contact_keys(d)
     # v1.4.17: a conversation header "💬 <label> · 7:20 PM" names who it is for; status 'header'
     # (route_reply maps it to that person but the host always asks "Send to <label>?" first)
@@ -1178,6 +1293,14 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False, quote_label='
     q_handle, q_status = parse_quote(quoted, cfg, d)
     if q_status == 'header':
         header_q, q_status = True, 'match'
+    # v1.4.32: "Hollands · Brian:" (any separator) is the Hollands group. A preview that kept only
+    # "Brian:" is still the group when that body was relayed there, or the 💬 header names the group.
+    # The same body in the group and in Brian's 1:1 asks. It never texts the 1:1 on a guess.
+    g_line = group_line_handle(quoted, cfg, d) if q_status != 'ambiguous' else None
+    if g_line:
+        q_handle, q_status = g_line, 'match'
+    elif q_status == 'match':
+        q_handle, q_status = disambiguate_speaker_quote(q_handle, quoted, quote_label, cfg, d, now)
     if q_status == 'none' and re.sub(r'\s+', '', str(quoted or '')):
         # v1.4.6 quiet names: a quoted line that carried no "Name:" (same sender as the line above it) is
         # found by keyed HMACs of its text, recorded when it was relayed. Several people -> ambiguous.

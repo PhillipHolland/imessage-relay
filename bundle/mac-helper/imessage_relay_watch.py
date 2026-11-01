@@ -113,6 +113,31 @@ EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
 JOB_MAX_AGE_S = 600
 LOOP_STEP_S = 0.25           # v1.4.13: idle loop granularity (jobs, chat.db change check)
 GROUP_STYLE = 43          # chat.style: 43 = group, 45 = 1:1
+
+
+def chat_id_expr(chat_cols):
+    """chat_id of one message. A row joined to both a group and a 1:1 is the group.
+    An unordered LIMIT 1 used to pick either chat, so a Hollands text could be stored as Brian's 1:1."""
+    if chat_cols and 'style' in chat_cols:
+        return ('(SELECT cmj.chat_id FROM chat_message_join cmj JOIN chat c ON c.ROWID = cmj.chat_id '
+                'WHERE cmj.message_id = m.ROWID ORDER BY CASE WHEN c.style = %d THEN 0 ELSE 1 END, '
+                '(SELECT COUNT(*) FROM chat_handle_join x WHERE x.chat_id = c.ROWID) DESC LIMIT 1)' % GROUP_STYLE)
+    return ('(SELECT cmj.chat_id FROM chat_message_join cmj WHERE cmj.message_id = m.ROWID '
+            'ORDER BY (SELECT COUNT(*) FROM chat_handle_join x WHERE x.chat_id = cmj.chat_id) DESC LIMIT 1)')
+
+
+def is_group_chat_guid(guid, style=None, members=0):
+    """A Messages chat id that is a group thread. A 1:1 id looks like iMessage;-;+1555… and is never one."""
+    g = str(guid or '')
+    if not g or ';-;' in g:
+        return False
+    try:
+        n = int(members or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if style == GROUP_STYLE or n > 1 or ';+;' in g:
+        return True
+    return False
 MESSAGES_NOT_RUNNING_DETAIL = ('Messages is not running on the Mac. New iMessages and replies may stall '
                                'until it is opened again.')
 FDA_DETAIL = ("\u26a0\ufe0f Texts stopped. Turn on Full Disk Access for iMessage Relay Watcher. "
@@ -509,11 +534,12 @@ class Watcher:
         col = lambda c, d='0': ('m.' + c) if c in msg_cols else d  # noqa: E731
         guid = 'm.guid' if 'guid' in msg_cols else "''"
         q = ('SELECT m.ROWID, m.is_from_me, h.id, m.date, %s, %s, %s, %s, %s, %s, %s, %s, %s, '
-             '(SELECT cmj.chat_id FROM chat_message_join cmj WHERE cmj.message_id = m.ROWID LIMIT 1) FROM message m '
-             'LEFT JOIN handle h ON h.ROWID = m.handle_id WHERE m.ROWID > ? ORDER BY m.ROWID LIMIT %d'
-             % (col('associated_message_type'), col('item_type'), col('cache_has_attachments'), guid,
-                col('associated_message_guid', 'NULL'), col('associated_message_emoji', 'NULL'),
-                col('is_audio_message'), col('date_edited'), col('date_retracted'), BATCH))
+             + chat_id_expr(chat_cols) +
+             ' FROM message m LEFT JOIN handle h ON h.ROWID = m.handle_id '
+             'WHERE m.ROWID > ? ORDER BY m.ROWID LIMIT %d') % (
+                 col('associated_message_type'), col('item_type'), col('cache_has_attachments'), guid,
+                 col('associated_message_guid', 'NULL'), col('associated_message_emoji', 'NULL'),
+                 col('is_audio_message'), col('date_edited'), col('date_retracted'), BATCH)
         body_q = 'SELECT text, %s FROM message WHERE ROWID = ?' % ('attributedBody' if 'attributedBody' in msg_cols else 'NULL')
         ctx = {'cc': cfg['defaultCountryCode'], 'mute': set(cfg['mute']), 'roster': rc.load_roster(),
                'roster_changed': False, 'body_q': body_q, 'chat_cols': chat_cols, 'now': self.now(),
@@ -743,7 +769,9 @@ class Watcher:
     def group_guid(self, key):
         """v1.4.5 (outbound only): the Messages chat id ("iMessage;+;chat...") for a group key
         "group:<chat_identifier or guid>", so a reply can be sent to that chat. Metadata only; the
-        newest chat with that identifier wins (iMessage and SMS copies of one group can coexist)."""
+        newest group chat with that identifier wins (iMessage and SMS copies of one group can coexist).
+        v1.4.32: a 1:1 chat id (iMessage;-;+…) is never returned, even when it is the newest row that
+        shares the identifier. A group reply must not land in a member's 1:1."""
         if not key.startswith('group:') or len(key) <= len('group:'):
             return {'ok': False, 'error': 'not a group key'}
         ident = key[len('group:'):]
@@ -752,18 +780,23 @@ class Watcher:
         except Exception as e:
             return {'ok': False, 'error': 'chat.db unavailable: ' + str(e)[:120]}
         try:
+            cols = {r[1] for r in con.execute('PRAGMA table_info(chat)')}
+            style_sql = 'c.style' if 'style' in cols else 'NULL'
             rows = con.execute(
-                'SELECT c.guid, c.chat_identifier, (SELECT MAX(m.date) FROM chat_message_join j JOIN message m '
-                'ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID) FROM chat c WHERE c.chat_identifier = ? OR c.guid = ?',
+                'SELECT c.guid, c.chat_identifier, %s, '
+                '(SELECT COUNT(*) FROM chat_handle_join x WHERE x.chat_id = c.ROWID), '
+                '(SELECT MAX(m.date) FROM chat_message_join j JOIN message m '
+                'ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID) FROM chat c '
+                'WHERE c.chat_identifier = ? OR c.guid = ?' % style_sql,
                 (ident, ident)).fetchall()
         except Exception as e:
             return {'ok': False, 'error': 'query failed: ' + str(e)[:120]}
         finally:
             con.close()
         best = None
-        for guid, ci, last in rows:
+        for guid, ci, style, members, last in rows:
             k = re.sub(r'[^A-Za-z0-9;:+@._-]', '', str(ci or guid or ''))[:120]
-            if k != ident or not guid:
+            if k != ident or not guid or not is_group_chat_guid(guid, style, members):
                 continue
             if best is None or (last or 0) > (best[1] or 0):
                 best = (str(guid), last)
@@ -1588,8 +1621,9 @@ class Watcher:
             return {'ok': False, 'error': 'chat.db unavailable: ' + str(e)[:150]}
         try:
             _, chat_cols = self.columns(con)
-            style_filter = ('AND COALESCE((SELECT c.style FROM chat_message_join cmj JOIN chat c ON c.ROWID = cmj.chat_id '
-                            'WHERE cmj.message_id = m.ROWID LIMIT 1), 45) != %d' % GROUP_STYLE) if 'style' in chat_cols else ''
+            # A message joined to a group is not a 1:1, even when another joined chat is.
+            style_filter = ('AND NOT EXISTS (SELECT 1 FROM chat_message_join cmj JOIN chat c ON c.ROWID = cmj.chat_id '
+                            'WHERE cmj.message_id = m.ROWID AND c.style = %d)' % GROUP_STYLE) if 'style' in chat_cols else ''
             since = rc.unix_to_apple_ns(self.now() - days * 86400)
             rows = con.execute('SELECT h.id, COUNT(*), MAX(m.date) FROM message m JOIN handle h ON h.ROWID = m.handle_id '
                                'WHERE m.is_from_me = 0 AND m.date > ? %s GROUP BY h.id ORDER BY MAX(m.date) DESC LIMIT ?'
