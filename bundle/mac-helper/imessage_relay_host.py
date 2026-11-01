@@ -913,6 +913,9 @@ def group_guid_lookup(key, sleeper, now, wait_s=GROUP_GUID_WAIT_S):
             except OSError:
                 pass
             g = str(res.get('guid') or '') if res.get('ok') else ''
+            # v1.4.32: never accept a 1:1 chat id (iMessage;-;+…) as a group destination.
+            if ';-;' in g:
+                return None
             return g if re.match(r'^[A-Za-z0-9;:+@._-]{3,160}$', g) else None
         if now() >= deadline:
             break
@@ -1473,6 +1476,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             if not pend_g:
                 return refuse('confirmed group send without a pending group prompt', handle=hint_norm)
             group_ok = dict(tgt, guid=pend_g['guid'])
+            if ';-;' in str(group_ok.get('guid') or ''):
+                return refuse('group chat id is a one-to-one thread', handle=hint_norm)
         if not tgt or (tgt.get('kind') == 'group' and not group_ok):
             return refuse('confirmed handle is not a current recipient', handle=hint_norm)
         if not route.get('needsTarget') and route['contact']['handle'] == hint_norm:
@@ -1732,6 +1737,7 @@ _REFUSAL_TEXT = {
     'confirmed group send without a pending group prompt': 'That yes expired. Send it again.',
     'confirmed handle is not a current recipient': 'That yes expired. Send it again.',
     'confirmed group send no longer names that group': 'That no longer names the group. Send it again.',
+    'group chat id is a one-to-one thread': 'Can\u2019t reach that group right now. Nothing was sent.',
     'the routed recipient does not match the handle the extension reported': 'The recipient changed. Send it again.',
     'refusing to relay to the owner handle': 'That would text your own number. /test send',
     'bad attachment': 'The attachment was damaged. Attach it again.',

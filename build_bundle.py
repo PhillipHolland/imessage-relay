@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-build_bundle.py: iMessage Relay v1.4.31, the whole package in one file (no repo needed).
+build_bundle.py: iMessage Relay v1.4.32, the whole package in one file (no repo needed).
 
     python3 build_bundle.py OUT_DIR            write every file into OUT_DIR (must be empty or absent)
     python3 build_bundle.py OUT_DIR --force    overwrite files in an existing OUT_DIR
@@ -17,8 +17,8 @@ import os
 import sys
 
 BUNDLE = r'''
-@@@@ FILE README.md mode=644 sha256=0de5042fc1c13cbe2ae64cdfda596dbd875c7608e50edf364b0d8b9616280ef5 nl=1
-# iMessage Relay v1.4.31
+@@@@ FILE README.md mode=644 sha256=70f3f5bc59b6a71d01358d27931556b141cbb348a25d795b73f05f1e81f5e245 nl=1
+# iMessage Relay v1.4.32
 
 Get your iMessages in X Chat, and reply to them from X Chat. Needs a Mac that stays on with
 Messages signed in, Chrome (or Brave, Edge, Arc), and a Grok Bot with the X plugin connected
@@ -42,6 +42,7 @@ v1.4.7 brings their photos into X Chat through an **encrypted drop**, with no bo
   it, decrypts it into a mode-600 temp file, posts it to X Chat and deletes it. The drop holds ciphertext
   only, serves each file once and deletes it after 10 minutes. The Mac's temp copy is deleted before the
   upload starts. Without a drop (`relayctl set-drop` not run), photos arrive as "Photo".
+- v1.4.32 (Mac helper only; the extension stays 1.4.31, so no reload; `relay_post.py` does not change): a reply to a group stays on that group. `Hollands: test` asks, then sends to the group chat. `Brian: test` still goes only to Brian's 1:1. A native Reply that kept only the speaker's name, or whose header is the group, goes to the group even when that person is a member. The same words in both chats ask who it is for. A group send never uses a 1:1 chat id. Re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
 - v1.4.31 (Chrome extension 1.4.31 + Mac helper; `relay_post.py` does not change): phone replies keep working after the Mac sleeps or Chrome freezes the X Chat tab. The extension pins that tab against Memory Saver, wakes it about every 30 seconds, and reloads it when it has been quiet for 10 minutes or no longer answers. A service worker that is alive while the tab is not shows up in `relayctl status` problems. The native host stays connected instead of starting once per message. A ✅ on your own bubble still lands, and the chat also gets `→ name ✓` or `→ name ✓✓` (that line used to be skipped when the reaction landed). After this version is loaded, a newer helper reloads the extension on its own. Upgrading from v1.4.30 still needs one reload in chrome://extensions (no new permission) and `./install.sh` (the watcher app is not rebuilt). Leave the relay chat tab open. Memory Saver exclusions are optional. Direct post stays off.
 - v1.4.30 (Chrome extension 1.4.30 + Mac helper; `relay_post.py` does not change): a webhook that keeps failing, or a retry queue that stays non-empty, for 10 minutes (`webhookStuckMinutes`) shows up in `relayctl status` → `problems` until the next healthy tick. HTTP 2xx means the webhook accepted the POST. It is proof X Chat posted the line only when the response body says `{"relayed": true}`. A native Reply to a Mail card still is not texted, and that reply gets a ⚠️. A relay line `⚠️ Name · not a contact:` (or ` · spam`, or the older `⚠️ Unknown ·`) is not a Mail card, so a quote-reply to it still sends. `/who` and `/status` use the same people a bare reply would. A roster label updates when Contacts later has a name. `/add Name` finds that person in Contacts or the roster. A familiar roster person is not asked on every bare reply. `karin`/`karen` asks "Did you mean?". `/help` lists `/test send`, `/add name number`, snooze forms, `/yes`, `/block yes`, quote-reply, and both meanings of 🗑️. The ✅ poll stops once that reaction lands. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). `batchWebhooks` stays on unless you turn it off. Direct post stays off.
 - v1.4.29 (Chrome extension 1.4.29 + Mac helper; `relay_post.py` does not change): a native Reply to a Mail in X Chat card is not sent as an iMessage. Those cards are in the relay chat and start with ✉️ or ⚠️. Nothing is texted, and the chat gets no check mark and no warning. A reply to a normal relay card still sends, including one from that same sender that does not start with those marks. A relay warning that starts with ⚠️ is skipped only when it is the message you reply to. Reload the extension (no new permission) and re-run `./install.sh` (the watcher app is not rebuilt). Direct post stays off.
@@ -196,7 +197,7 @@ v1.4.6 makes the relay feel native in X Chat:
   messages and deliver one digest when they end; your replies always send.
 - The Messages app must stay running (hidden is fine). Optional: `relayctl auto-reopen on`.
 
-## Limits (v1.4.31)
+## Limits (v1.4.32)
 - A webhook retry queue or a run of failed POSTs that lasts `webhookStuckMinutes` (10) is a `relayctl status` problem until it clears. A 2xx is acceptance, not proof the line was posted.
 - A native Reply to a Mail in X Chat card (✉️, or a ⚠️ that is not a relay warning) is not sent, and that reply gets a ⚠️. `⚠️ Name · not a contact:` and `🚫 Name · spam:` still route.
 - A photo X Chat splits into its own bubble is sent with the text from that same send. "Alex:" on its own sends the photo with no caption. jpeg, png, heic, gif, and webp, up to 25 MB. If it cannot be sent, the chat says to send it from Messages, or "⚠️ photo didn’t send" when there is no name.
@@ -5409,7 +5410,7 @@ __PROGRAM_ARGUMENTS__
   "directPost": false
 }
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=c6e34756ab6f07ef3cfa6f309515d0935f0d2863f169978961d35ab908a50902 nl=1
+@@@@ FILE mac-helper/imessage_relay_host.py mode=755 sha256=91b838e7d1a13473632feeed9c5addbaac51139cb5ec9bb6934afbe41726621b nl=1
 #!/usr/bin/python3
 """
 com.imessage_relay.host: Chrome native messaging host for iMessage Relay v1.4.24.
@@ -6325,6 +6326,9 @@ def group_guid_lookup(key, sleeper, now, wait_s=GROUP_GUID_WAIT_S):
             except OSError:
                 pass
             g = str(res.get('guid') or '') if res.get('ok') else ''
+            # v1.4.32: never accept a 1:1 chat id (iMessage;-;+…) as a group destination.
+            if ';-;' in g:
+                return None
             return g if re.match(r'^[A-Za-z0-9;:+@._-]{3,160}$', g) else None
         if now() >= deadline:
             break
@@ -6885,6 +6889,8 @@ def handle_send(msg, cfg, runner, sleeper, now, poster):
             if not pend_g:
                 return refuse('confirmed group send without a pending group prompt', handle=hint_norm)
             group_ok = dict(tgt, guid=pend_g['guid'])
+            if ';-;' in str(group_ok.get('guid') or ''):
+                return refuse('group chat id is a one-to-one thread', handle=hint_norm)
         if not tgt or (tgt.get('kind') == 'group' and not group_ok):
             return refuse('confirmed handle is not a current recipient', handle=hint_norm)
         if not route.get('needsTarget') and route['contact']['handle'] == hint_norm:
@@ -7144,6 +7150,7 @@ _REFUSAL_TEXT = {
     'confirmed group send without a pending group prompt': 'That yes expired. Send it again.',
     'confirmed handle is not a current recipient': 'That yes expired. Send it again.',
     'confirmed group send no longer names that group': 'That no longer names the group. Send it again.',
+    'group chat id is a one-to-one thread': 'Can\u2019t reach that group right now. Nothing was sent.',
     'the routed recipient does not match the handle the extension reported': 'The recipient changed. Send it again.',
     'refusing to relay to the owner handle': 'That would text your own number. /test send',
     'bad attachment': 'The attachment was damaged. Attach it again.',
@@ -7504,7 +7511,7 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 @@@@ END
-@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=f842e6fac6d8443081c28ccb6a32ec12f0a709c911ffad99f45caad8aa3d8065 nl=1
+@@@@ FILE mac-helper/imessage_relay_watch.py mode=755 sha256=6754cad8755f6cb9a2572cea5c47cd6994a788959bcd77b63183dff320a7e6d4 nl=1
 #!/usr/bin/python3
 """
 iMessage Relay v1.4.8: inbound watcher (LaunchAgent com.imessage-relay.watch).
@@ -7620,6 +7627,31 @@ EXT_SEEN_PATH = os.path.join(rc.APP_DIR, 'ext_seen.json')
 JOB_MAX_AGE_S = 600
 LOOP_STEP_S = 0.25           # v1.4.13: idle loop granularity (jobs, chat.db change check)
 GROUP_STYLE = 43          # chat.style: 43 = group, 45 = 1:1
+
+
+def chat_id_expr(chat_cols):
+    """chat_id of one message. A row joined to both a group and a 1:1 is the group.
+    An unordered LIMIT 1 used to pick either chat, so a Hollands text could be stored as Brian's 1:1."""
+    if chat_cols and 'style' in chat_cols:
+        return ('(SELECT cmj.chat_id FROM chat_message_join cmj JOIN chat c ON c.ROWID = cmj.chat_id '
+                'WHERE cmj.message_id = m.ROWID ORDER BY CASE WHEN c.style = %d THEN 0 ELSE 1 END, '
+                '(SELECT COUNT(*) FROM chat_handle_join x WHERE x.chat_id = c.ROWID) DESC LIMIT 1)' % GROUP_STYLE)
+    return ('(SELECT cmj.chat_id FROM chat_message_join cmj WHERE cmj.message_id = m.ROWID '
+            'ORDER BY (SELECT COUNT(*) FROM chat_handle_join x WHERE x.chat_id = cmj.chat_id) DESC LIMIT 1)')
+
+
+def is_group_chat_guid(guid, style=None, members=0):
+    """A Messages chat id that is a group thread. A 1:1 id looks like iMessage;-;+1555… and is never one."""
+    g = str(guid or '')
+    if not g or ';-;' in g:
+        return False
+    try:
+        n = int(members or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if style == GROUP_STYLE or n > 1 or ';+;' in g:
+        return True
+    return False
 MESSAGES_NOT_RUNNING_DETAIL = ('Messages is not running on the Mac. New iMessages and replies may stall '
                                'until it is opened again.')
 FDA_DETAIL = ("\u26a0\ufe0f Texts stopped. Turn on Full Disk Access for iMessage Relay Watcher. "
@@ -8016,11 +8048,12 @@ class Watcher:
         col = lambda c, d='0': ('m.' + c) if c in msg_cols else d  # noqa: E731
         guid = 'm.guid' if 'guid' in msg_cols else "''"
         q = ('SELECT m.ROWID, m.is_from_me, h.id, m.date, %s, %s, %s, %s, %s, %s, %s, %s, %s, '
-             '(SELECT cmj.chat_id FROM chat_message_join cmj WHERE cmj.message_id = m.ROWID LIMIT 1) FROM message m '
-             'LEFT JOIN handle h ON h.ROWID = m.handle_id WHERE m.ROWID > ? ORDER BY m.ROWID LIMIT %d'
-             % (col('associated_message_type'), col('item_type'), col('cache_has_attachments'), guid,
-                col('associated_message_guid', 'NULL'), col('associated_message_emoji', 'NULL'),
-                col('is_audio_message'), col('date_edited'), col('date_retracted'), BATCH))
+             + chat_id_expr(chat_cols) +
+             ' FROM message m LEFT JOIN handle h ON h.ROWID = m.handle_id '
+             'WHERE m.ROWID > ? ORDER BY m.ROWID LIMIT %d') % (
+                 col('associated_message_type'), col('item_type'), col('cache_has_attachments'), guid,
+                 col('associated_message_guid', 'NULL'), col('associated_message_emoji', 'NULL'),
+                 col('is_audio_message'), col('date_edited'), col('date_retracted'), BATCH)
         body_q = 'SELECT text, %s FROM message WHERE ROWID = ?' % ('attributedBody' if 'attributedBody' in msg_cols else 'NULL')
         ctx = {'cc': cfg['defaultCountryCode'], 'mute': set(cfg['mute']), 'roster': rc.load_roster(),
                'roster_changed': False, 'body_q': body_q, 'chat_cols': chat_cols, 'now': self.now(),
@@ -8250,7 +8283,9 @@ class Watcher:
     def group_guid(self, key):
         """v1.4.5 (outbound only): the Messages chat id ("iMessage;+;chat...") for a group key
         "group:<chat_identifier or guid>", so a reply can be sent to that chat. Metadata only; the
-        newest chat with that identifier wins (iMessage and SMS copies of one group can coexist)."""
+        newest group chat with that identifier wins (iMessage and SMS copies of one group can coexist).
+        v1.4.32: a 1:1 chat id (iMessage;-;+…) is never returned, even when it is the newest row that
+        shares the identifier. A group reply must not land in a member's 1:1."""
         if not key.startswith('group:') or len(key) <= len('group:'):
             return {'ok': False, 'error': 'not a group key'}
         ident = key[len('group:'):]
@@ -8259,18 +8294,23 @@ class Watcher:
         except Exception as e:
             return {'ok': False, 'error': 'chat.db unavailable: ' + str(e)[:120]}
         try:
+            cols = {r[1] for r in con.execute('PRAGMA table_info(chat)')}
+            style_sql = 'c.style' if 'style' in cols else 'NULL'
             rows = con.execute(
-                'SELECT c.guid, c.chat_identifier, (SELECT MAX(m.date) FROM chat_message_join j JOIN message m '
-                'ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID) FROM chat c WHERE c.chat_identifier = ? OR c.guid = ?',
+                'SELECT c.guid, c.chat_identifier, %s, '
+                '(SELECT COUNT(*) FROM chat_handle_join x WHERE x.chat_id = c.ROWID), '
+                '(SELECT MAX(m.date) FROM chat_message_join j JOIN message m '
+                'ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID) FROM chat c '
+                'WHERE c.chat_identifier = ? OR c.guid = ?' % style_sql,
                 (ident, ident)).fetchall()
         except Exception as e:
             return {'ok': False, 'error': 'query failed: ' + str(e)[:120]}
         finally:
             con.close()
         best = None
-        for guid, ci, last in rows:
+        for guid, ci, style, members, last in rows:
             k = re.sub(r'[^A-Za-z0-9;:+@._-]', '', str(ci or guid or ''))[:120]
-            if k != ident or not guid:
+            if k != ident or not guid or not is_group_chat_guid(guid, style, members):
                 continue
             if best is None or (last or 0) > (best[1] or 0):
                 best = (str(guid), last)
@@ -9095,8 +9135,9 @@ class Watcher:
             return {'ok': False, 'error': 'chat.db unavailable: ' + str(e)[:150]}
         try:
             _, chat_cols = self.columns(con)
-            style_filter = ('AND COALESCE((SELECT c.style FROM chat_message_join cmj JOIN chat c ON c.ROWID = cmj.chat_id '
-                            'WHERE cmj.message_id = m.ROWID LIMIT 1), 45) != %d' % GROUP_STYLE) if 'style' in chat_cols else ''
+            # A message joined to a group is not a 1:1, even when another joined chat is.
+            style_filter = ('AND NOT EXISTS (SELECT 1 FROM chat_message_join cmj JOIN chat c ON c.ROWID = cmj.chat_id '
+                            'WHERE cmj.message_id = m.ROWID AND c.style = %d)' % GROUP_STYLE) if 'style' in chat_cols else ''
             since = rc.unix_to_apple_ns(self.now() - days * 86400)
             rows = con.execute('SELECT h.id, COUNT(*), MAX(m.date) FROM message m JOIN handle h ON h.ROWID = m.handle_id '
                                'WHERE m.is_from_me = 0 AND m.date > ? %s GROUP BY h.id ORDER BY MAX(m.date) DESC LIMIT ?'
@@ -9172,7 +9213,7 @@ if __name__ == '__main__':
     else:
         Watcher().run_forever()
 @@@@ END
-@@@@ FILE mac-helper/relay_common.py mode=644 sha256=27c375bf051d256b6a574216b28a407ef469b5ec66f8e04dd0d131f8c69d7fea nl=1
+@@@@ FILE mac-helper/relay_common.py mode=644 sha256=ac78b7432eb17fe826ac74238add9ef98e6d8f8bddf0888b85cd11ceddd340db nl=1
 """
 iMessage Relay v1.4.8: shared helpers for the native host, the inbound watcher and relayctl.
 
@@ -9198,8 +9239,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = '1.4.31'
-EXTENSION_VERSION = '1.4.31'   # v1.4.31 changes the extension
+VERSION = '1.4.32'
+EXTENSION_VERSION = '1.4.31'   # v1.4.32 is the Mac helper only; the extension stays 1.4.31
 HOME = os.path.expanduser('~')
 APP_DIR = os.environ.get('IMESSAGE_RELAY_HOME', os.path.join(HOME, '.imessage-relay'))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
@@ -9966,19 +10007,134 @@ def parse_prefix(text, cfg, directory=None):
 HEADER_LINE_RE = re.compile(r'^\s*\U0001f4ac\s*(.+?)\s*\u00b7\s*\d{1,2}:\d{2}\s*[AaPp]\.?[Mm]\.?\s*$')
 
 
+def _quote_scan_text(quoted, cfg):
+    """The first 120 characters of a quote, with the bot's name and a leading "iMessage" dropped.
+    Same chrome parse_quote ignores, so a group line still starts at the group name."""
+    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()[:120]
+    if not q:
+        return ''
+    sender = ((cfg or {}).get('senderXHandle') or '').lstrip('@')
+    for drop in ('@' + sender, sender):
+        if sender and q.lower().startswith(drop.lower()):
+            q = q[len(drop):].lstrip(' \u00b7\u2022-')
+            break
+    return re.sub(r'^(?:imessage)\s+', '', q, count=1, flags=re.I)
+
+
+# A relayed group line is "<group> · <speaker>: <text>". X's reply preview sometimes keeps a
+# different dot, or only the speaker. These still separate the group name from the speaker.
+_GROUP_LINE_SEP = r'[\u00b7\u2022\u2219\u2027\u30fb|/\\\u2013\u2014-]'
+
+
+def _speaker_is_person(speaker, directory):
+    """True when `speaker` is a person on the relay list (label, full name, or unique first name)."""
+    speaker = ' '.join(str(speaker or '').lower().split())
+    if not speaker or speaker[0].isdigit():
+        return False
+    by = {e['handle']: e for e in directory}
+    hits = set(contact_keys(directory).get(speaker) or ())
+    if not hits:
+        for e in directory:
+            if e.get('kind') == 'group':
+                continue
+            for raw in (e.get('label'), e.get('name')):
+                if raw and ' '.join(str(raw).lower().split()) == speaker:
+                    hits.add(e['handle'])
+    return any(by.get(h, {}).get('kind') != 'group' for h in hits)
+
+
+def group_line_handle(quoted, cfg, directory):
+    """The group a quote names as "<group> <sep> <speaker>: …", or None.
+    The speaker has to be a person on the relay list, so a clock ("Hollands · 7:20 PM") or a
+    sentence that merely mentions the group is not a group line. The longest group label wins.
+    A bare "Sam:" is not this shape."""
+    q = _quote_scan_text(quoted, cfg)
+    if not q or HEADER_LINE_RE.match(q):
+        return None
+    groups = [e for e in directory if e.get('kind') == 'group' and e.get('label')]
+    groups.sort(key=lambda e: len(e['label']), reverse=True)
+    for e in groups:
+        m = re.search(r'(?:^|[\s(\[])%s\s*%s\s*([^:]{1,60}?)\s*:'
+                      % (re.escape(e['label']), _GROUP_LINE_SEP), q, re.I)
+        if m and _speaker_is_person(m.group(1), directory):
+            return e['handle']
+    return None
+
+
+def _speaker_body(quoted, entry):
+    """The text after "<label or name>:" when `entry` is the speaker a quote named. Empty when
+    the quote has no such prefix. Longest name first, so "Brian Holland:" is not cut at "Brian:"."""
+    q = str(quoted or '')
+    keys, seen = [], set()
+    for raw in (entry.get('label'), entry.get('name'), first_name(entry.get('name') or ''),
+                first_name(entry.get('label') or '')):
+        k = str(raw or '').strip()
+        if not k or k.lower() in seen:
+            continue
+        seen.add(k.lower())
+        keys.append(k)
+    keys.sort(key=len, reverse=True)
+    for k in keys:
+        m = re.search(r'(?:^|[\s(\[\u00b7\u2022])%s\s*:\s*(\S.*?)\s*$' % re.escape(k), q, re.I | re.S)
+        if m:
+            return m.group(1).strip()
+    return ''
+
+
+def _quote_route_hits(quoted, cfg, now):
+    """Routes whose relayed body matches `quoted` (full text, or the body after a speaker prefix)."""
+    import relay_echo
+    hits = set(relay_echo.lookup_quote(quoted, cfg, now))
+    return hits
+
+
+def disambiguate_speaker_quote(q_handle, quoted, quote_label, cfg, directory, now):
+    """A quote parse_quote read as one person may be the speaker on a group line.
+    ('handle', 'match') when the group is the conversation. (None, 'ambiguous') when that person
+    and a group are both plausible: the caller asks, and does not text the 1:1.
+    (q_handle, 'match') when nothing points at a group.
+    v1.4.32: X often quotes only "Brian: …" from "Hollands · Brian: …". The recorded body and the
+    💬 header name the group. The same words in the group and in that person's 1:1 stay a question."""
+    by_handle = {e['handle']: e for e in directory}
+    entry = by_handle.get(q_handle) or {}
+    if entry.get('kind') == 'group':
+        return q_handle, 'match'
+    hits = set()
+    for text in (quoted, _speaker_body(quoted, entry)):
+        if text:
+            hits |= _quote_route_hits(text, cfg, now)
+    hits = {h for h in hits if h in by_handle}
+    groups = {h for h in hits if by_handle[h].get('kind') == 'group'}
+    people = hits - groups
+    header_groups = set()
+    if quote_label and '\n' not in str(quote_label) and '\r' not in str(quote_label):
+        lab = re.sub(r'\s+', ' ', str(quote_label)).strip()[:80]
+        if lab:
+            header_groups = {h for h in (contact_keys(directory).get(lab.lower()) or ())
+                             if h in by_handle and by_handle[h].get('kind') == 'group'}
+    if groups and people:
+        return None, 'ambiguous'
+    if len(groups) == 1:
+        return next(iter(groups)), 'match'
+    if len(groups) > 1:
+        return None, 'ambiguous'
+    if len(header_groups) == 1 and not people:
+        return next(iter(header_groups)), 'match'
+    if header_groups and people:
+        return None, 'ambiguous'
+    if len(header_groups) > 1:
+        return None, 'ambiguous'
+    return q_handle, 'match'
+
+
 def parse_quote(quoted, cfg, directory=None):
     """Best effort: which entry a quoted (replied-to) relay message came from. The quote may
     start with the sender account's name, so the earliest "<key>:" (or "<group> ·") in its first
     120 characters counts. Returns (handle|None, status) with status 'match'|'ambiguous'|'none'."""
     d = build_directory(cfg, []) if directory is None else directory
-    q = re.sub(r'\s+', ' ', str(quoted or '')).strip()[:120]
+    q = _quote_scan_text(quoted, cfg)
     if not q:
         return None, 'none'
-    sender = (cfg.get('senderXHandle') or '').lstrip('@')
-    for drop in ('@' + sender, sender):
-        if sender and q.lower().startswith(drop.lower()):
-            q = q[len(drop):].lstrip(' \u00b7-')
-            break
     keys = contact_keys(d)
     # v1.4.17: a conversation header "💬 <label> · 7:20 PM" names who it is for; status 'header'
     # (route_reply maps it to that person but the host always asks "Send to <label>?" first)
@@ -10353,6 +10509,14 @@ def route_reply(text, quoted, cfg, roster, now, allow_empty=False, quote_label='
     q_handle, q_status = parse_quote(quoted, cfg, d)
     if q_status == 'header':
         header_q, q_status = True, 'match'
+    # v1.4.32: "Hollands · Brian:" (any separator) is the Hollands group. A preview that kept only
+    # "Brian:" is still the group when that body was relayed there, or the 💬 header names the group.
+    # The same body in the group and in Brian's 1:1 asks. It never texts the 1:1 on a guess.
+    g_line = group_line_handle(quoted, cfg, d) if q_status != 'ambiguous' else None
+    if g_line:
+        q_handle, q_status = g_line, 'match'
+    elif q_status == 'match':
+        q_handle, q_status = disambiguate_speaker_quote(q_handle, quoted, quote_label, cfg, d, now)
     if q_status == 'none' and re.sub(r'\s+', '', str(quoted or '')):
         # v1.4.6 quiet names: a quoted line that carried no "Name:" (same sender as the line above it) is
         # found by keyed HMACs of its text, recorded when it was relayed. Several people -> ambiguous.
@@ -26894,7 +27058,7 @@ class Routine(Base):
         out = json.dumps(rp.format_event({'type': 'needs_confirm', 'label': 'Sam', 'at': '2026-01-01T00:00:00Z'}), ensure_ascii=False)
         self.assertIn('Reply yes within 2 min.', out)
 @@@@ END
-@@@@ FILE tests/py/test_v1420.py mode=644 sha256=d51f822a2b6471a11fdb00aadba704a55225e0c5a799e1ebc8cff39d087febbc nl=1
+@@@@ FILE tests/py/test_v1420.py mode=644 sha256=80340889588bf3c6a12c595da9e15fc63e0107305feaf61a6fe9d3b8547c3bcb nl=1
 """v1.4.20: /status, health that repeats and recovers, short /help, /snooze hold."""
 import contextlib
 import io
@@ -27023,7 +27187,7 @@ class Host(unittest.TestCase):
         detail = self.posts[-1]['detail']
         self.assertEqual(
             detail,
-            'On \u00b7 v1.4.31 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
+            'On \u00b7 v1.4.32 \u00b7 watcher 4s \u00b7 Messages open \u00b7 last text 2m \u00b7 replies to Alex')
         self.assertNotIn('text', self.posts[-1])
         self.assertNotIn('bare reply', read_log())
         self.assertIn('status_cmd', read_log())
@@ -27053,7 +27217,7 @@ class Host(unittest.TestCase):
         self.send('/pause')
         r = self.send('/status')
         self.assertEqual(r.get('command'), 'status')
-        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.31 \u00b7'))
+        self.assertTrue(self.posts[-1]['detail'].startswith('Paused \u00b7 v1.4.32 \u00b7'))
         self.assertEqual(self.send('ok').get('error'), 'paused')
         self.assertEqual(self.osa(), [])
 
@@ -27140,7 +27304,7 @@ class Host(unittest.TestCase):
         self.rc.record_inbound(ALEX, self.t - 30, label='Alex')
         self.send('/status')
         self.assertTrue(self.posts[-1]['detail'].startswith(
-            'Snoozing until 7:00 AM \u00b7 v1.4.31 \u00b7 watcher 4s \u00b7'))
+            'Snoozing until 7:00 AM \u00b7 v1.4.32 \u00b7 watcher 4s \u00b7'))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.m.ctl.main(['pause']), 0)
         raw = self.rc.read_raw_config()
@@ -27971,6 +28135,165 @@ class Stamp(unittest.TestCase):
         st = ctl.cmd_status()
         self.assertEqual(st['extension']['contentState'], '')
         self.assertFalse(any('X Chat tab' in p or 'no x.com/i/chat' in p for p in st['problems']))
+@@@@ END
+@@@@ FILE tests/py/test_v1432_group_route.py mode=644 sha256=4499a6a97b5ea1cbbb6e8e956b16df5a069f91a04835b5bf3714683ea72aa1fd nl=1
+"""v1.4.32: a reply aimed at a group never goes to a member's 1:1.
+
+Hollands is the group. Brian Holland (+17703770130) is a member and also has a 1:1.
+"Hollands: …" and a quote of a Hollands line (even one X shortened to "Brian: …") name the group.
+"Brian: …" with no group signal still names the 1:1. The same words in both chats ask.
+A group chat id lookup never returns Brian's 1:1 guid (iMessage;-;…).
+"""
+import sqlite3
+import unittest
+
+from helpers import fresh, tmpdir
+import test_watch
+
+T0 = 1_800_000_000.0
+BRIAN = '+17703770130'
+GROUP = 'group:chat853'
+BODY = 'dinner at the house tonight'
+
+
+class GroupRoute(unittest.TestCase):
+    def setUp(self):
+        self.m = fresh(tmpdir())
+        self.rc = self.m.rc
+        self.cfg = self.rc.sanitize_config({
+            'relayConversationId': '1111-2222',
+            'relayAll': True,
+            'contacts': [{'name': 'Brian Holland', 'handle': BRIAN}],
+        })
+        self.roster = [
+            {'handle': GROUP, 'label': 'Hollands', 'lastInboundAt': T0 - 30},
+            {'handle': BRIAN, 'label': 'Brian', 'lastInboundAt': T0 - 400, 'inboundCount': 30},
+        ]
+
+    def route(self, text, quoted='', quote_label=''):
+        return self.rc.route_reply(text, quoted, self.cfg, self.roster, T0, quote_label=quote_label)
+
+    def test_group_prefix_is_the_group_and_brian_prefix_is_the_one_to_one(self):
+        g = self.route('Hollands: test')
+        self.assertEqual((g['contact']['handle'], g['by'], g.get('group')), (GROUP, 'prefix', True))
+        b = self.route('Brian: test')
+        self.assertEqual((b['contact']['handle'], b['by'], b.get('group')), (BRIAN, 'prefix', None))
+        self.assertNotIn(';-;', str(g['contact']['handle']))
+
+    def test_full_group_line_and_a_different_separator_name_the_group(self):
+        for quoted in ('Hollands \u00b7 Brian: ' + BODY,
+                       'iMessage Hollands \u2022 Brian Holland: ' + BODY,
+                       'Hollands - Brian: ' + BODY):
+            r = self.route('sounds good', quoted=quoted)
+            self.assertEqual(r.get('contact', {}).get('handle'), GROUP, quoted)
+            self.assertTrue(r.get('group'), quoted)
+
+    def test_speaker_only_preview_follows_the_recorded_group_body(self):
+        self.rc.record_quote_keys(BODY, GROUP, at=T0 - 20)
+        for quoted in ('Brian: ' + BODY, 'Brian Holland: ' + BODY):
+            r = self.route('sounds good', quoted=quoted)
+            self.assertEqual((r['contact']['handle'], r.get('group')), (GROUP, True), quoted)
+
+    def test_header_above_a_speaker_preview_names_the_group(self):
+        r = self.route('sounds good', quoted='Brian: ' + BODY, quote_label='Hollands')
+        self.assertEqual((r['contact']['handle'], r.get('group')), (GROUP, True))
+
+    def test_same_words_in_the_group_and_the_one_to_one_ask(self):
+        self.rc.record_quote_keys(BODY, GROUP, at=T0 - 20)
+        self.rc.record_quote_keys(BODY, BRIAN, at=T0 - 10)
+        r = self.route('sounds good', quoted='Brian: ' + BODY, quote_label='Hollands')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.assertNotIn('contact', r)
+        self.assertNotEqual(r.get('contact', {}).get('handle'), BRIAN)
+
+    def test_a_real_brian_quote_stays_on_the_one_to_one(self):
+        self.rc.record_quote_keys(BODY, BRIAN, at=T0 - 10)
+        r = self.route('sounds good', quoted='Brian: ' + BODY, quote_label='Brian')
+        self.assertEqual((r['contact']['handle'], r.get('group')), (BRIAN, None))
+        # A Hollands header on a body that was relayed only in the 1:1 asks. It does not text Brian.
+        r = self.route('sounds good', quoted='Brian: ' + BODY, quote_label='Hollands')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.assertNotIn('contact', r)
+
+    def test_mentioning_the_group_in_a_sentence_is_not_a_group_line(self):
+        r = self.route('ok', quoted='see you at Hollands tonight, bring dessert')
+        self.assertNotEqual(r.get('contact', {}).get('handle'), GROUP)
+
+    def test_a_shared_name_still_asks(self):
+        self.roster.append({'handle': '+15555550199', 'label': 'Hollands Smith', 'lastInboundAt': T0 - 50})
+        r = self.route('Hollands: test')
+        self.assertTrue(r.get('needsTarget'), r)
+        self.assertNotIn('contact', r)
+
+
+class GroupChatId(test_watch.Base):
+    def test_lookup_skips_a_newer_one_to_one_that_shares_the_identifier(self):
+        con = sqlite3.connect(self.db.path)
+        con.execute('INSERT INTO chat (guid, style, chat_identifier, display_name) VALUES (?,?,?,?)',
+                    ('iMessage;+;chat853', 43, 'chat853', 'Hollands'))
+        gid = con.execute('SELECT last_insert_rowid()').fetchone()[0]
+        con.execute('INSERT INTO chat (guid, style, chat_identifier, display_name) VALUES (?,?,?,?)',
+                    ('iMessage;-;+17703770130', 45, 'chat853', None))
+        one = con.execute('SELECT last_insert_rowid()').fetchone()[0]
+        brian = con.execute("SELECT ROWID FROM handle WHERE id = '+17703770130'").fetchone()
+        if not brian:
+            con.execute('INSERT INTO handle (id, service) VALUES (?, ?)', ('+17703770130', 'iMessage'))
+            hid = con.execute('SELECT last_insert_rowid()').fetchone()[0]
+        else:
+            hid = brian[0]
+        con.execute('INSERT INTO chat_handle_join VALUES (?, ?)', (gid, hid))
+        con.execute('INSERT INTO chat_handle_join VALUES (?, ?)', (gid, hid))
+        # The 1:1 row is newer. It must not win.
+        con.execute('INSERT INTO message (guid, text, handle_id, date, is_from_me) VALUES (?,?,?,?,?)',
+                    ('m-old', 'x', hid, 1, 0))
+        old = con.execute('SELECT last_insert_rowid()').fetchone()[0]
+        con.execute('INSERT INTO message (guid, text, handle_id, date, is_from_me) VALUES (?,?,?,?,?)',
+                    ('m-new', 'y', hid, 9, 0))
+        new = con.execute('SELECT last_insert_rowid()').fetchone()[0]
+        con.execute('INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)', (gid, old))
+        con.execute('INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)', (one, new))
+        con.commit()
+        con.close()
+        got = self.w.group_guid('group:chat853')
+        self.assertTrue(got.get('ok'), got)
+        self.assertEqual(got['guid'], 'iMessage;+;chat853')
+        self.assertNotIn(';-;', got['guid'])
+
+    def test_only_a_one_to_one_is_not_a_group_destination(self):
+        con = sqlite3.connect(self.db.path)
+        con.execute('INSERT INTO chat (guid, style, chat_identifier, display_name) VALUES (?,?,?,?)',
+                    ('iMessage;-;+17703770130', 45, '+17703770130', None))
+        con.commit()
+        con.close()
+        got = self.w.group_guid('group:+17703770130')
+        self.assertFalse(got.get('ok'), got)
+        self.assertNotIn('guid', got)
+
+    def test_a_message_joined_to_both_chats_is_relayed_as_the_group(self):
+        self.cfg['relayAll'] = True
+        self.w = self.new_watcher()
+        self.w.tick()
+        brian = '+17703770130'
+        mid = self.db.add(brian, text=BODY, group='hollands', display_name='Hollands',
+                          members=[brian, '+15555550199'], when=self.now)
+        con = sqlite3.connect(self.db.path)
+        con.execute('INSERT INTO chat (guid, style, chat_identifier, display_name) VALUES (?,?,?,?)',
+                    ('iMessage;-;' + brian, 45, brian, None))
+        one = con.execute('SELECT last_insert_rowid()').fetchone()[0]
+        gid = con.execute('SELECT chat_id FROM chat_message_join WHERE message_id = ?', (mid,)).fetchone()[0]
+        con.execute('DELETE FROM chat_message_join WHERE message_id = ?', (mid,))
+        con.execute('INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)', (one, mid))
+        con.execute('INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)', (gid, mid))
+        con.commit()
+        con.close()
+        self.w.tick()
+        msgs = [p for _, p, _ in self.poster.calls if p.get('type') == 'message']
+        self.assertTrue(msgs, self.poster.types())
+        self.assertEqual(msgs[-1].get('group', {}).get('label'), 'Hollands')
+
+
+if __name__ == '__main__':
+    unittest.main()
 @@@@ END
 @@@@ FILE tests/py/test_v143_handles.py mode=644 sha256=5c8836a5e4456e0a1534432241f0ed86403f88be26aadbbcabf259c2dacf313a nl=1
 """v1.4.3: business / short-code / odd handles are never a last-texter guess; guessed prompts show the
@@ -29816,7 +30139,7 @@ class RoutineMedia(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 @@@@ END
-@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=5333a7eb3cd8c0bc57b4634b3b9f9cbc45a481640069595a82428d114e479afe nl=1
+@@@@ FILE tests/py/test_v147_drop.py mode=644 sha256=c89953a66453307013c4ee18d193d44f765d6023ad8aa7d4f82c5977804181ac nl=1
 """v1.4.7: the encrypted photo drop (Mac encrypt + PUT, relay_post fetch + decrypt). No network; fake drop.
 Fictional names only."""
 import base64
@@ -30009,7 +30332,7 @@ class Versions(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, '..', '..', 'extension', 'manifest.json')) as fh:
             self.assertEqual(json.load(fh)['version'], m.rc.EXTENSION_VERSION)
-        self.assertEqual(m.rc.VERSION, '1.4.31')
+        self.assertEqual(m.rc.VERSION, '1.4.32')
         with open(os.path.join(here, '..', '..', 'drop', 'core.mjs')) as fh:
             self.assertIn("export const VERSION = '1.4.7'", fh.read(), 'v1.4.8 does not change the drop')
         # the largest v2 blob (wrap header + nonce + tag) still fits the drop's MAX_BODY (4 MiB + 28)
